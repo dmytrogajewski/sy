@@ -485,6 +485,7 @@ fn build_status(
         paused: false,         // overwritten by callers that know the flag
         cancelling: false,     // overwritten by callers
         embed_backend: embed::current_backend().to_string(),
+        embed_hardware: embed::current_hardware(),
         last_throughput_chunks_per_s: last.throughput,
         cpu_max_percent: sources::cpu_max_percent(),
         last_index_at_unix: last.at_unix,

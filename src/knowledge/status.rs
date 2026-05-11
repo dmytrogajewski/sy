@@ -50,9 +50,15 @@ pub struct Status {
     /// True briefly while a Cancel is being honoured.
     #[serde(default)]
     pub cancelling: bool,
-    /// `"cuda"` | `"cpu"` | `"unloaded"`. Surfaces whether GPU is engaged.
+    /// `"vitisai"` | `"cuda"` | `"cpu"` | `"unloaded"`. Surfaces which
+    /// ORT execution provider is wired up for embeddings.
     #[serde(default = "default_backend")]
     pub embed_backend: String,
+    /// Human-readable label for the actual hardware doing the inference
+    /// (e.g. `"AMD NPU on 9 HX 370"`, `"NVIDIA GeForce RTX 5090 Laptop GPU"`,
+    /// `"AMD Ryzen AI 9 HX 370 (CPU)"`). Filled in lazily on first embed.
+    #[serde(default)]
+    pub embed_hardware: String,
     /// Last finished pass: chunks/sec.
     #[serde(default)]
     pub last_throughput_chunks_per_s: Option<f32>,

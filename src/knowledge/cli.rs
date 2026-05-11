@@ -344,8 +344,13 @@ fn build_tooltip(s: &status::Status) -> String {
         "points:     {} (qdrant {qd})\n",
         human_count_full(s.points)
     )));
+    let hw = if s.embed_hardware.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", s.embed_hardware)
+    };
     out.push_str(&pango_escape(&format!(
-        "embed:      {} · {} · cpu cap {}\n",
+        "embed:      {}{hw} · {} · cpu cap {}\n",
         s.embed_backend, tput, cap
     )));
     out.push_str(&pango_escape(&format!(
@@ -481,6 +486,9 @@ pub fn status_cmd(json_out: bool) -> Result<()> {
         }
     );
     println!("embed:        {}", s.embed_backend);
+    if !s.embed_hardware.is_empty() {
+        println!("hardware:     {}", s.embed_hardware);
+    }
     if let Some(t) = s.last_throughput_chunks_per_s {
         println!("throughput:   {:.1} chunks/s", t);
     }
@@ -561,6 +569,7 @@ pub fn bench(n: usize, json_out: bool) -> Result<()> {
         .copied()
         .unwrap_or_else(|| *batch_ms.last().unwrap_or(&0));
     let backend = embed::current_backend();
+    let hardware = embed::current_hardware();
     if json_out {
         println!(
             "{}",
@@ -572,10 +581,14 @@ pub fn bench(n: usize, json_out: bool) -> Result<()> {
                 "mean_batch_ms": mean_ms,
                 "p95_batch_ms": p95_ms,
                 "embed_backend": backend,
+                "embed_hardware": hardware,
             }))?
         );
     } else {
         println!("embed_backend: {backend}");
+        if !hardware.is_empty() {
+            println!("hardware:      {hardware}");
+        }
         println!("chunks:        {n}");
         println!("batch_size:    {batch_size}");
         println!("total:         {:.0} ms", total_ms);

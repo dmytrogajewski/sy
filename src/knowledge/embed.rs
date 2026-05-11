@@ -64,12 +64,68 @@ unsafe impl Send for Embedder {}
 
 static EMBEDDER: OnceLock<Mutex<Embedder>> = OnceLock::new();
 static BACKEND: OnceLock<&'static str> = OnceLock::new();
+static HARDWARE: OnceLock<String> = OnceLock::new();
 
 /// `"vitisai"`, `"cuda"`, `"cpu"`, or `"unloaded"` if the model hasn't
 /// been touched yet. Surfaced to the status snapshot so the waybar
 /// tooltip + `sy knowledge status` can show which backend is engaged.
 pub fn current_backend() -> &'static str {
     BACKEND.get().copied().unwrap_or("unloaded")
+}
+
+/// Human-readable label for the actual hardware doing inference, e.g.
+/// `"AMD NPU on 9 HX 370"`, `"NVIDIA GeForce RTX 5090 Laptop GPU"`,
+/// `"AMD Ryzen AI 9 HX 370 (CPU)"`. Empty if `current_backend() ==
+/// "unloaded"`.
+pub fn current_hardware() -> String {
+    HARDWARE.get().cloned().unwrap_or_default()
+}
+
+fn detect_cpu_model() -> String {
+    std::fs::read_to_string("/proc/cpuinfo")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("model name"))
+                .and_then(|l| l.split_once(':'))
+                .map(|(_, v)| v.trim().to_string())
+        })
+        .unwrap_or_else(|| "CPU".to_string())
+}
+
+fn detect_nvidia_label() -> String {
+    let out = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=name", "--format=csv,noheader"])
+        .output();
+    if let Ok(out) = out {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            if let Some(line) = s.lines().next() {
+                return line.trim().to_string();
+            }
+        }
+    }
+    "NVIDIA GPU".to_string()
+}
+
+fn detect_npu_label() -> String {
+    // The lspci PCI vendor string is `Strix/Krackan/Strix Halo
+    // Neural Processing Unit` — useless across SKUs. The CPU model
+    // name pins it down.
+    let cpu = detect_cpu_model();
+    let short = cpu
+        .strip_prefix("AMD Ryzen AI ")
+        .map(|s| {
+            s.split_once(" w/ ")
+                .map(|(left, _)| left.to_string())
+                .unwrap_or_else(|| s.to_string())
+        })
+        .unwrap_or(cpu);
+    if short.trim().is_empty() {
+        "AMD NPU".to_string()
+    } else {
+        format!("AMD NPU on {short}")
+    }
 }
 
 /// If `/opt/AMD/ryzenai/venv` is present and we haven't already done so,
@@ -177,13 +233,17 @@ fn init_embedder() -> Result<Embedder> {
     let session = match try_vitisai(&model_path, &dir) {
         Ok(s) => {
             let _ = BACKEND.set("vitisai");
-            eprintln!("sy knowledge: embeddings on VitisAI / NPU ({MODEL_STEM})");
+            let hw = detect_npu_label();
+            eprintln!("sy knowledge: embeddings on {hw} via VitisAI ({MODEL_STEM})");
+            let _ = HARDWARE.set(hw);
             s
         }
         Err(vitis_err) => match try_cuda(&model_path) {
             Ok(s) => {
                 let _ = BACKEND.set("cuda");
-                eprintln!("sy knowledge: embeddings on CUDA ({MODEL_STEM})");
+                let hw = detect_nvidia_label();
+                eprintln!("sy knowledge: embeddings on {hw} via CUDA ({MODEL_STEM})");
+                let _ = HARDWARE.set(hw);
                 s
             }
             Err(cuda_err) => {
@@ -193,7 +253,9 @@ fn init_embedder() -> Result<Embedder> {
                 );
                 let s = try_cpu(&model_path)?;
                 let _ = BACKEND.set("cpu");
-                eprintln!("sy knowledge: embeddings on CPU ({MODEL_STEM})");
+                let hw = format!("{} (CPU)", detect_cpu_model());
+                eprintln!("sy knowledge: embeddings on {hw} ({MODEL_STEM})");
+                let _ = HARDWARE.set(hw);
                 s
             }
         },
