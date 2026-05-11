@@ -1,0 +1,50 @@
+# ACP-capable agents managed by sy-agentd. Rendered by `sy apply`.
+# Add a new [[agent]] block per CLI you want listed in the Super+A launcher.
+
+[[agent]]
+name = "claude"
+command = "claude-agent-acp"
+args = []
+version_args = ["--version"]
+
+[[agent]]
+name = "goose"
+command = "goose"
+args = ["acp"]
+version_args = ["--version"]
+
+# Uncomment after installing the corresponding CLI:
+#
+# [[agent]]
+# name = "codex"
+# command = "codex"
+# args = ["acp"]
+# version_args = ["--version"]
+#
+# [[agent]]
+# name = "gemini"
+# command = "gemini"
+# args = ["--experimental-acp"]
+# version_args = ["--version"]
+
+# --- MCP integration: sy stack -------------------------------------------
+# `sy stack mcp` is an MCP server (stdio JSON-RPC) exposing stack tools to
+# agents: stack_push, stack_list, stack_get, stack_remove. Each agent CLI
+# advertises MCP servers in its own way (claude-agent-acp / goose / codex
+# all read separate config files); register `sy stack mcp` there to let an
+# agent push artifacts onto the bar. Reference invocation:
+#
+#   command: sy
+#   args:    ["stack", "mcp"]
+
+# --- MCP integration: sy knowledge ---------------------------------------
+# `sy knowledge mcp` is the second MCP server every agent should register.
+# Tools:
+#   - knowledge_search        semantic search over the user's indexed files
+#   - knowledge_list_sources  show what's registered + last-indexed times
+#   - knowledge_index         trigger an incremental index pass
+#
+# Reference invocation:
+#
+#   command: sy
+#   args:    ["knowledge", "mcp"]

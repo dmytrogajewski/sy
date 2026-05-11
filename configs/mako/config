@@ -1,0 +1,29 @@
+# ~/.config/mako/config — rendered by sy
+font=JetBrainsMono Nerd Font 10
+background-color={{ colors.bg_soft }}
+text-color={{ colors.fg }}
+border-color={{ ui.accent }}
+border-size=2
+border-radius=0
+padding=12
+margin=8
+default-timeout=6000
+ignore-timeout=0
+max-visible=5
+anchor=top-right
+layer=overlay
+icons=0
+max-icon-size=48
+format=[%a] <b>%s</b>\n%b
+group-by=app-name
+
+[urgency=low]
+border-color={{ colors.gray }}
+
+[urgency=normal]
+border-color={{ ui.accent }}
+
+[urgency=critical]
+border-color={{ colors.red }}
+text-color={{ colors.red }}
+default-timeout=0

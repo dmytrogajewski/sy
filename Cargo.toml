@@ -1,0 +1,64 @@
+[package]
+name = "sy"
+version = "0.1.0"
+edition = "2021"
+description = "Apply niri rice configs with themes and templating"
+
+[[bin]]
+name = "sy"
+path = "src/main.rs"
+
+[features]
+default = ["bar-iced"]
+# Enables the iced + iced_layershell GUI for `sy stack bar`. On by default
+# so a plain `cargo build --release` produces a working stack bar — niri
+# spawn-at-startup is fire-and-forget and silently swallows a missing-feature
+# stub. Disable with `--no-default-features` if you need a CLI/MCP-only build.
+bar-iced = ["dep:iced", "dep:iced_layershell"]
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+minijinja = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "net", "io-util", "io-std", "sync", "time", "signal", "fs"] }
+toml = "0.8"
+uuid = { version = "1", features = ["v4"] }
+walkdir = "2"
+iced = { version = "0.14", optional = true, features = ["tokio", "wgpu"] }
+iced_layershell = { version = "0.17", optional = true }
+
+# Knowledge plane
+#
+# `load-dynamic` lets us re-point ORT at AMD's bundled onnxruntime
+# (which has VitisAI EP built in) at runtime — see embed.rs. The compiled
+# binary still keeps the `cuda` feature so the same build can register
+# CUDA EP on a host where XRT/NPU isn't installed.
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["ndarray", "cuda", "vitis", "load-dynamic"] }
+# ort 2.0-rc.12's `vitis` feature forgets to enable api-18 on ort-sys, so
+# the SessionOptionsAppendExecutionProvider_VitisAI binding isn't exposed.
+# Force it ourselves.
+ort-sys = { version = "=2.0.0-rc.12", features = ["api-18"] }
+# E5 tokenizer (XLM-RoBERTa BPE). Model + tokenizer.json are produced by
+# scripts/prep_npu_embed.py and live in ~/.cache/sy/npu-embed.
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+notify = "8"
+notify-debouncer-mini = "0.6"
+ignore = "0.4"
+globset = "0.4"
+which = "7"
+serde_yml = "0.0.12"
+html2text = "0.16"
+blake3 = "1"
+libc = "0.2"
+# Format-preserving TOML editor used by `sy knowledge add/rm/schedule` so
+# comments and section ordering survive round-trips.
+toml_edit = "0.22"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

@@ -1,0 +1,215 @@
+/* ~/.config/waybar/style.css — rendered by sy */
+
+@define-color bg        {{ colors.bg }};
+@define-color bg_soft   {{ colors.bg_soft }};
+@define-color bg1       {{ colors.bg1 }};
+@define-color bg2       {{ colors.bg2 }};
+@define-color fg        {{ colors.fg }};
+@define-color fg_dim    {{ colors.fg_dim }};
+@define-color red       {{ colors.red }};
+@define-color orange    {{ colors.orange }};
+@define-color yellow    {{ colors.yellow }};
+@define-color green     {{ colors.green }};
+@define-color aqua      {{ colors.aqua }};
+@define-color accent    {{ ui.accent }};
+@define-color blue      {{ colors.blue }};
+@define-color purple    {{ colors.purple }};
+@define-color gray      {{ colors.gray }};
+
+* {
+    font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace;
+    font-size: 12px;
+    font-weight: 500;
+    min-height: 0;
+    border: none;
+    border-radius: 0;
+}
+
+window#waybar {
+    background: @bg_soft;
+    color: @fg;
+    border: none;
+}
+
+tooltip {
+    background: @bg;
+    border: 1px solid @bg2;
+    color: @fg;
+}
+
+#workspaces {
+    margin: 0;
+}
+
+#workspaces button {
+    padding: 0 8px;
+    color: @fg;
+    background: transparent;
+    border-bottom: 2px solid transparent;
+    transition: all 150ms ease;
+}
+
+#workspaces button:hover {
+    background: @bg1;
+    color: @fg;
+    box-shadow: none;
+    text-shadow: none;
+}
+
+#workspaces button.active,
+#workspaces button.focused {
+    color: @fg;
+    border-bottom: 2px solid @accent;
+}
+
+#workspaces button.urgent {
+    color: @bg;
+    background: @red;
+    border-bottom: 2px solid @red;
+}
+
+#window {
+    color: @fg_dim;
+    padding: 0 10px;
+    font-style: italic;
+}
+
+#language {
+    color: @fg;
+    padding: 0 8px;
+    font-weight: 600;
+}
+
+#network,
+#custom-agents,
+#custom-notif,
+#custom-bt,
+#custom-pwr,
+#custom-sy-disk,
+#custom-sy-silent,
+#custom-sy-vol,
+#custom-sy-bl,
+#custom-sy-bat,
+#custom-sy-knowledge {
+    color: @fg;
+    padding: 0 6px;
+}
+
+#network:hover,
+#custom-agents:hover,
+#custom-notif:hover,
+#custom-bt:hover,
+#custom-pwr:hover,
+#custom-sy-disk:hover,
+#custom-sy-silent:hover,
+#custom-sy-vol:hover,
+#custom-sy-bl:hover,
+#custom-sy-knowledge:hover {
+    background: @bg1;
+}
+
+/* Hidden tiles collapse to zero width — used by sy-disk above threshold,
+   sy-silent outside its window, and sy-bat on machines with no battery.
+   sy-knowledge collapses when the daemon is down. */
+#custom-sy-disk.hidden,
+#custom-sy-silent.hidden,
+#custom-sy-bat.hidden,
+#custom-sy-knowledge.hidden {
+    padding: 0;
+    margin: 0;
+    min-width: 0;
+}
+
+#custom-sy-knowledge.idle       { color: @fg_dim; }
+#custom-sy-knowledge.indexing   { color: @accent; }
+#custom-sy-knowledge.cancelling { color: @fg_dim; }
+#custom-sy-knowledge.paused     { color: @yellow; }
+#custom-sy-knowledge.error      { color: @red; }
+
+#custom-sy-silent.active { color: @aqua; }
+
+#custom-sy-disk.warning  { color: @yellow; }
+#custom-sy-disk.critical { color: @red; }
+
+#custom-sy-vol.muted { color: @fg_dim; }
+#custom-sy-vol.low   { color: @fg_dim; }
+#custom-sy-vol.mid   { color: @fg; }
+#custom-sy-vol.high  { color: @accent; }
+
+#custom-sy-bl.low  { color: @fg_dim; }
+#custom-sy-bl.mid  { color: @fg; }
+#custom-sy-bl.high { color: @accent; }
+
+#custom-sy-bat.low      { color: @yellow; }
+#custom-sy-bat.mid      { color: @fg; }
+#custom-sy-bat.high     { color: @fg; }
+#custom-sy-bat.full     { color: @accent; }
+#custom-sy-bat.charging { color: @green; }
+#custom-sy-bat.critical { color: @red; }
+
+#custom-pwr.performance { color: @red; }
+#custom-pwr.balanced    { color: @fg; }
+#custom-pwr.powersave   { color: @green; }
+
+#custom-notif.zero {
+    color: @fg_dim;
+}
+
+#custom-notif.has {
+    color: @yellow;
+}
+
+#custom-bt.off {
+    color: @fg_dim;
+}
+
+#custom-bt.connected {
+    color: @accent;
+}
+
+#custom-agents.idle     { color: @fg_dim; }
+#custom-agents.active   { color: @fg; }
+#custom-agents.busy     { color: @yellow; }
+#custom-agents.awaiting { color: @red; }
+
+#network.disconnected {
+    color: @fg_dim;
+}
+
+#clock {
+    color: @fg;
+    padding: 0 12px;
+    margin-right: 4px;
+    background: @bg1;
+}
+
+#cpu,
+#memory {
+    color: @fg;
+    padding: 0 6px;
+}
+
+#cpu.warning,
+#memory.warning {
+    color: @yellow;
+}
+
+#cpu.critical,
+#memory.critical {
+    color: @red;
+}
+
+/* --- Bottom cheatsheet bar ---------------------------------------------- */
+window#waybar.cheatsheet {
+    background: alpha(@bg_soft, 0.85);
+    color: @fg_dim;
+    border: none;
+    border-top: 1px solid @bg1;
+    font-size: 10px;
+    font-weight: 400;
+}
+
+window#waybar.cheatsheet #custom-cheatsheet {
+    padding: 0 8px;
+    color: @fg_dim;
+}

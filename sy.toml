@@ -1,0 +1,85 @@
+theme = "black"
+
+# --- Knowledge plane -------------------------------------------------------
+# Vector-search index over the user's files, served by `sy knowledge daemon`
+# (which supervises qdrant). Two ways to register content:
+#
+#   1. Whole-tree (explicit):
+#        sy knowledge add ~/Documents/notes
+#      Indexes everything under the path (subject to .gitignore).
+#
+#   2. Per-folder manifest (`qdr.toml`):
+#        echo '[knowledge]\nname = "myproj"' > ~/myproj/qdr.toml
+#      The daemon picks up `qdr.toml` automatically. Two trigger paths:
+#        - shallow-home: any folder up to depth 2 under $HOME (toggle with
+#          `discover_home` below or env SY_KNOWLEDGE_DISCOVER_HOME).
+#        - explicit deep root: `sy knowledge add ~/projects --discover`
+#          recursively scans that root for `qdr.toml` files.
+#      Manifest fields: name / enabled / include / exclude / max_depth /
+#      max_file_bytes / respect_gitignore / follow_symlinks / schedule /
+#      tags. See src/knowledge/manifest.rs for the full schema.
+#      `sy knowledge manifests --json` lists the active set.
+#
+# `sy knowledge schedule 30m` rewrites [knowledge].schedule below.
+# `sy knowledge add/rm` rewrites the [[knowledge.sources]] array. Both use
+# toml_edit so the comments and ordering in this file survive round-trips.
+
+[knowledge]
+schedule = "30m"
+mcp_enabled = true
+
+[[knowledge.sources]]
+path = "~/Документы"
+enabled = true
+mode = "discover"
+
+[[knowledge.sources]]
+path = "~/Загрузки"
+enabled = true
+mode = "discover"
+
+[[knowledge.sources]]
+path = "~/knowledge"
+enabled = true
+mode = "discover"
+# discover_home   = true   # default true; flip to false to opt out of $HOME scan
+# cpu_throttle_ms = 50     # sleep N ms between embed batches in scheduled passes
+# cpu_max_percent = 25     # adaptive cap: daemon throttles to ≤ N % CPU on average
+# nice            = 10     # process nice level applied at daemon startup
+# mcp_enabled     = true   # whether `sy auto-configure` keeps `sy-knowledge`
+#                          # registered in agents' MCP configs (Claude / Cursor /
+#                          # Codex / Gemini). Toggle with:
+#                          #   sy knowledge mcp-enable   --apply
+#                          #   sy knowledge mcp-disable  --apply
+#                          #   sy knowledge mcp-status   [--json]
+#
+# Runtime control:
+#   sy knowledge pause / resume / toggle-pause / cancel
+#   sy knowledge bench --n 1024     # throughput probe + active embed backend
+#   sy knowledge status [--json]    # current daemon snapshot
+
+# [[knowledge.sources]]
+# path    = "~/sources/sy"
+# enabled = true
+# mode    = "explicit"     # "explicit" (default) or "discover"
+
+# --- Stack bar -------------------------------------------------------------
+# `sy stack` integrations. Each [[stack.onto]] entry registers a target the
+# right-click context menu can hand a stack item to. The `template` is run
+# under `sh -c` with `{file}` substituted (single-quoted, shell-safe) to
+# the item's path (file items) or a materialised temp file (content items,
+# same path as `sy stack link`).
+#
+# Uncomment + edit to enable:
+#
+# [[stack.onto]]
+# name     = "github-issue"
+# template = "gh issue create --body-file {file}"
+#
+# [[stack.onto]]
+# name     = "claude"
+# template = "claude --file {file}"
+#
+# [[stack.onto]]
+# name     = "yazi"
+# template = "foot -e yazi {file}"

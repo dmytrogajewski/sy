@@ -1,0 +1,3 @@
+# ~/.config/yazi/theme.toml
+[flavor]
+dark = "gruvbox-dark"

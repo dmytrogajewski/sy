@@ -1,0 +1,166 @@
+// ~/.config/waybar/config.jsonc — rendered by sy
+{
+    "name": "top",
+    "layer": "top",
+    "position": "top",
+    "height": 24,
+    "spacing": 0,
+    "margin-top": 0,
+    "margin-left": 0,
+    "margin-right": 0,
+
+    "modules-left":   ["niri/workspaces", "niri/language"],
+    "modules-center": ["niri/window"],
+    "modules-right":  ["cpu", "memory", "custom/sy-disk", "custom/sy-silent", "custom/sy-vol", "custom/sy-bl", "custom/notif", "custom/sy-knowledge", "custom/agents", "custom/bt", "network", "clock", "custom/pwr", "custom/sy-bat"],
+
+    "niri/workspaces": {
+        "format": "{value}",
+        "format-icons": {
+            "urgent":  "[!]",
+            "active":  "[*]",
+            "default": "[ ]"
+        }
+    },
+
+    "niri/window": {
+        "format": "{title}",
+        "max-length": 80,
+        "tooltip": false
+    },
+
+    "niri/language": {
+        "format": "{short}",
+        "tooltip": false
+    },
+
+    "network": {
+        "format-wifi": "NET:{essid}",
+        "format-ethernet": "NET:eth",
+        "format-linked": "NET:{ifname}",
+        "format-disconnected": "NET:off",
+        "tooltip-format-wifi": "{essid}  {signalStrength}%  {ipaddr}\nleft-click: network menu · right-click: nmtui",
+        "tooltip-format-ethernet": "{ifname}  {ipaddr}\nleft-click: network menu · right-click: nmtui",
+        "tooltip-format-disconnected": "disconnected\nleft-click: network menu · right-click: nmtui",
+        "on-click": "{{ home }}/.local/bin/sy net",
+        "on-click-right": "{{ home }}/.local/bin/sy popup nmtui"
+    },
+
+    "custom/agents": {
+        "exec":           "{{ home }}/.local/bin/sy agt waybar",
+        "return-type":    "json",
+        "interval":       5,
+        "signal":         9,
+        "on-click":       "{{ home }}/.local/bin/sy agt menu",
+        "on-click-right": "{{ home }}/.local/bin/sy popup agents"
+    },
+
+    "custom/sy-knowledge": {
+        "exec":            "{{ home }}/.local/bin/sy knowledge waybar",
+        "return-type":     "json",
+        "interval":        30,
+        "signal":          11,
+        "tooltip":         true,
+        "on-click":        "{{ home }}/.local/bin/sy knowledge pick",
+        "on-click-middle": "{{ home }}/.local/bin/sy knowledge toggle-pause"
+    },
+
+    "custom/notif": {
+        "exec": "{{ home }}/.local/bin/sy notif waybar",
+        "return-type": "json",
+        "interval": 60,
+        "signal": 8,
+        "on-click": "{{ home }}/.local/bin/sy notif",
+        "on-click-right": "{{ home }}/.local/bin/sy notif clear"
+    },
+
+    "custom/bt": {
+        "exec": "{{ home }}/.local/bin/sy bt --waybar",
+        "return-type": "json",
+        "interval": 5,
+        "on-click": "{{ home }}/.local/bin/sy bt"
+    },
+
+    "custom/pwr": {
+        "exec":        "{{ home }}/.local/bin/sy pwr --waybar",
+        "return-type": "json",
+        "interval":    30,
+        "signal":      10,
+        "on-click":    "{{ home }}/.local/bin/sy pwr"
+    },
+
+    "clock": {
+        "interval": 30,
+        "format": "[{:%a %d %b  %H:%M}]",
+        "on-click": "{{ home }}/.local/bin/sy popup cal",
+        "tooltip-format": "<tt><small>{calendar}</small></tt>",
+        "calendar": {
+            "mode": "month",
+            "weeks-pos": "right",
+            "format": {
+                "months":   "<span color='{{ colors.yellow }}'><b>{}</b></span>",
+                "days":     "<span color='{{ colors.fg }}'>{}</span>",
+                "weeks":    "<span color='{{ colors.aqua }}'>W{}</span>",
+                "weekdays": "<span color='{{ colors.orange }}'><b>{}</b></span>",
+                "today":    "<span color='{{ colors.red }}'><b><u>{}</u></b></span>"
+            }
+        }
+    },
+
+    "cpu": {
+        "interval": 2,
+        "format": " {icon}",
+        "format-icons": ["▁","▂","▃","▄","▅","▆","▇","█"],
+        "states": { "warning": 70, "critical": 90 },
+        "tooltip-format": "CPU {usage}%"
+    },
+
+    "memory": {
+        "interval": 3,
+        "format": " {icon}",
+        "format-icons": ["▁","▂","▃","▄","▅","▆","▇","█"],
+        "states": { "warning": 70, "critical": 90 },
+        "tooltip-format": "RAM {used:0.1f}GiB / {total:0.1f}GiB ({percentage}%)"
+    },
+
+    "custom/sy-disk": {
+        "exec": "{{ home }}/.local/bin/sy disk --waybar",
+        "return-type": "json",
+        "interval": 60,
+        "signal": 13,
+        "on-click": "{{ home }}/.local/bin/sy disk"
+    },
+
+    "custom/sy-silent": {
+        "exec": "{{ home }}/.local/bin/sy silent --waybar",
+        "return-type": "json",
+        "interval": 60,
+        "signal": 14,
+        "on-click": "{{ home }}/.local/bin/sy silent"
+    },
+
+    "custom/sy-vol": {
+        "exec": "{{ home }}/.local/bin/sy vol --waybar",
+        "return-type": "json",
+        "interval": 30,
+        "signal": 11,
+        "on-click": "{{ home }}/.local/bin/sy vol pick",
+        "on-click-right": "{{ home }}/.local/bin/sy vol mute",
+        "on-scroll-up": "{{ home }}/.local/bin/sy vol up",
+        "on-scroll-down": "{{ home }}/.local/bin/sy vol down"
+    },
+
+    "custom/sy-bl": {
+        "exec": "{{ home }}/.local/bin/sy bright --waybar",
+        "return-type": "json",
+        "interval": 60,
+        "signal": 12,
+        "on-scroll-up": "{{ home }}/.local/bin/sy bright up",
+        "on-scroll-down": "{{ home }}/.local/bin/sy bright down"
+    },
+
+    "custom/sy-bat": {
+        "exec": "{{ home }}/.local/bin/sy bat --waybar",
+        "return-type": "json",
+        "interval": 30
+    }
+}

@@ -1,0 +1,295 @@
+// ~/.config/niri/config.kdl — rendered by sy
+// Reference: https://github.com/niri-wm/niri/wiki
+
+input {
+    keyboard {
+        xkb {
+            layout "us,ru"
+            options "grp:alt_shift_toggle,caps:escape"
+        }
+        repeat-delay 250
+        repeat-rate 40
+    }
+
+    touchpad {
+        tap
+        dwt
+        natural-scroll
+        middle-emulation
+        accel-profile "adaptive"
+        accel-speed 0.2
+    }
+
+    mouse {
+        accel-profile "adaptive"
+    }
+
+    // Focus follows whichever column/workspace the mouse lands on scroll
+    // (kept default — uncomment to change)
+    // focus-follows-mouse
+}
+
+// Solid-color "wallpaper" via backdrop (niri renders a solid color on
+// empty workspaces). Per-output overrides go here too.
+layout {
+    gaps 0
+
+    center-focused-column "never"
+
+    preset-column-widths {
+        proportion 0.33333
+        proportion 0.5
+        proportion 0.66667
+    }
+
+    default-column-width { proportion 0.5; }
+
+    focus-ring {
+        off
+    }
+
+    // Per-tile border (always drawn so layout doesn't shift on focus change).
+    border {
+        width 1
+        active-color   "{{ ui.accent }}"
+        inactive-color "{{ colors.bg2 }}"
+        urgent-color   "{{ colors.red }}"
+    }
+
+    background-color "{{ colors.bg }}"
+
+    struts {
+        left   0
+        right  0
+        top    0
+        bottom 0
+    }
+}
+
+// --- Autostart --------------------------------------------------------------
+spawn-at-startup "lxpolkit"
+spawn-at-startup "mako"
+spawn-at-startup "{{ home }}/.local/bin/sy" "notif" "watch"
+spawn-at-startup "wlsunset" "-t" "3800" "-T" "6500" "-l" "50.45" "-S" "06:00" "-s" "20:30"
+spawn-at-startup "waybar"
+// sy stack bar: registered AFTER waybar so layer-shell deducts waybar's
+// 24px top exclusive zone from the bar's top anchor — the bar starts at
+// y=24 and waybar keeps its full-width top edge.
+spawn-at-startup "{{ home }}/.local/bin/sy" "stack" "bar"
+// Wallpaper daemon: re-applies whatever `sy wallpaper <path>` last saved.
+spawn-at-startup "{{ home }}/.local/bin/sy" "wallpaper" "--start"
+// sy-agentd: long-lived daemon owning ACP child sessions.
+spawn-at-startup "{{ home }}/.local/bin/sy" "agt" "daemon"
+// Silent hours: watches the clock + pactl events to enforce quiet mode.
+spawn-at-startup "{{ home }}/.local/bin/sy" "silent" "watch"
+// Login jingle — silent-gated; no-op during quiet hours.
+spawn-at-startup "{{ home }}/.local/bin/sy" "snd" "login"
+// Clipboard history (cliphist)
+spawn-at-startup "sh" "-c" "command -v cliphist >/dev/null && wl-paste --type text  --watch cliphist store"
+spawn-at-startup "sh" "-c" "command -v cliphist >/dev/null && wl-paste --type image --watch cliphist store"
+// sy knowledge daemon: supervises qdrant, watches sources, runs scheduled syncs.
+// Provides system-wide semantic search to every agent via `sy knowledge mcp`.
+spawn-at-startup "{{ home }}/.local/bin/sy" "knowledge" "daemon"
+// Idle / lock via swayidle (works under any wlr compositor)
+spawn-at-startup "swayidle" "-w" \
+    "timeout" "300"  "swaylock -f" \
+    "timeout" "600"  "niri msg action power-off-monitors" \
+        "resume"     "niri msg action power-on-monitors" \
+    "before-sleep"   "swaylock -f"
+
+// --- Appearance -------------------------------------------------------------
+prefer-no-csd
+
+screenshot-path "~/Pictures/screenshot-%Y-%m-%d-%H%M%S.png"
+
+hotkey-overlay {
+    skip-at-startup
+}
+
+cursor {
+    xcursor-theme "Adwaita"
+    xcursor-size  24
+}
+
+// --- Environment ------------------------------------------------------------
+environment {
+    QT_QPA_PLATFORM              "wayland"
+    SDL_VIDEODRIVER              "wayland"
+    MOZ_ENABLE_WAYLAND           "1"
+    _JAVA_AWT_WM_NONREPARENTING  "1"
+    XDG_CURRENT_DESKTOP          "niri"
+    XDG_SESSION_DESKTOP          "niri"
+}
+
+// --- Window rules -----------------------------------------------------------
+window-rule {
+    match app-id="pavucontrol"
+    open-floating true
+    default-column-width { fixed 800; }
+    default-window-height { fixed 600; }
+}
+
+window-rule {
+    match app-id="blueman-manager"
+    open-floating true
+}
+
+// PiP sticky-floating equivalent
+window-rule {
+    match title="Picture-in-Picture"
+    open-floating true
+}
+
+// nmtui popup (opened from waybar [NET] right-click)
+window-rule {
+    match app-id="sy-nmtui"
+    open-floating true
+    default-column-width { fixed 640; }
+    default-window-height { fixed 420; }
+    default-floating-position x=180 y=38 relative-to="top-right"
+}
+
+// sy agents popup (opened from waybar AGT button)
+window-rule {
+    match app-id="sy-agents"
+    open-floating true
+    default-column-width { fixed 640; }
+    default-window-height { fixed 260; }
+    default-floating-position x=260 y=38 relative-to="top-right"
+}
+
+// sy cal popup (opened from waybar clock)
+window-rule {
+    match app-id="sy-cal"
+    open-floating true
+    default-column-width { fixed 280; }
+    default-window-height { fixed 240; }
+    default-floating-position x=12 y=38 relative-to="top-right"
+}
+
+// sy AGT inspector popups — one per active session (app-id is sy-agt-<id>).
+// Niri matches app-id as a regex, so this rule covers every session.
+window-rule {
+    match app-id="^sy-agt-"
+    open-floating true
+    default-column-width  { fixed 1100; }
+    default-window-height { fixed 720; }
+    default-floating-position x=80 y=60 relative-to="top-right"
+}
+
+// Default draw-border-with-background off so CSD apps keep their own titlebars
+window-rule {
+    draw-border-with-background false
+}
+
+// --- Output -----------------------------------------------------------------
+// Uncomment and edit for multi-monitor:
+// output "HDMI-A-1" {
+//     mode "1920x1080@60.000"
+//     position x=1920 y=0
+//     scale 1.0
+// }
+// output "eDP-1" { scale 1.25; }
+
+// --- Keybindings ------------------------------------------------------------
+binds {
+    Mod+Shift+Slash { show-hotkey-overlay; }
+    Mod+Slash        { spawn-sh "P=/tmp/sy-cheatsheet.pid; if [ -s $P ] && kill -0 $(cat $P) 2>/dev/null; then kill $(cat $P); rm -f $P; else waybar -c ~/.config/waybar/cheatsheet.jsonc -s ~/.config/waybar/style.css & echo $! > $P; fi"; }
+
+    // Launchers
+    Mod+Return       { spawn "foot"; }
+    Mod+N            { spawn "foot" "-e" "yazi"; }
+    Mod+D            { spawn "fuzzel"; }
+    Mod+Shift+D      { spawn-sh "fuzzel --dmenu --prompt='» '"; }
+    Mod+C            { spawn-sh "cliphist list | fuzzel --dmenu --prompt='clip » ' | cliphist decode | wl-copy"; }
+    Mod+A            { spawn "{{ home }}/.local/bin/sy" "agt" "run"; }
+    Mod+P            { spawn "{{ home }}/.local/bin/sy" "stack" "toggle"; }
+    Mod+S            { spawn "{{ home }}/.local/bin/sy" "silent"; }
+    Mod+Escape allow-inhibiting=false { spawn "swaylock" "-f"; }
+
+    // Session
+    Mod+Shift+Q      { close-window; }
+    Mod+Shift+C      { spawn "niri" "msg" "action" "load-config-file"; }
+    // Logout jingle plays first; the sound itself is the confirmation cue.
+    Mod+Shift+E      { spawn-sh "{{ home }}/.local/bin/sy snd logout && niri msg action quit --skip-confirmation"; }
+
+    // Focus
+    Mod+H            { focus-column-left; }
+    Mod+L            { focus-column-right; }
+    Mod+J            { focus-window-or-workspace-down; }
+    Mod+K            { focus-window-or-workspace-up; }
+    Mod+Left         { focus-column-left; }
+    Mod+Right        { focus-column-right; }
+    Mod+Down         { focus-window-or-workspace-down; }
+    Mod+Up           { focus-window-or-workspace-up; }
+
+    // Move
+    Mod+Shift+H      { move-column-left; }
+    Mod+Shift+L      { move-column-right; }
+    Mod+Shift+J      { move-window-down-or-to-workspace-down; }
+    Mod+Shift+K      { move-window-up-or-to-workspace-up; }
+    Mod+Shift+Left   { move-column-left; }
+    Mod+Shift+Right  { move-column-right; }
+    Mod+Shift+Down   { move-window-down-or-to-workspace-down; }
+    Mod+Shift+Up     { move-window-up-or-to-workspace-up; }
+
+    // Workspaces 1–10
+    Mod+1 { focus-workspace 1; }
+    Mod+2 { focus-workspace 2; }
+    Mod+3 { focus-workspace 3; }
+    Mod+4 { focus-workspace 4; }
+    Mod+5 { focus-workspace 5; }
+    Mod+6 { focus-workspace 6; }
+    Mod+7 { focus-workspace 7; }
+    Mod+8 { focus-workspace 8; }
+    Mod+9 { focus-workspace 9; }
+    Mod+0 { focus-workspace 10; }
+
+    Mod+Shift+1 { move-column-to-workspace 1; }
+    Mod+Shift+2 { move-column-to-workspace 2; }
+    Mod+Shift+3 { move-column-to-workspace 3; }
+    Mod+Shift+4 { move-column-to-workspace 4; }
+    Mod+Shift+5 { move-column-to-workspace 5; }
+    Mod+Shift+6 { move-column-to-workspace 6; }
+    Mod+Shift+7 { move-column-to-workspace 7; }
+    Mod+Shift+8 { move-column-to-workspace 8; }
+    Mod+Shift+9 { move-column-to-workspace 9; }
+    Mod+Shift+0 { move-column-to-workspace 10; }
+
+    Mod+Tab           { focus-workspace-previous; }
+    Mod+BracketLeft   { focus-workspace-up; }
+    Mod+BracketRight  { focus-workspace-down; }
+
+    // Column/layout
+    Mod+B            { consume-or-expel-window-right; }
+    Mod+V            { consume-or-expel-window-left; }
+    Mod+W            { toggle-column-tabbed-display; }
+    Mod+E            { center-column; }
+    Mod+F            { maximize-column; }
+    Mod+Shift+F      { fullscreen-window; }
+    Mod+Shift+Space  { toggle-window-floating; }
+    Mod+Space        { switch-layout "next"; }
+
+    // Column width / size
+    Mod+R            { set-column-width "+10%"; }
+    Mod+Shift+R      { set-column-width "-10%"; }
+    Mod+Minus        { set-column-width "-10%"; }
+    Mod+Equal        { set-column-width "+10%"; }
+
+    // --- Media & utility keys -------------------------------------------
+    XF86AudioMute         allow-when-locked=true { spawn-sh "{{ home }}/.local/bin/sy vol mute"; }
+    XF86AudioLowerVolume  allow-when-locked=true { spawn-sh "{{ home }}/.local/bin/sy vol down"; }
+    XF86AudioRaiseVolume  allow-when-locked=true { spawn-sh "{{ home }}/.local/bin/sy vol up"; }
+    XF86AudioMicMute      allow-when-locked=true { spawn-sh "{{ home }}/.local/bin/sy vol mic-mute"; }
+    XF86AudioPlay         allow-when-locked=true { spawn "playerctl" "play-pause"; }
+    XF86AudioNext         allow-when-locked=true { spawn "playerctl" "next"; }
+    XF86AudioPrev         allow-when-locked=true { spawn "playerctl" "previous"; }
+    XF86MonBrightnessDown allow-when-locked=true { spawn-sh "{{ home }}/.local/bin/sy bright down"; }
+    XF86MonBrightnessUp   allow-when-locked=true { spawn-sh "{{ home }}/.local/bin/sy bright up"; }
+
+    // --- Screenshots ----------------------------------------------------
+    Print            { screenshot; }
+    Shift+Print      { screenshot-screen; }
+    Mod+Print        { screenshot-screen write-to-disk=true; }
+    Mod+Shift+Print  { screenshot-window write-to-disk=true; }
+}

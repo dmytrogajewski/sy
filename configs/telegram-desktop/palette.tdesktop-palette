@@ -1,0 +1,479 @@
+// ~/.config/telegram-desktop/palette.tdesktop-palette — rendered by sy
+//
+// Import once:
+//   Settings → Chat Settings → Custom Theme → Import from file
+//   or run: sy tg-theme
+//
+// Re-import after any change to themes/<name>.toml.
+
+// ------------------------------------------------------------------------
+// Window / core
+// ------------------------------------------------------------------------
+windowBg: {{ colors.bg }};
+windowFg: {{ colors.fg }};
+windowBgOver: {{ colors.bg_soft }};
+windowBgRipple: {{ colors.bg1 }};
+windowBgActive: {{ ui.accent }};
+windowFgActive: {{ colors.bg }};
+windowActiveTextFg: {{ colors.blue }};
+windowSubTextFg: {{ colors.fg_dim }};
+windowBoldFg: {{ colors.fg }};
+windowBoldFgOver: {{ colors.fg }};
+windowSubTextFgOver: {{ colors.fg_dim }};
+windowShadowFg: {{ colors.bg }};
+windowShadowFgFallback: {{ colors.bg_soft }};
+shadowFg: {{ colors.bg }}80;
+slideFadeOutBg: {{ colors.bg_soft }}80;
+slideFadeOutShadowFg: windowShadowFg;
+imageBg: {{ colors.bg_soft }};
+imageBgTransparent: {{ ui.accent }};
+
+// ------------------------------------------------------------------------
+// Buttons
+// ------------------------------------------------------------------------
+activeButtonBg: windowBgActive;
+activeButtonBgOver: {{ colors.fg }};
+activeButtonBgRipple: {{ colors.fg_dim }};
+activeButtonFg: windowFgActive;
+activeButtonFgOver: windowFgActive;
+activeButtonSecondaryFg: {{ colors.bg }};
+activeButtonSecondaryFgOver: {{ colors.bg }};
+activeLineFg: {{ colors.blue }};
+activeLineFgError: {{ colors.red }};
+
+lightButtonBg: {{ colors.bg_soft }};
+lightButtonBgOver: {{ colors.bg1 }};
+lightButtonBgRipple: {{ colors.bg2 }};
+lightButtonFg: {{ colors.blue }};
+lightButtonFgOver: {{ colors.blue }};
+
+attentionButtonFg: {{ colors.red }};
+attentionButtonFgOver: {{ colors.red }};
+attentionButtonBgOver: {{ colors.bg1 }};
+attentionButtonBgRipple: {{ colors.bg2 }};
+
+outlineButtonBg: windowBg;
+outlineButtonBgOver: {{ colors.bg1 }};
+outlineButtonOuterBg: windowBg;
+outlineButtonBgRipple: {{ colors.bg2 }};
+outlineButtonFg: {{ colors.blue }};
+outlineButtonFgOver: {{ colors.blue }};
+
+// ------------------------------------------------------------------------
+// Menus / dropdowns
+// ------------------------------------------------------------------------
+menuBg: {{ colors.bg_soft }};
+menuBgOver: {{ colors.bg1 }};
+menuBgRipple: {{ colors.bg2 }};
+menuIconFg: {{ colors.fg_dim }};
+menuIconFgOver: {{ colors.fg }};
+menuSubmenuArrowFg: {{ colors.fg_dim }};
+menuFgDisabled: {{ colors.gray }};
+menuSeparatorFg: {{ colors.bg2 }};
+
+// ------------------------------------------------------------------------
+// Scrollbars
+// ------------------------------------------------------------------------
+scrollBarBg: {{ colors.bg2 }}80;
+scrollBarBgOver: {{ colors.bg2 }};
+scrollBg: {{ colors.bg_soft }};
+scrollBgOver: {{ colors.bg1 }};
+
+// ------------------------------------------------------------------------
+// Misc controls
+// ------------------------------------------------------------------------
+smallCloseIconFg: {{ colors.fg_dim }};
+smallCloseIconFgOver: {{ colors.fg }};
+radialFg: {{ colors.fg }};
+radialBg: {{ colors.bg }}80;
+
+checkboxFg: {{ colors.fg_dim }};
+
+// ------------------------------------------------------------------------
+// Sliders
+// ------------------------------------------------------------------------
+sliderBgInactive: {{ colors.bg2 }};
+sliderBgActive: {{ colors.blue }};
+
+// ------------------------------------------------------------------------
+// Dialog (popup) widget
+// ------------------------------------------------------------------------
+widgetBg: {{ colors.bg }};
+
+// ------------------------------------------------------------------------
+// Toggle (on/off)
+// ------------------------------------------------------------------------
+toggleOffFg: {{ colors.fg_dim }};
+
+// ------------------------------------------------------------------------
+// Boxes (modals)
+// ------------------------------------------------------------------------
+boxBg: {{ colors.bg }};
+boxTextFg: {{ colors.fg }};
+boxTextFgGood: {{ colors.green }};
+boxTextFgError: {{ colors.red }};
+boxTitleFg: {{ colors.fg }};
+boxSearchBg: {{ colors.bg_soft }};
+boxTitleAdditionalFg: {{ colors.fg_dim }};
+boxTitleCloseFg: {{ colors.fg_dim }};
+boxTitleCloseFgOver: {{ colors.fg }};
+
+membersAboutLimitFg: {{ colors.fg_dim }};
+
+contactsBg: {{ colors.bg }};
+contactsBgOver: {{ colors.bg_soft }};
+contactsNameFg: boxTextFg;
+contactsStatusFg: {{ colors.fg_dim }};
+contactsStatusFgOver: {{ colors.fg_dim }};
+contactsStatusFgOnline: {{ colors.blue }};
+
+// ------------------------------------------------------------------------
+// Photo crop
+// ------------------------------------------------------------------------
+photoCropFadeBg: radialBg;
+photoCropPointFg: {{ ui.accent }};
+
+// ------------------------------------------------------------------------
+// Intros
+// ------------------------------------------------------------------------
+introBg: windowBg;
+introTitleFg: windowBoldFg;
+introDescriptionFg: windowSubTextFg;
+introErrorFg: {{ colors.red }};
+introCoverTopBg: {{ colors.bg_soft }};
+introCoverBottomBg: {{ colors.bg }};
+introCoverIconsFg: windowSubTextFg;
+introCoverPlaneBlue: {{ colors.blue }};
+introCoverPlaneGreen: {{ colors.green }};
+introCoverPlaneRed: {{ colors.red }};
+introCoverPlaneViolet: {{ colors.purple }};
+
+// ------------------------------------------------------------------------
+// Dialog list (left sidebar)
+// ------------------------------------------------------------------------
+dialogsMenuIconFg: menuIconFg;
+dialogsMenuIconFgOver: menuIconFgOver;
+dialogsBg: {{ colors.bg }};
+dialogsNameFg: {{ colors.fg }};
+dialogsChatIconFg: dialogsNameFg;
+dialogsDateFg: {{ colors.fg_dim }};
+dialogsTextFg: {{ colors.fg_dim }};
+dialogsTextFgService: {{ colors.blue }};
+dialogsDraftFg: {{ colors.red }};
+dialogsVerifiedIconBg: {{ colors.blue }};
+dialogsVerifiedIconFg: {{ colors.bg }};
+dialogsSendingIconFg: {{ colors.fg_dim }};
+dialogsSentIconFg: {{ colors.blue }};
+dialogsUnreadBg: {{ colors.blue }};
+dialogsUnreadBgMuted: {{ colors.bg2 }};
+dialogsUnreadFg: {{ colors.bg }};
+
+dialogsBgOver: {{ colors.bg_soft }};
+dialogsNameFgOver: dialogsNameFg;
+dialogsChatIconFgOver: dialogsChatIconFg;
+dialogsDateFgOver: dialogsDateFg;
+dialogsTextFgOver: dialogsTextFg;
+dialogsTextFgServiceOver: dialogsTextFgService;
+dialogsDraftFgOver: dialogsDraftFg;
+dialogsVerifiedIconBgOver: dialogsVerifiedIconBg;
+dialogsVerifiedIconFgOver: dialogsVerifiedIconFg;
+dialogsSendingIconFgOver: dialogsSendingIconFg;
+dialogsSentIconFgOver: dialogsSentIconFg;
+dialogsUnreadBgOver: dialogsUnreadBg;
+dialogsUnreadBgMutedOver: dialogsUnreadBgMuted;
+dialogsUnreadFgOver: dialogsUnreadFg;
+
+dialogsBgActive: {{ colors.bg1 }};
+dialogsNameFgActive: {{ colors.fg }};
+dialogsChatIconFgActive: dialogsNameFgActive;
+dialogsDateFgActive: {{ colors.fg }};
+dialogsTextFgActive: {{ colors.fg }};
+dialogsTextFgServiceActive: {{ colors.fg }};
+dialogsDraftFgActive: {{ colors.fg }};
+dialogsVerifiedIconBgActive: {{ ui.accent }};
+dialogsVerifiedIconFgActive: {{ colors.bg }};
+dialogsSendingIconFgActive: {{ colors.fg_dim }};
+dialogsSentIconFgActive: {{ colors.fg }};
+dialogsUnreadBgActive: {{ ui.accent }};
+dialogsUnreadBgMutedActive: {{ colors.fg }};
+dialogsUnreadFgActive: {{ colors.bg }};
+
+dialogsRippleBg: {{ colors.bg1 }};
+dialogsRippleBgActive: {{ colors.bg2 }};
+dialogsForwardBg: dialogsBgActive;
+dialogsForwardFg: dialogsNameFgActive;
+
+// ------------------------------------------------------------------------
+// History / chat view
+// ------------------------------------------------------------------------
+historyTextInFg: windowFg;
+historyTextInFgSelected: windowFg;
+historyTextOutFg: windowFg;
+historyTextOutFgSelected: windowFg;
+historyCaretFg: {{ colors.blue }};
+historyLinkInFg: {{ colors.blue }};
+historyLinkInFgSelected: {{ colors.blue }};
+historyLinkOutFg: {{ colors.blue }};
+historyLinkOutFgSelected: {{ colors.blue }};
+
+historyFileNameInFg: historyTextInFg;
+historyFileNameInFgSelected: historyTextInFgSelected;
+historyFileNameOutFg: historyTextOutFg;
+historyFileNameOutFgSelected: historyTextOutFgSelected;
+
+historyOutIconFg: {{ colors.blue }};
+historyOutIconFgSelected: {{ colors.blue }};
+historyIconFgInverted: {{ colors.fg }};
+historySendingOutIconFg: {{ colors.fg_dim }};
+historySendingInIconFg: {{ colors.fg_dim }};
+historySendingInvertedIconFg: {{ colors.fg }}a0;
+
+historyUnreadBarBg: {{ colors.bg1 }};
+historyUnreadBarBorder: {{ colors.bg2 }};
+historyUnreadBarFg: {{ colors.fg }};
+
+historyForwardChooseBg: {{ colors.bg }}80;
+historyForwardChooseFg: {{ colors.fg }};
+
+historyPeer1NameFg: {{ colors.red }};
+historyPeer1NameFgSelected: {{ colors.red }};
+historyPeer1UserpicBg: {{ colors.red }};
+historyPeer2NameFg: {{ colors.green }};
+historyPeer2NameFgSelected: {{ colors.green }};
+historyPeer2UserpicBg: {{ colors.green }};
+historyPeer3NameFg: {{ colors.yellow }};
+historyPeer3NameFgSelected: {{ colors.yellow }};
+historyPeer3UserpicBg: {{ colors.yellow }};
+historyPeer4NameFg: {{ colors.blue }};
+historyPeer4NameFgSelected: {{ colors.blue }};
+historyPeer4UserpicBg: {{ colors.blue }};
+historyPeer5NameFg: {{ colors.aqua }};
+historyPeer5NameFgSelected: {{ colors.aqua }};
+historyPeer5UserpicBg: {{ colors.aqua }};
+historyPeer6NameFg: {{ colors.orange }};
+historyPeer6NameFgSelected: {{ colors.orange }};
+historyPeer6UserpicBg: {{ colors.orange }};
+historyPeer7NameFg: {{ colors.purple }};
+historyPeer7NameFgSelected: {{ colors.purple }};
+historyPeer7UserpicBg: {{ colors.purple }};
+historyPeer8NameFg: {{ colors.purple }};
+historyPeer8NameFgSelected: {{ colors.purple }};
+historyPeer8UserpicBg: {{ colors.purple }};
+historyPeerUserpicFg: {{ colors.bg }};
+
+historyScrollBarBg: scrollBarBg;
+historyScrollBarBgOver: scrollBarBgOver;
+historyScrollBg: scrollBg;
+historyScrollBgOver: scrollBgOver;
+
+// ------------------------------------------------------------------------
+// Message bubbles (incoming/outgoing)
+// ------------------------------------------------------------------------
+msgInBg: {{ colors.bg_soft }};
+msgInBgSelected: {{ colors.bg2 }};
+msgOutBg: {{ colors.bg1 }};
+msgOutBgSelected: {{ colors.bg2 }};
+msgSelectOverlay: {{ ui.accent }}20;
+msgStickerOverlay: {{ ui.accent }}20;
+msgInServiceFg: {{ colors.blue }};
+msgInServiceFgSelected: {{ colors.blue }};
+msgOutServiceFg: {{ colors.blue }};
+msgOutServiceFgSelected: {{ colors.blue }};
+msgInShadow: {{ colors.bg }}40;
+msgInShadowSelected: {{ colors.bg }}40;
+msgOutShadow: {{ colors.bg }}40;
+msgOutShadowSelected: {{ colors.bg }}40;
+msgInDateFg: {{ colors.fg_dim }};
+msgInDateFgSelected: {{ colors.fg }};
+msgOutDateFg: {{ colors.fg_dim }};
+msgOutDateFgSelected: {{ colors.fg }};
+msgServiceFg: {{ colors.fg }};
+msgServiceBg: {{ colors.bg1 }};
+msgServiceBgSelected: {{ colors.bg2 }};
+msgInReplyBarColor: {{ colors.blue }};
+msgOutReplyBarColor: {{ colors.blue }};
+msgInReplyBarSelColor: {{ colors.fg }};
+msgOutReplyBarSelColor: {{ colors.fg }};
+msgImgReplyBarColor: {{ colors.blue }};
+msgInColorFg: {{ colors.blue }};
+msgInColorFgSelected: {{ colors.blue }};
+msgOutColorFg: {{ colors.green }};
+msgOutColorFgSelected: {{ colors.green }};
+msgInMonoFg: {{ colors.orange }};
+msgInMonoFgSelected: {{ colors.orange }};
+msgOutMonoFg: {{ colors.orange }};
+msgOutMonoFgSelected: {{ colors.orange }};
+
+msgFile1Bg: {{ colors.blue }};
+msgFile1BgDark: {{ colors.blue }};
+msgFile1BgOver: {{ colors.blue }};
+msgFile1BgSelected: {{ colors.blue }};
+msgFile2Bg: {{ colors.green }};
+msgFile2BgDark: {{ colors.green }};
+msgFile2BgOver: {{ colors.green }};
+msgFile2BgSelected: {{ colors.green }};
+msgFile3Bg: {{ colors.red }};
+msgFile3BgDark: {{ colors.red }};
+msgFile3BgOver: {{ colors.red }};
+msgFile3BgSelected: {{ colors.red }};
+msgFile4Bg: {{ colors.yellow }};
+msgFile4BgDark: {{ colors.yellow }};
+msgFile4BgOver: {{ colors.yellow }};
+msgFile4BgSelected: {{ colors.yellow }};
+
+msgWaveformInActive: {{ colors.blue }};
+msgWaveformInActiveSelected: {{ colors.blue }};
+msgWaveformInInactive: {{ colors.fg_dim }};
+msgWaveformInInactiveSelected: {{ colors.fg_dim }};
+msgWaveformOutActive: {{ colors.blue }};
+msgWaveformOutActiveSelected: {{ colors.blue }};
+msgWaveformOutInactive: {{ colors.fg_dim }};
+msgWaveformOutInactiveSelected: {{ colors.fg_dim }};
+
+msgBotKbOverBgAdd: {{ ui.accent }}14;
+msgBotKbIconFg: {{ colors.fg }};
+msgBotKbRippleBg: {{ colors.bg2 }};
+
+// ------------------------------------------------------------------------
+// Compose area (input bar)
+// ------------------------------------------------------------------------
+historyComposeAreaBg: {{ colors.bg_soft }};
+historyComposeAreaFg: {{ colors.fg }};
+historyComposeAreaFgService: {{ colors.fg_dim }};
+historyComposeIconFg: {{ colors.fg_dim }};
+historyComposeIconFgOver: {{ colors.fg }};
+historySendIconFg: {{ colors.blue }};
+historySendIconFgOver: {{ colors.green }};
+historyPinnedBg: {{ colors.bg_soft }};
+historyReplyBg: {{ colors.bg_soft }};
+historyReplyBgOver: {{ colors.bg1 }};
+historyReplyIconFg: {{ colors.blue }};
+historyReplyIconFgOver: {{ colors.blue }};
+historyReplyCancelFg: {{ colors.fg_dim }};
+historyReplyCancelFgOver: {{ colors.fg }};
+
+// ------------------------------------------------------------------------
+// Top bar (open chat header)
+// ------------------------------------------------------------------------
+topBarBg: {{ colors.bg }};
+
+emojiIconFg: {{ colors.fg_dim }};
+emojiIconFgActive: {{ colors.blue }};
+
+stickerPanelBg: {{ colors.bg_soft }};
+stickerPanelBgRipple: {{ colors.bg1 }};
+stickerPreviewBg: {{ colors.bg }}b8;
+
+// ------------------------------------------------------------------------
+// Overview / profile
+// ------------------------------------------------------------------------
+overviewCheckBg: {{ colors.bg }}40;
+overviewCheckFg: {{ colors.bg }};
+overviewCheckFgActive: {{ colors.bg }};
+overviewPhotoSelectOverlay: {{ colors.blue }}40;
+
+profileStatusFgOver: {{ colors.fg_dim }};
+profileVerifiedCheckBg: {{ colors.blue }};
+profileVerifiedCheckFg: {{ colors.bg }};
+profileAdminStartFg: {{ colors.blue }};
+
+// ------------------------------------------------------------------------
+// Notifications (desktop)
+// ------------------------------------------------------------------------
+notificationsBoxMonitorFg: {{ colors.fg }};
+notificationsBoxScreenBg: {{ colors.bg1 }};
+notificationSampleUserpicFg: {{ colors.blue }};
+notificationSampleCloseFg: {{ colors.fg_dim }};
+notificationSampleTextFg: {{ colors.fg_dim }};
+notificationSampleNameFg: {{ colors.fg_dim }};
+
+// ------------------------------------------------------------------------
+// Change-phone / login flow
+// ------------------------------------------------------------------------
+changePhoneSimcardFrom: {{ colors.fg_dim }};
+changePhoneSimcardTo: {{ colors.blue }};
+
+// ------------------------------------------------------------------------
+// Mediaview (image/video viewer)
+// ------------------------------------------------------------------------
+mediaviewFileBg: {{ colors.bg }};
+mediaviewFileNameFg: {{ colors.fg }};
+mediaviewFileSizeFg: {{ colors.fg_dim }};
+mediaviewFileRedCornerFg: {{ colors.red }};
+mediaviewFileYellowCornerFg: {{ colors.yellow }};
+mediaviewFileGreenCornerFg: {{ colors.green }};
+mediaviewFileBlueCornerFg: {{ colors.blue }};
+mediaviewFileExtFg: {{ colors.fg }};
+mediaviewMenuBg: {{ colors.bg }};
+mediaviewMenuBgOver: {{ colors.bg_soft }};
+mediaviewMenuBgRipple: {{ colors.bg1 }};
+mediaviewMenuFg: {{ colors.fg }};
+mediaviewBg: {{ colors.bg }}eb;
+mediaviewVideoBg: imageBg;
+mediaviewControlBg: {{ colors.bg }}66;
+mediaviewControlFg: {{ colors.fg }};
+mediaviewCaptionBg: {{ colors.bg }}b8;
+mediaviewCaptionFg: {{ colors.fg }};
+mediaviewTextLinkFg: {{ colors.blue }};
+mediaviewSaveMsgBg: {{ colors.bg }}b8;
+mediaviewSaveMsgFg: {{ colors.fg }};
+mediaviewPlaybackActive: {{ colors.blue }};
+mediaviewPlaybackInactive: {{ colors.fg_dim }};
+mediaviewPlaybackActiveOver: {{ colors.blue }};
+mediaviewPlaybackInactiveOver: {{ colors.fg_dim }};
+mediaviewPlaybackProgressFg: {{ colors.fg }};
+mediaviewPlaybackIconFg: {{ colors.fg }};
+mediaviewPlaybackIconFgOver: {{ colors.blue }};
+mediaviewTransparentBg: {{ ui.accent }};
+mediaviewTransparentFg: {{ colors.bg2 }};
+
+// ------------------------------------------------------------------------
+// Call panel
+// ------------------------------------------------------------------------
+callBg: {{ colors.bg }};
+callNameFg: {{ colors.fg }};
+callArrowFg: {{ colors.green }};
+callArrowMissedFg: {{ colors.red }};
+callIconFg: {{ colors.fg }}c8;
+callAnswerBg: {{ colors.green }};
+callAnswerRipple: {{ colors.green }};
+callAnswerBgOuter: {{ colors.green }}40;
+callHangupBg: {{ colors.red }};
+callHangupRipple: {{ colors.red }};
+callCancelBg: {{ colors.fg }};
+callCancelFg: {{ colors.bg }};
+callCancelRipple: {{ colors.fg_dim }};
+callMuteRipple: {{ ui.accent }}2e;
+callBarBg: {{ colors.green }};
+callBarBgMuted: {{ colors.fg_dim }};
+callBarMuteRipple: {{ colors.bg2 }};
+callBarUnmuteRipple: {{ colors.bg2 }};
+callBarBgHangup: {{ colors.red }};
+callBarHangupRipple: {{ colors.bg2 }};
+callBarFg: {{ colors.fg }};
+
+// ------------------------------------------------------------------------
+// Import progress
+// ------------------------------------------------------------------------
+importIconFg: {{ colors.blue }};
+
+// ------------------------------------------------------------------------
+// Layer / overlay
+// ------------------------------------------------------------------------
+layerBg: {{ colors.bg }}99;
+
+// ------------------------------------------------------------------------
+// Sidebar (left menu)
+// ------------------------------------------------------------------------
+sideBarBg: {{ colors.bg_soft }};
+sideBarBgActive: {{ colors.bg1 }};
+sideBarBgRipple: {{ colors.bg2 }};
+sideBarTextFg: {{ colors.fg_dim }};
+sideBarTextFgActive: {{ colors.fg }};
+sideBarBadgeBg: {{ colors.blue }};
+sideBarBadgeBgMuted: {{ colors.bg2 }};
+sideBarBadgeFg: {{ colors.bg }};
+sideBarBadgeBgActive: {{ ui.accent }};
+sideBarBadgeFgActive: {{ colors.bg }};
+sideBarIconFg: {{ colors.fg_dim }};
+sideBarIconFgActive: {{ colors.fg }};

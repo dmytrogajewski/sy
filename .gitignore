@@ -1,0 +1,16 @@
+/target
+
+# fastembed downloaded model weights (~2-3 GB). Pre-NPU codepath; the
+# new VitisAI pipeline keeps its artifacts under ~/.cache/sy/npu-embed
+# (created by scripts/prep_npu_embed.py) — also outside the repo.
+/.fastembed_cache/
+
+# Marker file the qdrant integration drops on first init.
+/.qdrant-initialized
+
+# Editor / OS noise.
+.DS_Store
+*~
+*.swp
+.idea/
+.vscode/

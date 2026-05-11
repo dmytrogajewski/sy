@@ -1,0 +1,18 @@
+// ~/.config/waybar/cheatsheet.jsonc — rendered by sy
+// Spawned on demand by niri's `Super+/` bind. Toggles on repeated press.
+{
+    "name": "cheatsheet",
+    "layer": "top",
+    "position": "bottom",
+    "height": 18,
+    "margin-bottom": 0,
+    "margin-left": 0,
+    "margin-right": 0,
+
+    "modules-center": ["custom/cheatsheet"],
+
+    "custom/cheatsheet": {
+        "format": "Super+ Return term · D run · N files · HJKL focus · Shift+HJKL move · F max · Shift+F fullscreen · Space lang · B/V column · W tabs · E center · C clip · R/Shift+R width · 1-9 ws · Shift+1-9 send · Tab prev · [/] ws up/down · Print shot · Esc lock · Shift+/ help · / sheet · Shift+Q close · Shift+C reload · Shift+E quit",
+        "tooltip": false
+    }
+}

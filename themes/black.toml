@@ -1,0 +1,21 @@
+name        = "Black"
+description = "Near-pure-black background with muted pastel accents"
+
+[colors]
+bg      = "#000000"
+bg_soft = "#0a0a0a"
+bg1     = "#161616"
+bg2     = "#262626"
+fg      = "#e4e4e7"
+fg_dim  = "#a1a1aa"
+red     = "#f87171"
+orange  = "#fb923c"
+yellow  = "#facc15"
+green   = "#4ade80"
+aqua    = "#22d3ee"
+blue    = "#60a5fa"
+purple  = "#c084fc"
+gray    = "#71717a"
+
+[ui]
+accent = "#ffffff"

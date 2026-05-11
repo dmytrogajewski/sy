@@ -1,0 +1,34 @@
+# ~/.config/swaylock/config — rendered by sy
+daemonize
+show-failed-attempts
+indicator-idle-visible
+indicator-radius=110
+indicator-thickness=8
+
+color={{ colors.bg | replace("#", "") }}
+inside-color={{ colors.bg_soft | replace("#", "") }}cc
+inside-clear-color={{ colors.yellow | replace("#", "") }}cc
+inside-ver-color={{ colors.blue | replace("#", "") }}cc
+inside-wrong-color={{ colors.red | replace("#", "") }}cc
+
+ring-color={{ colors.bg1 | replace("#", "") }}
+ring-clear-color={{ colors.yellow | replace("#", "") }}
+ring-ver-color={{ colors.blue | replace("#", "") }}
+ring-wrong-color={{ colors.red | replace("#", "") }}
+
+key-hl-color={{ ui.accent | replace("#", "") }}
+separator-color=00000000
+bs-hl-color={{ colors.red | replace("#", "") }}
+
+line-color=00000000
+line-clear-color=00000000
+line-ver-color=00000000
+line-wrong-color=00000000
+
+text-color={{ colors.fg | replace("#", "") }}
+text-clear-color={{ colors.fg | replace("#", "") }}
+text-ver-color={{ colors.fg | replace("#", "") }}
+text-wrong-color={{ colors.fg | replace("#", "") }}
+
+font=JetBrainsMono Nerd Font
+font-size=22
