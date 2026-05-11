@@ -85,6 +85,8 @@ tooltip {
 #custom-notif,
 #custom-bt,
 #custom-pwr,
+#custom-sy-gpu,
+#custom-sy-npu,
 #custom-sy-disk,
 #custom-sy-silent,
 #custom-sy-vol,
@@ -100,6 +102,8 @@ tooltip {
 #custom-notif:hover,
 #custom-bt:hover,
 #custom-pwr:hover,
+#custom-sy-gpu:hover,
+#custom-sy-npu:hover,
 #custom-sy-disk:hover,
 #custom-sy-silent:hover,
 #custom-sy-vol:hover,
@@ -111,6 +115,8 @@ tooltip {
 /* Hidden tiles collapse to zero width — used by sy-disk above threshold,
    sy-silent outside its window, and sy-bat on machines with no battery.
    sy-knowledge collapses when the daemon is down. */
+#custom-sy-gpu.absent,
+#custom-sy-npu.absent,
 #custom-sy-disk.hidden,
 #custom-sy-silent.hidden,
 #custom-sy-bat.hidden,
@@ -119,6 +125,13 @@ tooltip {
     margin: 0;
     min-width: 0;
 }
+
+#custom-sy-gpu.ok       { color: @fg_dim; }
+#custom-sy-gpu.warning  { color: @yellow; }
+#custom-sy-gpu.critical { color: @red; }
+
+#custom-sy-npu.idle     { color: @fg_dim; }
+#custom-sy-npu.active   { color: @aqua; }
 
 #custom-sy-knowledge.idle       { color: @fg_dim; }
 #custom-sy-knowledge.indexing   { color: @accent; }

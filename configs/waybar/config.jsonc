@@ -11,7 +11,7 @@
 
     "modules-left":   ["niri/workspaces", "niri/language"],
     "modules-center": ["niri/window"],
-    "modules-right":  ["cpu", "memory", "custom/sy-disk", "custom/sy-silent", "custom/sy-vol", "custom/sy-bl", "custom/notif", "custom/sy-knowledge", "custom/agents", "custom/bt", "network", "clock", "custom/pwr", "custom/sy-bat"],
+    "modules-right":  ["cpu", "memory", "custom/sy-gpu", "custom/sy-npu", "custom/sy-disk", "custom/sy-silent", "custom/sy-vol", "custom/sy-bl", "custom/notif", "custom/sy-knowledge", "custom/agents", "custom/bt", "network", "clock", "custom/pwr", "custom/sy-bat"],
 
     "niri/workspaces": {
         "format": "{value}",
@@ -120,6 +120,22 @@
         "format-icons": ["▁","▂","▃","▄","▅","▆","▇","█"],
         "states": { "warning": 70, "critical": 90 },
         "tooltip-format": "RAM {used:0.1f}GiB / {total:0.1f}GiB ({percentage}%)"
+    },
+
+    "custom/sy-gpu": {
+        "exec": "{{ home }}/.local/bin/sy gpu --waybar",
+        "return-type": "json",
+        "interval": 5,
+        "signal": 15,
+        "on-click": "{{ home }}/.local/bin/foot -e {{ home }}/.local/bin/sy gpu"
+    },
+
+    "custom/sy-npu": {
+        "exec": "{{ home }}/.local/bin/sy npu --waybar",
+        "return-type": "json",
+        "interval": 2,
+        "signal": 16,
+        "on-click": "{{ home }}/.local/bin/foot -e {{ home }}/.local/bin/sy npu"
     },
 
     "custom/sy-disk": {

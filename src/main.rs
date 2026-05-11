@@ -18,9 +18,11 @@ mod bt;
 mod cal;
 mod disk;
 mod fido;
+mod gpu;
 mod knowledge;
 mod net;
 mod notif;
+mod npu;
 mod popup;
 mod pwr;
 mod silent;
@@ -118,6 +120,18 @@ enum Cmd {
     /// Battery applet — emits waybar JSON keyed to charge level / charging state.
     Bat {
         /// Emit waybar-compatible JSON.
+        #[arg(long)]
+        waybar: bool,
+    },
+    /// NVIDIA GPU applet — bar tile showing VRAM pressure + util.
+    /// `--waybar` emits JSON; no args prints a human-readable summary.
+    Gpu {
+        #[arg(long)]
+        waybar: bool,
+    },
+    /// AMD Ryzen AI NPU applet — bar tile showing active/idle + holders.
+    /// `--waybar` emits JSON; no args prints a human-readable summary.
+    Npu {
         #[arg(long)]
         waybar: bool,
     },
@@ -289,6 +303,8 @@ fn run() -> Result<()> {
         Cmd::Vol { action, waybar } => vol::run(action.as_deref(), waybar),
         Cmd::Bright { action, waybar } => bright::run(action.as_deref(), waybar),
         Cmd::Bat { waybar } => bat::run(waybar),
+        Cmd::Gpu { waybar } => gpu::run(waybar),
+        Cmd::Npu { waybar } => npu::run(waybar),
         Cmd::Disk { waybar, threshold_gib } => disk::run(waybar, threshold_gib),
         Cmd::Notif { action, rest } => {
             let act = action.as_deref().unwrap_or("menu");
