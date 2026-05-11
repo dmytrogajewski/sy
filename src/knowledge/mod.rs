@@ -167,6 +167,17 @@ pub enum KnowledgeCmd {
         #[arg(long)]
         json: bool,
     },
+
+    /// Install the system-level systemd unit that supervises the
+    /// knowledge daemon with the AMD Ryzen AI NPU capabilities
+    /// (CAP_IPC_LOCK + LimitMEMLOCK=infinity) it needs. One-time setup;
+    /// auto-starts the daemon on every boot afterwards. Requires sudo.
+    InstallService {
+        /// Print the rendered unit + the commands that would be run;
+        /// don't touch /etc.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 pub fn dispatch(cmd: KnowledgeCmd) -> Result<()> {
@@ -201,6 +212,7 @@ pub fn dispatch(cmd: KnowledgeCmd) -> Result<()> {
         KnowledgeCmd::McpEnable { apply, json } => cli::mcp_enable(apply, json),
         KnowledgeCmd::McpDisable { apply, json } => cli::mcp_disable(apply, json),
         KnowledgeCmd::McpStatus { json } => cli::mcp_status_cmd(json),
+        KnowledgeCmd::InstallService { dry_run } => cli::install_service(dry_run),
     }
 }
 

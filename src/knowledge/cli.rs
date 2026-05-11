@@ -864,6 +864,19 @@ pub fn sync(yes: bool) -> Result<()> {
             "this drops the Qdrant collection and re-embeds every file — re-run with --yes to confirm"
         );
     }
+    // If the daemon is up, delegate to it. Running our own embedder in
+    // parallel forks an extra ORT session, contends for the NPU (which
+    // only services one HW context at a time), and falls back to
+    // 14-thread CPU EP when it can't grab the device — turning a 2 h
+    // NPU re-embed into a 30 h CPU storm.
+    if status::load().ok().filter(|s| status::is_fresh(s) && s.daemon_running).is_some() {
+        ipc::send(&ipc::Op::FullResync)
+            .with_context(|| "send FullResync to daemon")?;
+        println!(
+            "queued full resync on daemon — watch `sy knowledge status`"
+        );
+        return Ok(());
+    }
     qdrant::recreate_collection()?;
     let mut idx = state::Index::default();
     let ctx = RunCtx::interactive();
@@ -1297,5 +1310,117 @@ pub fn copy_to_clipboard(text: &str) -> Result<()> {
         stdin.write_all(text.as_bytes())?;
     }
     let _ = child.wait();
+    Ok(())
+}
+
+const SY_KNOWLEDGE_UNIT: &str = include_str!(
+    "../../configs/systemd/system/sy-knowledge.service"
+);
+
+const UNIT_DEST: &str = "/etc/systemd/system/sy-knowledge.service";
+
+pub fn install_service(dry_run: bool) -> Result<()> {
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .context("USER/LOGNAME not set")?;
+    let uid = unsafe { libc::getuid() };
+
+    let mut env = minijinja::Environment::new();
+    env.add_template("unit", SY_KNOWLEDGE_UNIT)
+        .context("parse unit template")?;
+    let rendered = env
+        .get_template("unit")
+        .unwrap()
+        .render(minijinja::context!(home, user, uid))
+        .context("render unit template")?;
+
+    let bin = PathBuf::from(&home).join(".local/bin/sy");
+    if !bin.is_file() {
+        anyhow::bail!(
+            "sy binary not at {} — run `sy apply` first to install it",
+            bin.display()
+        );
+    }
+
+    if dry_run {
+        println!("--- {UNIT_DEST} ---\n{rendered}");
+        println!("--- selinux ---");
+        println!("sudo semanage fcontext -a -t bin_t '{}'", bin.display());
+        println!("sudo restorecon -v {}", bin.display());
+        println!("--- systemd ---");
+        println!("sudo install -m 0644 <rendered> {UNIT_DEST}");
+        println!("sudo systemctl daemon-reload");
+        println!("sudo systemctl enable --now sy-knowledge.service");
+        return Ok(());
+    }
+
+    // 1. Drop the rendered unit at /etc/systemd/system/. We have to go
+    //    through a tempfile + `sudo install` because the destination
+    //    isn't writeable as the caller.
+    let tmp = std::env::temp_dir().join(format!("sy-knowledge.service.{}", uid));
+    std::fs::write(&tmp, rendered.as_bytes())
+        .with_context(|| format!("write {}", tmp.display()))?;
+    sudo(
+        &["install", "-m", "0644", &tmp.display().to_string(), UNIT_DEST],
+        "install unit file",
+    )?;
+    let _ = std::fs::remove_file(&tmp);
+
+    // 2. SELinux: relabel ~/.local/bin/sy as bin_t so system systemd can
+    //    exec it (default label there is gconf_home_t, status=203/EXEC).
+    //    Register the file-context rule so future `restorecon` keeps it.
+    let bin_str = bin.display().to_string();
+    let fcontext_pattern = format!("{}(/.*)?", bin_str);
+    // semanage fcontext -a is idempotent only the first time; subsequent
+    // calls fail with "rule already defined". Probe -l and skip if
+    // already present.
+    let existing = Command::new("sudo")
+        .args(["semanage", "fcontext", "-l"])
+        .output();
+    let already = existing
+        .as_ref()
+        .map(|o| {
+            let s = String::from_utf8_lossy(&o.stdout);
+            s.lines().any(|l| l.contains(&bin_str))
+        })
+        .unwrap_or(false);
+    if !already {
+        sudo(
+            &["semanage", "fcontext", "-a", "-t", "bin_t", &fcontext_pattern],
+            "register selinux fcontext",
+        )?;
+    }
+    sudo(&["restorecon", "-v", &bin_str], "restorecon binary")?;
+
+    // 3. Reload systemd, enable + start the unit. If a transient unit of
+    //    the same name is loaded (from a prior `systemd-run --unit=`),
+    //    stop it first.
+    let _ = Command::new("sudo")
+        .args(["systemctl", "stop", "sy-knowledge.service"])
+        .status();
+    sudo(
+        &["systemctl", "daemon-reload"],
+        "systemctl daemon-reload",
+    )?;
+    sudo(
+        &["systemctl", "enable", "--now", "sy-knowledge.service"],
+        "systemctl enable --now",
+    )?;
+
+    println!("sy-knowledge.service installed and started.");
+    println!("status: sudo systemctl status sy-knowledge.service");
+    println!("logs:   journalctl -u sy-knowledge.service -f");
+    Ok(())
+}
+
+fn sudo(args: &[&str], what: &str) -> Result<()> {
+    let st = Command::new("sudo")
+        .args(args)
+        .status()
+        .with_context(|| format!("spawn sudo for {what}"))?;
+    if !st.success() {
+        anyhow::bail!("sudo {what} failed (exit {:?})", st.code());
+    }
     Ok(())
 }

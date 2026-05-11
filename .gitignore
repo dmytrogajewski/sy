@@ -8,6 +8,12 @@
 # Marker file the qdrant integration drops on first init.
 /.qdrant-initialized
 
+# AMD VitisAI's aiecompiler drops these MD5 signature files in $PWD
+# when an ORT InferenceSession opens a model; they're cache hints
+# for partition reuse and don't belong in the repo.
+/original-model-signature.txt
+/original-info-signature.txt
+
 # Editor / OS noise.
 .DS_Store
 *~

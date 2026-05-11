@@ -1,0 +1,53 @@
+[Unit]
+Description=sy knowledge daemon (qdrant supervisor + NPU embedder)
+Documentation=https://github.com/dmytrogajewski/sy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ user }}
+Group={{ user }}
+
+# AMD Ryzen AI's amdxdna driver mmap's a 64 MiB DRM heap and the kernel
+# treats it as locked memory. The default RLIMIT_MEMLOCK (8 MiB) trips
+# EAGAIN before the NPU session can attach, so we hand the daemon
+# CAP_IPC_LOCK + unbounded LIMIT_MEMLOCK. systemd's AmbientCapabilities
+# elevates without setting AT_SECURE, which would have made the dynamic
+# linker drop our LD_LIBRARY_PATH to /opt/AMD/ryzenai/venv libs.
+AmbientCapabilities=CAP_IPC_LOCK
+LimitMEMLOCK=infinity
+
+WorkingDirectory={{ home }}
+Environment=HOME={{ home }}
+Environment=XDG_CONFIG_HOME={{ home }}/.config
+Environment=XDG_CACHE_HOME={{ home }}/.cache
+Environment=XDG_STATE_HOME={{ home }}/.local/state
+Environment=XDG_DATA_HOME={{ home }}/.local/share
+Environment=XDG_RUNTIME_DIR=/run/user/{{ uid }}
+Environment=PATH={{ home }}/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+ExecStart={{ home }}/.local/bin/sy knowledge daemon
+
+# Auto-restart on crash but throttle a flapping loop.
+Restart=on-failure
+RestartSec=5s
+StartLimitInterval=60s
+StartLimitBurst=5
+
+# Nice/IO niceness matches what the daemon used to apply itself when
+# launched from niri spawn-at-startup.
+Nice=10
+IOSchedulingClass=idle
+
+# Don't let the daemon's pre-fault VRAM ramp swamp the box; this is a
+# soft cap, not a kill.
+MemoryHigh=12G
+
+# Keep journals readable.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sy-knowledge
+
+[Install]
+WantedBy=default.target

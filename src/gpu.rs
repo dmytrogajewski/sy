@@ -72,13 +72,15 @@ fn waybar_out(s: &Snapshot) -> Result<()> {
         println!(r#"{{"text":"","class":"absent","tooltip":""}}"#);
         return Ok(());
     }
-    // We surface VRAM pressure (more interesting than util on a laptop
-    // doing background inference) on the icon, and util in the tooltip.
-    let vram_pct = ((s.vram_used_mib * 100) / s.vram_total_mib) as usize;
-    let icon = BARS[(vram_pct * (BARS.len() - 1) / 100).min(BARS.len() - 1)];
-    let class = if vram_pct >= 90 {
+    // Bar on GPU compute utilisation (the "is anything running?" signal
+    // that mirrors the CPU module). VRAM pressure stays in the tooltip
+    // and drives the warning/critical class so a near-OOM card still
+    // shouts via the colour.
+    let vram_pct = ((s.vram_used_mib * 100) / s.vram_total_mib) as u32;
+    let bar = BARS[(s.util_pct as usize * (BARS.len() - 1) / 100).min(BARS.len() - 1)];
+    let class = if vram_pct >= 90 || s.util_pct >= 95 {
         "critical"
-    } else if vram_pct >= 70 {
+    } else if vram_pct >= 70 || s.util_pct >= 70 {
         "warning"
     } else {
         "ok"
@@ -91,8 +93,11 @@ fn waybar_out(s: &Snapshot) -> Result<()> {
         s.vram_total_mib as f64 / 1024.0,
         vram_pct,
     );
+    // 󰢮 = nerd-font GPU glyph (replaces the old wifi-signal 󰤥). Pairs
+    // with the CPU/RAM modules' " ▁..█" style.
     println!(
-        r#"{{"text":"󰤥 {icon}","class":"{class}","tooltip":"{tooltip}","percentage":{vram_pct}}}"#
+        r#"{{"text":"󰢮 {bar}","class":"{class}","tooltip":"{tooltip}","percentage":{pct}}}"#,
+        pct = s.util_pct
     );
     Ok(())
 }

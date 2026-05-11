@@ -148,12 +148,16 @@ pub fn maybe_reexec_with_amd_env() {
     // VitisAI EP for `libonnxruntime.so.1` resolves to the same binary
     // that `ORT_DYLIB_PATH` points at — voe/lib also ships a copy of
     // ORT and loading both double-inits the C++ runtime singletons.
+    // /opt/xilinx/xrt/lib hosts libxrt_coreutil.so which the VAIML
+    // custom op dlopens; without it, the EP silently downgrades to a
+    // "compile-only" session (`XRT is not installed`) and run() fails.
     let lib_dirs = [
         amd_venv.join("onnxruntime/capi"),
         amd_venv.join("flexml/flexml_extras/lib"),
         amd_venv.join("voe/lib"),
         amd_venv.join("vaimlpl_be/lib"),
         amd_venv.join("flexmlrt/lib"),
+        PathBuf::from("/opt/xilinx/xrt/lib"),
     ];
     let prev = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
     let mut ld_path: Vec<String> = lib_dirs

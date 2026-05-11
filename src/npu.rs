@@ -1,30 +1,36 @@
 //! `sy npu --waybar` — emits a waybar JSON tile for the AMD Ryzen AI
-//! NPU. Reads `/sys/class/accel/accel0/device/power_state` for the
-//! active/idle signal and probes `/proc/*/fd/` to see who's holding
-//! `/dev/accel/accel0` right now.
+//! NPU. Reports actual utilisation %, computed from the kernel's
+//! pm_runtime counters at `/sys/.../power/runtime_{active,suspended}_time`:
 //!
-//! `power_state == "D0"` → active (some process has the device open
-//! and the firmware is in run state); `D3*` → idle. Sampling at
-//! waybar's 2-second cadence catches sustained workloads; short
-//! 100 ms inferences are mostly invisible.
+//!     util_pct = Δactive / (Δactive + Δsuspended) over the
+//!     interval between this and the previous sample.
+//!
+//! We persist the last sample in $XDG_RUNTIME_DIR/sy-npu.last so each
+//! waybar tick (2 s by default) gets a real 2-second utilisation
+//! window. The first tick after boot/reset has no prior sample → we
+//! fall back to the binary D0/D3 power-state read.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::Result;
 
 const ACCEL_DEV: &str = "/dev/accel/accel0";
 const POWER_STATE_PATH: &str = "/sys/class/accel/accel0/device/power_state";
 const FW_VERSION_PATH: &str = "/sys/class/accel/accel0/device/fw_version";
+const RUNTIME_ACTIVE: &str = "/sys/class/accel/accel0/device/power/runtime_active_time";
+const RUNTIME_SUSPENDED: &str = "/sys/class/accel/accel0/device/power/runtime_suspended_time";
+
+const BARS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 #[derive(Debug, Default)]
 struct Snapshot {
     present: bool,
     active: bool,
+    util_pct: u32, // 0..=100, computed from pm_runtime deltas
     fw_version: String,
-    holders: Vec<String>, // process names with the device fd open
-    bdf: String,          // PCI bus:dev.fn
-    name: String,         // "NPU Strix"
+    holders: Vec<String>,
+    bdf: String,
+    name: String,
 }
 
 pub fn run(waybar: bool) -> Result<()> {
@@ -37,9 +43,10 @@ pub fn run(waybar: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{} @ {}\n  state:    {}\n  firmware: {}\n  holders:  {}",
+        "{} @ {}\n  util:     {}%\n  state:    {}\n  firmware: {}\n  holders:  {}",
         if s.name.is_empty() { "NPU" } else { &s.name },
         s.bdf,
+        s.util_pct,
         if s.active { "active (D0)" } else { "idle (D3)" },
         if s.fw_version.is_empty() {
             "?"
@@ -65,6 +72,7 @@ fn snapshot() -> Snapshot {
         .ok()
         .map(|v| v.trim() == "D0")
         .unwrap_or(false);
+    s.util_pct = read_util_pct(s.active);
     s.fw_version = std::fs::read_to_string(FW_VERSION_PATH)
         .ok()
         .map(|v| v.trim().to_string())
@@ -75,8 +83,69 @@ fn snapshot() -> Snapshot {
     s
 }
 
+/// Compute NPU utilisation as a percentage over the interval since the
+/// previous waybar tick. Falls back to a binary 100/0 read of
+/// `power_state` if we have no prior sample (first tick, missing
+/// $XDG_RUNTIME_DIR, etc.).
+fn read_util_pct(active_now: bool) -> u32 {
+    let Some((active, suspended)) = read_pm_counters() else {
+        return if active_now { 100 } else { 0 };
+    };
+    let cache = sample_cache_path();
+    let prev = std::fs::read_to_string(&cache).ok().and_then(parse_sample);
+    if let Err(e) = persist_sample(&cache, active, suspended) {
+        // Non-fatal: we just won't have a delta next tick.
+        let _ = e;
+    }
+    let Some((p_active, p_suspended)) = prev else {
+        return if active_now { 100 } else { 0 };
+    };
+    let d_active = active.saturating_sub(p_active);
+    let d_suspended = suspended.saturating_sub(p_suspended);
+    let total = d_active + d_suspended;
+    if total == 0 {
+        // No time elapsed in either bucket → the device is either
+        // perfectly idle (D3 the whole time, both counters frozen
+        // because of runtime PM) or perfectly busy. The current
+        // power_state read disambiguates.
+        return if active_now { 100 } else { 0 };
+    }
+    ((d_active * 100) / total).min(100) as u32
+}
+
+fn read_pm_counters() -> Option<(u64, u64)> {
+    let a = std::fs::read_to_string(RUNTIME_ACTIVE).ok()?;
+    let s = std::fs::read_to_string(RUNTIME_SUSPENDED).ok()?;
+    let av: u64 = a.trim().parse().ok()?;
+    let sv: u64 = s.trim().parse().ok()?;
+    Some((av, sv))
+}
+
+fn parse_sample(s: String) -> Option<(u64, u64)> {
+    let mut it = s.split_whitespace();
+    let a: u64 = it.next()?.parse().ok()?;
+    let s: u64 = it.next()?.parse().ok()?;
+    Some((a, s))
+}
+
+fn persist_sample(path: &Path, active: u64, suspended: u64) -> std::io::Result<()> {
+    if let Some(p) = path.parent() {
+        let _ = std::fs::create_dir_all(p);
+    }
+    std::fs::write(path, format!("{active} {suspended}\n"))
+}
+
+fn sample_cache_path() -> PathBuf {
+    if let Ok(d) = std::env::var("XDG_RUNTIME_DIR") {
+        if !d.is_empty() {
+            return PathBuf::from(d).join("sy-npu.last");
+        }
+    }
+    let uid = unsafe { libc::getuid() };
+    PathBuf::from(format!("/run/user/{uid}/sy-npu.last"))
+}
+
 fn read_bdf() -> Option<String> {
-    // /sys/class/accel/accel0/device → /sys/devices/pci.../0000:xx:yy.z
     let link = std::fs::read_link("/sys/class/accel/accel0/device").ok()?;
     Some(
         link.file_name()?
@@ -100,12 +169,9 @@ fn read_pci_name(_bdf: &str) -> String {
                 .map(|(_, v)| v.trim().to_string())
         })
         .unwrap_or_default();
-    // Strip the marketing prefix ("AMD Ryzen AI 9 ") so the tooltip
-    // is just "HX 370" or whatever.
     let short = cpu
         .strip_prefix("AMD Ryzen AI ")
         .map(|s| {
-            // Strip the trailing iGPU annotation, e.g. "9 HX 370 w/ Radeon 890M".
             s.split_once(" w/ ")
                 .map(|(left, _)| left.to_string())
                 .unwrap_or_else(|| s.to_string())
@@ -118,9 +184,6 @@ fn read_pci_name(_bdf: &str) -> String {
     }
 }
 
-/// Walk /proc/*/fd/ to find which processes have /dev/accel/accel0 open.
-/// Permission-limited to fds the current user owns, which is fine —
-/// usually only sy / our own daemons / xrt-smi.
 fn find_holders() -> Vec<String> {
     let mut holders = Vec::new();
     let Ok(rd) = std::fs::read_dir("/proc") else { return holders };
@@ -156,12 +219,17 @@ fn find_holders() -> Vec<String> {
 
 fn waybar_out(s: &Snapshot) -> Result<()> {
     if !s.present {
-        // No NPU → empty tile so waybar can hide it.
         println!(r#"{{"text":"","class":"absent","tooltip":""}}"#);
         return Ok(());
     }
-    let icon = if s.active { "󰍛" } else { "󰒲" };
-    let class = if s.active { "active" } else { "idle" };
+    let bar = BARS[(s.util_pct as usize * (BARS.len() - 1) / 100).min(BARS.len() - 1)];
+    let class = if s.util_pct >= 70 {
+        "active"
+    } else if s.util_pct == 0 {
+        "idle"
+    } else {
+        "active"
+    };
     let name = if s.name.is_empty() { "NPU" } else { &s.name };
     let holders = if s.holders.is_empty() {
         "(none)".to_string()
@@ -169,18 +237,17 @@ fn waybar_out(s: &Snapshot) -> Result<()> {
         s.holders.join(", ")
     };
     let tooltip = format!(
-        "{}\\n{}\\nFW {}\\nopen by: {}",
+        "{}\\nutil {}%\\nstate {}\\nFW {}\\nopen by: {}",
         name,
-        if s.active { "active" } else { "idle" },
-        if s.fw_version.is_empty() {
-            "?"
-        } else {
-            &s.fw_version
-        },
+        s.util_pct,
+        if s.active { "D0 (active)" } else { "D3 (idle)" },
+        if s.fw_version.is_empty() { "?" } else { &s.fw_version },
         holders,
     );
+    // 󰍛 = nerd-font chip glyph; matches the CPU/RAM bar styling.
     println!(
-        r#"{{"text":"{icon}","class":"{class}","tooltip":"{tooltip}"}}"#
+        r#"{{"text":"󰍛 {bar}","class":"{class}","tooltip":"{tooltip}","percentage":{pct}}}"#,
+        pct = s.util_pct
     );
     Ok(())
 }

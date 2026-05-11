@@ -95,7 +95,8 @@ def export_onnx(model_id: str, seq_len: int, out_path: Path) -> None:
     )
 
 
-def quantize(in_path: Path, out_path: Path, preset: str) -> None:
+def quantize(in_path: Path, out_path: Path, preset: str,
+             bf16_shrink: bool = True) -> None:
     from quark.onnx import ModelQuantizer
     from quark.onnx.quantization.config import Config, get_default_config
 
@@ -145,7 +146,7 @@ def quantize(in_path: Path, out_path: Path, preset: str) -> None:
         if hasattr(_qz, "create_infer_session_for_onnx_model"):
             _qz.create_infer_session_for_onnx_model = _orig_make
 
-    if preset == "BF16":
+    if preset == "BF16" and bf16_shrink:
         _shrink_fp32_initializers_to_bf16(out_path)
 
 
@@ -294,6 +295,12 @@ def main() -> int:
                                  "vaip_config.json"))
     ap.add_argument("--skip-warm", action="store_true",
                     help="skip the NPU compile/warmup step")
+    ap.add_argument("--no-bf16-shrink", action="store_true",
+                    help="Skip the FP32→BF16 initializer shrink pass. Needed "
+                         "for models small enough to fit under the 2 GiB "
+                         "protobuf cap (e.g. multilingual-e5-base, ~580 MB "
+                         "BF16); the shrink can leave dangling QDQ edges "
+                         "that VitisAI's partition pass rejects.")
     ap.add_argument("--json", action="store_true",
                     help="emit a final JSON summary on stdout")
     args = ap.parse_args()
@@ -329,7 +336,8 @@ def main() -> int:
 
     if not quant.is_file():
         print(f"[2/3] Quantising → {args.quant_preset}", file=sys.stderr)
-        quantize(fp32, quant, args.quant_preset)
+        quantize(fp32, quant, args.quant_preset,
+                 bf16_shrink=not args.no_bf16_shrink)
     else:
         print(f"[2/3] Reusing existing {quant.name}", file=sys.stderr)
     summary["quant_preset"] = args.quant_preset

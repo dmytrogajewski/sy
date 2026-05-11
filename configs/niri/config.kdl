@@ -87,9 +87,14 @@ spawn-at-startup "{{ home }}/.local/bin/sy" "snd" "login"
 // Clipboard history (cliphist)
 spawn-at-startup "sh" "-c" "command -v cliphist >/dev/null && wl-paste --type text  --watch cliphist store"
 spawn-at-startup "sh" "-c" "command -v cliphist >/dev/null && wl-paste --type image --watch cliphist store"
-// sy knowledge daemon: supervises qdrant, watches sources, runs scheduled syncs.
-// Provides system-wide semantic search to every agent via `sy knowledge mcp`.
-spawn-at-startup "{{ home }}/.local/bin/sy" "knowledge" "daemon"
+// sy knowledge daemon is supervised by the system-level
+// /etc/systemd/system/sy-knowledge.service unit (installed by
+// `sy knowledge install-service`). That unit owns the AMD Ryzen AI
+// NPU capability grants (CAP_IPC_LOCK + LimitMEMLOCK=infinity) the
+// daemon needs to attach to /dev/accel/accel0 — niri's
+// spawn-at-startup inherits this session's 8 MiB memlock ceiling
+// instead, which makes the VitisAI EP fail at mmap and fall back to
+// CPU. So we no longer spawn the daemon here.
 // Idle / lock via swayidle (works under any wlr compositor)
 spawn-at-startup "swayidle" "-w" \
     "timeout" "300"  "swaylock -f" \
