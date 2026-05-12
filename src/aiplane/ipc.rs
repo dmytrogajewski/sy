@@ -361,4 +361,144 @@ mod tests {
             env::remove_var("XDG_RUNTIME_DIR");
         }
     }
+
+    /// Daemon-in-thread end-to-end smoke. Exercises the entire IPC
+    /// path that the live daemon uses: `serve` binds a Unix socket,
+    /// `handle_conn` parses the wire, a worker dispatches
+    /// `Req::Run { Embed, Text }` through a `Registry` populated
+    /// with the deterministic `FakeWorkload`, the response travels
+    /// back on the same stream, and `request()` reads it. No
+    /// `/dev/accel/accel0`, no qdrant child, no real ONNX.
+    #[test]
+    fn daemon_smoke_run_roundtrip_via_fake_workload() {
+        use crate::aiplane::registry::Registry;
+        use crate::aiplane::session::SessionPool;
+        use crate::aiplane::workloads::fake::FakeWorkload;
+        use std::io::Write as _;
+        use std::sync::Arc;
+        use std::thread;
+
+        // Hermetic socket under /tmp so concurrent test runs don't
+        // collide with the live daemon's
+        // /run/user/$uid/sy-knowledge.sock.
+        let unique = format!(
+            "sy-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let tmp = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let prev = env::var("XDG_RUNTIME_DIR").ok();
+        env::set_var("XDG_RUNTIME_DIR", &tmp);
+
+        // Spawn `serve` with a Req worker that dispatches through a
+        // Registry holding only the FakeWorkload-as-Embed.
+        let (ops_tx, _ops_rx) = mpsc::channel::<Op>();
+        let (req_tx, req_rx) = mpsc::channel::<(Req, UnixStream)>();
+        serve(ops_tx, req_tx).expect("serve");
+
+        let registry: Arc<Registry> = {
+            let pool = Arc::new(SessionPool::new());
+            let mut r = Registry::new(pool);
+            r.register(Arc::new(FakeWorkload::embed()));
+            Arc::new(r)
+        };
+        let registry_for_worker = registry.clone();
+        thread::spawn(move || {
+            while let Ok((req, mut stream)) = req_rx.recv() {
+                let resp = match req {
+                    Req::Run { workload, input } => match registry_for_worker
+                        .run(workload, input)
+                    {
+                        Ok(out) => Resp::Run { output: out },
+                        Err(e) => Resp::Error { msg: e.to_string() },
+                    },
+                    Req::Embed { text } => match registry_for_worker.run(
+                        WorkloadKind::Embed,
+                        WorkloadInput::Text { text },
+                    ) {
+                        Ok(WorkloadOutput::Vector { vector }) => {
+                            Resp::Embed { vector }
+                        }
+                        Ok(_) => Resp::Error {
+                            msg: "unexpected non-Vector".into(),
+                        },
+                        Err(e) => Resp::Error { msg: e.to_string() },
+                    },
+                    Req::Search { .. } => Resp::Error {
+                        msg: "search not exercised by smoke".into(),
+                    },
+                };
+                let _ = writeln!(stream, "{}", serde_json::to_string(&resp).unwrap());
+            }
+        });
+
+        // Drive the client side.
+        let resp = request(&Req::Run {
+            workload: WorkloadKind::Embed,
+            input: WorkloadInput::Text {
+                text: "hello daemon".into(),
+            },
+        })
+        .expect("request");
+        match resp {
+            Resp::Run {
+                output: WorkloadOutput::Vector { vector },
+            } => {
+                assert_eq!(vector.len(), crate::aiplane::workloads::VECTOR_DIM);
+                let norm: f32 = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+                assert!(
+                    (norm - 1.0).abs() < 1e-4,
+                    "FakeWorkload returns unit-norm vectors; got {norm}"
+                );
+            }
+            other => panic!("expected Run/Vector, got {other:?}"),
+        }
+
+        // Determinism: same input → same vector.
+        let r1 = request(&Req::Run {
+            workload: WorkloadKind::Embed,
+            input: WorkloadInput::Text { text: "x".into() },
+        })
+        .unwrap();
+        let r2 = request(&Req::Run {
+            workload: WorkloadKind::Embed,
+            input: WorkloadInput::Text { text: "x".into() },
+        })
+        .unwrap();
+        match (r1, r2) {
+            (
+                Resp::Run {
+                    output: WorkloadOutput::Vector { vector: a },
+                },
+                Resp::Run {
+                    output: WorkloadOutput::Vector { vector: b },
+                },
+            ) => assert_eq!(a, b),
+            _ => panic!("non-Vector responses"),
+        }
+
+        // Legacy Embed adapter still works.
+        let legacy = request(&Req::Embed {
+            text: "legacy".into(),
+        })
+        .expect("legacy embed");
+        match legacy {
+            Resp::Embed { vector } => {
+                assert_eq!(vector.len(), crate::aiplane::workloads::VECTOR_DIM);
+            }
+            other => panic!("expected Resp::Embed, got {other:?}"),
+        }
+
+        // Cleanup the hermetic socket.
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(v) = prev {
+            env::set_var("XDG_RUNTIME_DIR", v);
+        } else {
+            env::remove_var("XDG_RUNTIME_DIR");
+        }
+    }
 }

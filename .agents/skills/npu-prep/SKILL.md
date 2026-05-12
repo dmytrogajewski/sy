@@ -18,8 +18,8 @@ and produce a VitisAI-compatible BF16 ONNX + a warm partition cache
 that `sy-aiplane.service` can load instantly.
 </role>
 
-The prep pipeline mirrors `scripts/prep_npu_workload.py` (the
-generalised successor to `scripts/prep_npu_embed.py`):
+The prep pipeline lives in `scripts/prep_npu_workload.py` (formerly
+`scripts/prep_npu_embed.py`; generalised May 2026):
 
 ```
 HF model id  ─→  static-shape ONNX  ─→  Quark BF16 QDQ  ─→  VitisAI compile cache
