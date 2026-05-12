@@ -33,10 +33,13 @@ iced_layershell = { version = "0.17", optional = true }
 # Knowledge plane
 #
 # `load-dynamic` lets us re-point ORT at AMD's bundled onnxruntime
-# (which has VitisAI EP built in) at runtime — see embed.rs. The compiled
-# binary still keeps the `cuda` feature so the same build can register
-# CUDA EP on a host where XRT/NPU isn't installed.
-ort = { version = "=2.0.0-rc.12", default-features = false, features = ["ndarray", "cuda", "vitis", "load-dynamic"] }
+# (which has VitisAI EP built in) at runtime — see embed.rs. The
+# `cuda` feature used to live here as a fallback, but the daemon is
+# the only process that loads ORT now (everyone else goes through
+# `ipc::request(Req::Search{...})`), and the daemon always has the
+# NPU. CLI/MCP fallbacks land on CPU, which is fine for one-shot
+# debug queries and avoids burning GPU VRAM.
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["ndarray", "vitis", "load-dynamic"] }
 # ort 2.0-rc.12's `vitis` feature forgets to enable api-18 on ort-sys, so
 # the SessionOptionsAppendExecutionProvider_VitisAI binding isn't exposed.
 # Force it ourselves.

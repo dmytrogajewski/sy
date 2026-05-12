@@ -729,8 +729,7 @@ pub fn pick() -> Result<()> {
         Some(q) if !q.trim().is_empty() => q,
         _ => return Ok(()),
     };
-    let vec = embed::embed_one(&query)?;
-    let hits = qdrant::search(&vec, 12, None)?;
+    let hits = search_hits(&query, 12, None)?;
     if hits.is_empty() {
         crate::wifi::notify("knowledge", "(no hits)");
         return Ok(());
@@ -740,7 +739,6 @@ pub fn pick() -> Result<()> {
     let mut rows: Vec<String> = Vec::with_capacity(hits.len());
     for h in &hits {
         let snippet = h
-            .payload
             .chunk_text
             .lines()
             .find(|l| !l.trim().is_empty())
@@ -751,7 +749,7 @@ pub fn pick() -> Result<()> {
         rows.push(format!(
             "{:.3}  {}  ⟶  {}",
             h.score,
-            shorten_path(&h.payload.file_path, 60),
+            shorten_path(&h.file_path, 60),
             snippet
         ));
     }
@@ -761,7 +759,7 @@ pub fn pick() -> Result<()> {
     };
     let idx = rows.iter().position(|r| r == &chosen);
     let path = match idx {
-        Some(i) => hits[i].payload.file_path.clone(),
+        Some(i) => hits[i].file_path.clone(),
         None => return Ok(()),
     };
     let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
@@ -908,23 +906,22 @@ pub fn schedule(interval: Option<&str>) -> Result<()> {
 }
 
 pub fn search(query: &str, limit: usize, json_out: bool, source: Option<&Path>) -> Result<()> {
-    let vec = embed::embed_one(query)?;
     let prefix = source.map(|p| {
         sources::expand(&p.display().to_string())
             .unwrap_or_else(|_| p.to_path_buf())
             .display()
             .to_string()
     });
-    let hits = qdrant::search(&vec, limit, prefix.as_deref())?;
+    let hits = search_hits(query, limit, prefix.as_deref())?;
     if json_out {
         let arr: Vec<_> = hits
             .iter()
             .map(|h| {
                 json!({
                     "score": h.score,
-                    "file_path": h.payload.file_path,
-                    "chunk_index": h.payload.chunk_index,
-                    "chunk_text": h.payload.chunk_text,
+                    "file_path": h.file_path,
+                    "chunk_index": h.chunk_index,
+                    "chunk_text": h.chunk_text,
                 })
             })
             .collect();
@@ -938,14 +935,73 @@ pub fn search(query: &str, limit: usize, json_out: bool, source: Option<&Path>) 
     for h in &hits {
         println!(
             "── {:.3}  {}  [{}]",
-            h.score, h.payload.file_path, h.payload.chunk_index
+            h.score, h.file_path, h.chunk_index
         );
-        for line in h.payload.chunk_text.lines().take(4) {
+        for line in h.chunk_text.lines().take(4) {
             println!("  {}", line);
         }
         println!();
     }
     Ok(())
+}
+
+/// Shared search path: prefer the daemon (it owns the NPU) and fall
+/// back to in-process embedding if the daemon is down. Used by
+/// `sy knowledge search`, `sy knowledge pick`, and the embedded MCP
+/// server's `tool_search`. Without this, every consumer loads its
+/// own ORT session and fights the daemon for /dev/accel/accel0 —
+/// the loser silently downgrades to CUDA / CPU.
+pub fn search_hits(
+    query: &str,
+    limit: usize,
+    prefix: Option<&str>,
+) -> Result<Vec<ipc::HitRow>> {
+    if let Some(hits) = try_daemon_search(query, limit, prefix)? {
+        return Ok(hits);
+    }
+    // Daemon down / unreachable → embed in-process and hit qdrant
+    // directly. Keeps `sy knowledge search` working offline.
+    let vec = embed::embed_one(query)?;
+    let hits = qdrant::search(&vec, limit, prefix)?;
+    Ok(hits
+        .into_iter()
+        .map(|h| ipc::HitRow {
+            score: h.score,
+            file_path: h.payload.file_path,
+            chunk_index: h.payload.chunk_index,
+            chunk_text: h.payload.chunk_text,
+        })
+        .collect())
+}
+
+fn try_daemon_search(
+    query: &str,
+    limit: usize,
+    prefix: Option<&str>,
+) -> Result<Option<Vec<ipc::HitRow>>> {
+    // Liveness probe via the daemon's status snapshot — same shape
+    // as `sync()` uses to decide whether to delegate FullResync.
+    let alive = status::load()
+        .ok()
+        .map(|s| status::is_fresh(&s) && s.daemon_running)
+        .unwrap_or(false);
+    if !alive {
+        return Ok(None);
+    }
+    let req = ipc::Req::Search {
+        query: query.to_string(),
+        limit,
+        prefix: prefix.map(String::from),
+    };
+    match ipc::request(&req) {
+        Ok(ipc::Resp::Search { hits }) => Ok(Some(hits)),
+        Ok(ipc::Resp::Error { msg }) => {
+            anyhow::bail!("daemon search: {msg}")
+        }
+        Ok(other) => anyhow::bail!("daemon: unexpected response {other:?}"),
+        Err(ipc::IpcError::DaemonDown) => Ok(None),
+        Err(ipc::IpcError::Wire(e)) => Err(e.context("ipc request")),
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]

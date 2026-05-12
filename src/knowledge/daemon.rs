@@ -77,9 +77,13 @@ pub fn run() -> Result<()> {
 
     // IPC bridge: translate ipc::Op → DaemonOp::Ipc, and side-channel
     // control ops (Pause/Resume/TogglePause/Cancel) directly into the
-    // shared atomics so an in-flight pass cancels immediately.
+    // shared atomics so an in-flight pass cancels immediately. The
+    // second channel (req_rx) carries request-response ops; we spawn
+    // a worker below that owns it.
     let (ipc_tx, ipc_rx) = mpsc::channel::<ipc::Op>();
-    ipc::serve(ipc_tx).context("ipc serve")?;
+    let (req_tx, req_rx) = mpsc::channel::<(ipc::Req, std::os::unix::net::UnixStream)>();
+    ipc::serve(ipc_tx, req_tx).context("ipc serve")?;
+    spawn_req_worker(req_rx);
     let bridge_tx = daemon_tx.clone();
     let bridge_paused = paused.clone();
     let bridge_cancel = cancel.clone();
@@ -887,6 +891,74 @@ fn install_signal_handlers(flag: Arc<AtomicBool>) {
 }
 
 static SIGNAL_RECEIVED: AtomicBool = AtomicBool::new(false);
+
+/// Dedicated worker for request-response IPC. Owned channel + a
+/// thread-pool-of-one suffices: NPU only handles one inference at a
+/// time anyway (the underlying `Embedder` is a `Mutex<...>` in
+/// embed.rs), and we don't want a flood of search requests to head-of-line
+/// block the daemon's own indexing pass.
+fn spawn_req_worker(
+    req_rx: mpsc::Receiver<(ipc::Req, std::os::unix::net::UnixStream)>,
+) {
+    thread::spawn(move || {
+        use std::io::Write;
+        while let Ok((req, mut stream)) = req_rx.recv() {
+            let resp = handle_req(req);
+            let line = match serde_json::to_string(&resp) {
+                Ok(s) => s,
+                Err(e) => {
+                    // We failed to serialise even our own response; nothing
+                    // safe to send back. Drop the connection.
+                    eprintln!("sy knowledge daemon: req serialise: {e}");
+                    continue;
+                }
+            };
+            let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+            let _ = writeln!(stream, "{line}");
+        }
+    });
+}
+
+fn handle_req(req: ipc::Req) -> ipc::Resp {
+    match req {
+        ipc::Req::Embed { text } => match embed::embed_one(&text) {
+            Ok(vec) => ipc::Resp::Embed { vector: vec },
+            Err(e) => ipc::Resp::Error {
+                msg: format!("embed: {e}"),
+            },
+        },
+        ipc::Req::Search {
+            query,
+            limit,
+            prefix,
+        } => {
+            let vec = match embed::embed_one(&query) {
+                Ok(v) => v,
+                Err(e) => {
+                    return ipc::Resp::Error {
+                        msg: format!("embed: {e}"),
+                    };
+                }
+            };
+            match qdrant::search(&vec, limit, prefix.as_deref()) {
+                Ok(hits) => ipc::Resp::Search {
+                    hits: hits
+                        .into_iter()
+                        .map(|h| ipc::HitRow {
+                            score: h.score,
+                            file_path: h.payload.file_path,
+                            chunk_index: h.payload.chunk_index,
+                            chunk_text: h.payload.chunk_text,
+                        })
+                        .collect(),
+                },
+                Err(e) => ipc::Resp::Error {
+                    msg: format!("qdrant search: {e}"),
+                },
+            }
+        }
+    }
+}
 
 mod parking_lot_like_mutex {
     use std::sync::{Mutex as StdMutex, MutexGuard};

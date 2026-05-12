@@ -38,7 +38,7 @@ use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use ort::{
-    ep::{CUDA, Vitis},
+    ep::Vitis,
     inputs,
     session::{builder::GraphOptimizationLevel, Session},
     value::Tensor,
@@ -91,21 +91,6 @@ fn detect_cpu_model() -> String {
                 .map(|(_, v)| v.trim().to_string())
         })
         .unwrap_or_else(|| "CPU".to_string())
-}
-
-fn detect_nvidia_label() -> String {
-    let out = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=name", "--format=csv,noheader"])
-        .output();
-    if let Ok(out) = out {
-        if out.status.success() {
-            let s = String::from_utf8_lossy(&out.stdout);
-            if let Some(line) = s.lines().next() {
-                return line.trim().to_string();
-            }
-        }
-    }
-    "NVIDIA GPU".to_string()
 }
 
 fn detect_npu_label() -> String {
@@ -186,7 +171,7 @@ pub fn maybe_reexec_with_amd_env() {
         .env("SY_AMD_REEXECED", "1")
         .exec();
     // exec() only returns on failure. Fall through to the in-process
-    // path so the user at least gets a chance via CPU/CUDA fallback.
+    // path so the user at least gets a chance via CPU fallback.
     eprintln!("sy knowledge: re-exec for VitisAI env failed: {err}; staying in-process");
 }
 
@@ -234,6 +219,17 @@ fn init_embedder() -> Result<Embedder> {
     let tokenizer = Tokenizer::from_file(&tokenizer_path)
         .map_err(|e| anyhow::anyhow!("load tokenizer.json: {e}"))?;
 
+    // Fallback chain: VitisAI (NPU) → CPU.
+    //
+    // CUDA used to sit between them, but it caused more harm than
+    // good: in CLI / MCP processes (which don't have the daemon's
+    // CAP_IPC_LOCK + LimitMEMLOCK=infinity), VitisAI fails on the
+    // NPU mmap and we'd silently spin up a 1 GiB GPU VRAM CUDA
+    // session for a one-shot search — fighting the rest of the GPU
+    // workload. The daemon owns the NPU; everyone else falls
+    // through to CPU (~200 ms for a 512-token query, fast enough
+    // for offline / daemon-down use). See cli::search_hits for the
+    // happy path that delegates over IPC.
     let session = match try_vitisai(&model_path, &dir) {
         Ok(s) => {
             let _ = BACKEND.set("vitisai");
@@ -242,27 +238,17 @@ fn init_embedder() -> Result<Embedder> {
             let _ = HARDWARE.set(hw);
             s
         }
-        Err(vitis_err) => match try_cuda(&model_path) {
-            Ok(s) => {
-                let _ = BACKEND.set("cuda");
-                let hw = detect_nvidia_label();
-                eprintln!("sy knowledge: embeddings on {hw} via CUDA ({MODEL_STEM})");
-                let _ = HARDWARE.set(hw);
-                s
-            }
-            Err(cuda_err) => {
-                eprintln!(
-                    "sy knowledge: VitisAI unavailable ({vitis_err:#}); \
-                     CUDA unavailable ({cuda_err:#}); falling back to CPU"
-                );
-                let s = try_cpu(&model_path)?;
-                let _ = BACKEND.set("cpu");
-                let hw = format!("{} (CPU)", detect_cpu_model());
-                eprintln!("sy knowledge: embeddings on {hw} ({MODEL_STEM})");
-                let _ = HARDWARE.set(hw);
-                s
-            }
-        },
+        Err(vitis_err) => {
+            eprintln!(
+                "sy knowledge: VitisAI unavailable ({vitis_err:#}); falling back to CPU"
+            );
+            let s = try_cpu(&model_path)?;
+            let _ = BACKEND.set("cpu");
+            let hw = format!("{} (CPU)", detect_cpu_model());
+            eprintln!("sy knowledge: embeddings on {hw} ({MODEL_STEM})");
+            let _ = HARDWARE.set(hw);
+            s
+        }
     };
 
     Ok(Embedder { session, tokenizer })
@@ -327,20 +313,6 @@ fn pick_ort_so(dir: &Path) -> Result<PathBuf> {
         .max()
         .with_context(|| format!("no libonnxruntime.so.* in {}", dir.display()))?;
     Ok(pick)
-}
-
-fn try_cuda(model: &Path) -> Result<Session> {
-    // CUDA EP uses whatever ORT_DYLIB_PATH / LD_LIBRARY_PATH was set
-    // up before us (or by the VitisAI probe attempt). If `cuda` feature
-    // is built in and a CUDA-capable libonnxruntime is reachable, this
-    // succeeds; otherwise commit_from_file returns the registration
-    // error.
-    Session::builder()
-        .map_err(|e| anyhow::anyhow!("session builder: {e}"))?
-        .with_execution_providers([CUDA::default().build()])
-        .map_err(|e| anyhow::anyhow!("register cuda ep: {e}"))?
-        .commit_from_file(model)
-        .map_err(|e| anyhow::anyhow!("cuda session: {e}"))
 }
 
 fn try_cpu(model: &Path) -> Result<Session> {

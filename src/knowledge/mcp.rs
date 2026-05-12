@@ -13,7 +13,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::{cli, embed, qdrant, runctx::RunCtx, sources, state};
+use super::{cli, qdrant, runctx::RunCtx, sources, state};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
@@ -158,16 +158,20 @@ fn tool_search(args: &Value) -> Result<String> {
         .and_then(|v| v.as_str())
         .map(|s| sources::expand(s).map(|p| p.display().to_string()).ok())
         .flatten();
-    let vec = embed::embed_one(query)?;
-    let hits = qdrant::search(&vec, limit, prefix.as_deref())?;
+    // Delegate to the shared helper. The daemon owns the NPU, so
+    // when it's up we round-trip a single Search request and avoid
+    // loading a second ORT session in this process. If the daemon
+    // is down, the helper falls back to in-process embedding so
+    // the MCP server still works offline.
+    let hits = cli::search_hits(query, limit, prefix.as_deref())?;
     let arr: Vec<_> = hits
         .iter()
         .map(|h| {
             json!({
                 "score": h.score,
-                "file_path": h.payload.file_path,
-                "chunk_index": h.payload.chunk_index,
-                "chunk_text": h.payload.chunk_text,
+                "file_path": h.file_path,
+                "chunk_index": h.chunk_index,
+                "chunk_text": h.chunk_text,
             })
         })
         .collect();
