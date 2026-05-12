@@ -10,6 +10,7 @@ use serde::Deserialize;
 use walkdir::WalkDir;
 
 mod agt;
+mod aiplane;
 mod auto;
 mod auto_mcp;
 mod bat;
@@ -194,6 +195,13 @@ enum Cmd {
         #[command(subcommand)]
         sub: knowledge::KnowledgeCmd,
     },
+    /// Multi-workload NPU plane: list / status / run any registered
+    /// workload (embed, rerank, vad, stt, ocr, …). Knowledge plane
+    /// consumes this; future workloads register through the same registry.
+    Aiplane {
+        #[command(subcommand)]
+        sub: aiplane::cli::AiplaneCmd,
+    },
     /// Probe the system and propose opinionated defaults (knowledge sources,
     /// qdr.toml manifests). Dry-run by default; pass `--apply` to commit.
     Auto {
@@ -214,7 +222,7 @@ fn main() -> Result<()> {
     // and re-execs with LD_LIBRARY_PATH + ORT_DYLIB_PATH + the Ryzen AI
     // activate env vars baked in. No-op when the AMD venv isn't present
     // or when we've already re-execed.
-    knowledge::embed::maybe_reexec_with_amd_env();
+    aiplane::reexec::maybe_reexec_with_amd_env();
 
     let result = run();
     match &result {
@@ -322,6 +330,7 @@ fn run() -> Result<()> {
         },
         Cmd::Stack { sub } => stack::dispatch(sub),
         Cmd::Knowledge { sub } => knowledge::dispatch(sub),
+        Cmd::Aiplane { sub } => aiplane::cli::dispatch(sub),
         Cmd::Auto { sub } => auto::dispatch(sub),
     }
 }
