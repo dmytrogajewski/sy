@@ -248,7 +248,11 @@ pub mod exit {
 ///   sy knowledge cancel
 ///   sy knowledge drop
 ///   sy knowledge resync
-pub const VECTOR_DIM: usize = 768;
+///
+/// Re-exported from `aiplane::workloads::VECTOR_DIM` — the qdrant
+/// collection schema lives in knowledge but the dim is the embed
+/// workload's contract.
+pub use crate::aiplane::workloads::VECTOR_DIM;
 
 /// Default Qdrant REST port (bind 127.0.0.1).
 pub const QDRANT_PORT: u16 = 6333;

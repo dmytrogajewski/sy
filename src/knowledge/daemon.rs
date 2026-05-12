@@ -499,6 +499,12 @@ fn build_status(
         last_index_deleted: last.deleted,
         last_index_chunks: last.chunks,
         last_error: last.error.clone(),
+        // Per-workload health goes here when the daemon migrates to
+        // aiplane::daemon and dispatches via Registry::run. For now
+        // the knowledge plane carries only the embed workload — its
+        // backend + hardware are surfaced via the legacy fields
+        // above so the waybar tile stays unchanged.
+        workloads: std::collections::HashMap::new(),
     }
 }
 
@@ -920,6 +926,8 @@ fn spawn_req_worker(
 }
 
 fn handle_req(req: ipc::Req) -> ipc::Resp {
+    use crate::aiplane::registry::{WorkloadInput, WorkloadKind, WorkloadOutput};
+    use crate::aiplane::workloads;
     match req {
         ipc::Req::Embed { text } => match embed::embed_one(&text) {
             Ok(vec) => ipc::Resp::Embed { vector: vec },
@@ -954,6 +962,49 @@ fn handle_req(req: ipc::Req) -> ipc::Resp {
                 },
                 Err(e) => ipc::Resp::Error {
                     msg: format!("qdrant search: {e}"),
+                },
+            }
+        }
+        ipc::Req::Run { workload, input } => {
+            // Embed has a hot-path singleton (knowledge::embed) that
+            // we keep wired during the migration; everything else
+            // goes through the aiplane registry which lazy-loads its
+            // own session per kind.
+            if workload == WorkloadKind::Embed {
+                let text = match input {
+                    WorkloadInput::Text { text } => text,
+                    WorkloadInput::TextPair { a, .. } => a,
+                    other => {
+                        return ipc::Resp::Error {
+                            msg: format!("embed: expected Text input, got {other:?}"),
+                        };
+                    }
+                };
+                return match embed::embed_one(&text) {
+                    Ok(vec) => ipc::Resp::Run {
+                        output: WorkloadOutput::Vector { vector: vec },
+                    },
+                    Err(e) => ipc::Resp::Error {
+                        msg: format!("embed: {e}"),
+                    },
+                };
+            }
+            // All other workloads: dispatch through a process-local
+            // registry. Lazy-load on first call. The registry is
+            // built once per daemon — `register_all` is cheap (just
+            // metadata), only `run()` triggers actual ONNX load.
+            use std::sync::Arc;
+            use std::sync::OnceLock;
+            static REGISTRY: OnceLock<crate::aiplane::registry::Registry> = OnceLock::new();
+            let reg = REGISTRY.get_or_init(|| {
+                workloads::register_all(Arc::new(
+                    crate::aiplane::session::SessionPool::new(),
+                ))
+            });
+            match reg.run(workload, input) {
+                Ok(output) => ipc::Resp::Run { output },
+                Err(e) => ipc::Resp::Error {
+                    msg: format!("{workload}: {e}"),
                 },
             }
         }

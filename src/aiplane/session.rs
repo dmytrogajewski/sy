@@ -1,4 +1,4 @@
-//! Shared ORT environment + NPU mutex + per-pass run context.
+//! Shared NPU mutex for the aiplane.
 //!
 //! `SessionPool` is the *only* place that creates ORT sessions inside
 //! the daemon. Workloads borrow it during `load()` to build their
@@ -8,18 +8,12 @@
 //! is single-context and concurrent NPU inference from two threads
 //! would EAGAIN one of them.
 //!
-//! `RunCtx` is the per-invocation cancellation + throughput plumbing
-//! lifted verbatim from the old `knowledge::runctx` module. It's
-//! generic enough that any long-running pass (knowledge indexing,
-//! batched STT, future denoise of a long audio file) can carry it.
+//! Per-pass cancellation + throttling is *not* a generic-aiplane
+//! concern: knowledge's `RunCtx` carries an adaptive CPU-cap throttle
+//! tied to `sources::cpu_max_percent`. Workloads that want a similar
+//! ctx build their own or pass `Arc<AtomicBool>` directly.
 
-use std::{
-    sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
-    time::{Duration, Instant},
-};
+use std::sync::Mutex;
 
 /// Acquired by every NPU-bound `Workload::run` before dispatching to
 /// the ORT session. The lock is non-reentrant — workloads that need
@@ -50,78 +44,13 @@ impl Default for SessionPool {
     }
 }
 
-/// Per-pass cancellation + throughput context. Cloned into worker
-/// threads; `cancel.store(true)` is observed cooperatively at chunk
-/// boundaries inside long-running passes (indexing, batched embed).
-#[derive(Clone)]
-pub struct RunCtx {
-    pub cancel: Arc<AtomicBool>,
-    /// Optional inter-batch throttle. The knowledge indexer uses
-    /// this to spread CPU/NPU load when running a scheduled
-    /// background pass.
-    pub throttle: Duration,
-    /// EMA throughput counter (chunks-or-items per second).
-    counter: Arc<AtomicUsize>,
-    started_at: Arc<Mutex<Instant>>,
-}
-
-impl RunCtx {
-    pub fn interactive() -> Self {
-        Self::new(Duration::ZERO)
-    }
-
-    pub fn new(throttle: Duration) -> Self {
-        Self {
-            cancel: Arc::new(AtomicBool::new(false)),
-            throttle,
-            counter: Arc::new(AtomicUsize::new(0)),
-            started_at: Arc::new(Mutex::new(Instant::now())),
-        }
-    }
-
-    pub fn for_daemon_pass(cancel: Arc<AtomicBool>, throttle: Duration) -> Self {
-        Self {
-            cancel,
-            throttle,
-            counter: Arc::new(AtomicUsize::new(0)),
-            started_at: Arc::new(Mutex::new(Instant::now())),
-        }
-    }
-
-    pub fn cancelled(&self) -> bool {
-        self.cancel.load(Ordering::SeqCst)
-    }
-
-    pub fn record(&self, n: usize) {
-        self.counter.fetch_add(n, Ordering::Relaxed);
-    }
-
-    pub fn after_batch(&self) {
-        if !self.throttle.is_zero() {
-            std::thread::sleep(self.throttle);
-        }
-    }
-
-    /// Items per second since context creation. Returns None if
-    /// fewer than 10 ms have elapsed (avoids div-by-near-zero).
-    pub fn throughput(&self) -> Option<f32> {
-        let elapsed = self
-            .started_at
-            .lock()
-            .expect("started_at poisoned")
-            .elapsed();
-        if elapsed.as_millis() < 10 {
-            return None;
-        }
-        let n = self.counter.load(Ordering::Relaxed);
-        Some((n as f32) / elapsed.as_secs_f32())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::thread;
+    use std::time::Duration;
 
     #[test]
     fn npu_lock_serialises_concurrent_use() {
@@ -142,7 +71,6 @@ mod tests {
             });
         });
         let t2 = thread::spawn(move || {
-            // Tiny delay to make sure t1 gets the lock first.
             thread::sleep(Duration::from_millis(10));
             p2.with_npu(|| {
                 c2.fetch_add(1, Ordering::SeqCst);
@@ -151,22 +79,5 @@ mod tests {
         t1.join().unwrap();
         t2.join().unwrap();
         assert_eq!(counter.load(Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn runctx_records_throughput() {
-        let ctx = RunCtx::interactive();
-        ctx.record(5);
-        thread::sleep(Duration::from_millis(20));
-        let tps = ctx.throughput().expect("non-zero elapsed");
-        assert!(tps > 0.0, "throughput must be positive after recording");
-    }
-
-    #[test]
-    fn runctx_cancel_is_visible() {
-        let ctx = RunCtx::interactive();
-        assert!(!ctx.cancelled());
-        ctx.cancel.store(true, Ordering::SeqCst);
-        assert!(ctx.cancelled());
     }
 }
