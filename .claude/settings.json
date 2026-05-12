@@ -1,0 +1,36 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/post-edit-check.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/stop-verify.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'RULES RE-INJECTED AFTER COMPACTION: see AGENTS.md non_negotiables. Zero TODO/FIXME/placeholder/stub code (post-edit-check.sh enforces). Zero #[allow(dead_code)] outside #[cfg(test)]. Run `make lint` and `make test` before considering any task complete. Stop hook will block if violations exist.'"
+          }
+        ]
+      }
+    ]
+  }
+}

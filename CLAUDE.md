@@ -1,5 +1,13 @@
 # CLAUDE.md
 
+> **See also: [`AGENTS.md`](AGENTS.md)** — the shared coding-agent
+> persona, non-negotiables, working loop, and NPU-plane norms. This
+> file (`CLAUDE.md`) covers the rice-level "no snowflakes" rule and the
+> CLIG + agent-friendly CLI conventions; `AGENTS.md` covers everything
+> else (tests, dead code, NPU specifics, file layout). The `/<skill>`
+> commands under `.claude/commands/` are skill-specific playbooks
+> (e.g. `/bug`, `/implement`, `/npu-prep`, `/workload`, `/debug-npu`).
+
 ## Core rule: no snowflakes
 
 Every environment change the user requests must be productivized inside this repo (`configs/` or the `sy` app itself). All state must be managed automatically and reproducibly.
