@@ -18,6 +18,14 @@ Group={{ user }}
 AmbientCapabilities=CAP_IPC_LOCK
 LimitMEMLOCK=infinity
 
+# Embedded qdrant opens one fd per HNSW segment + a few per peer
+# connection + 2 per in-flight HTTP req. The default per-service
+# soft cap (1024) blows up under FullResync once the collection
+# splits past ~64 segments — qdrant stops accepting new requests
+# but keeps listening, so the daemon hangs with `qdrant down` in
+# its status and the waybar tile shows '🧠 ! 0'.
+LimitNOFILE=524288
+
 WorkingDirectory={{ home }}
 Environment=HOME={{ home }}
 Environment=XDG_CONFIG_HOME={{ home }}/.config
