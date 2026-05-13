@@ -109,7 +109,10 @@ fn write_pam(content: &str) -> Result<bool> {
     }
     let status = child.wait().context("wait sudo tee")?;
     if !status.success() {
-        return Err(anyhow!("`sudo tee {PAM_FILE}` failed (exit {:?})", status.code()));
+        return Err(anyhow!(
+            "`sudo tee {PAM_FILE}` failed (exit {:?})",
+            status.code()
+        ));
     }
     Ok(true)
 }

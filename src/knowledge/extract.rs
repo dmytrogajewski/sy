@@ -33,7 +33,6 @@ pub enum Extracted {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)] // payload strings surfaced via Debug logs in the daemon
 pub enum SkipReason {
     Binary,
     TooLarge,
@@ -52,6 +51,13 @@ impl SkipReason {
             SkipReason::PdfToTextMissing => "pdftotext-missing",
             SkipReason::PdfFailed(_) => "pdf-failed",
             SkipReason::ReadFailed(_) => "read-failed",
+        }
+    }
+
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            SkipReason::PdfFailed(s) | SkipReason::ReadFailed(s) => Some(s.as_str()),
+            _ => None,
         }
     }
 }

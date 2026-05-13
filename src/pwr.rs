@@ -78,10 +78,7 @@ fn menu() -> Result<()> {
     let mut items: Vec<(String, Action)> = Vec::new();
     for (_short, full, _) in PROFILES {
         let mark = if *full == active_full { "*" } else { " " };
-        items.push((
-            format!("{mark} profile  {full}"),
-            Action::SetProfile(full),
-        ));
+        items.push((format!("{mark} profile  {full}"), Action::SetProfile(full)));
     }
     items.push(("  ───────────────".into(), Action::Noop));
     items.push(("  lock".into(), Action::Lock));

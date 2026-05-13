@@ -81,7 +81,11 @@ fn waybar_out(threshold: u64) -> Result<()> {
         println!(r#"{{"text":"","class":"hidden","tooltip":""}}"#);
         return Ok(());
     }
-    let class = if free < threshold / 2 { "critical" } else { "warning" };
+    let class = if free < threshold / 2 {
+        "critical"
+    } else {
+        "warning"
+    };
     let text = format!("{GLYPH_DISK} {}", human_bytes(free));
     let tooltip = format!(
         "{} free / threshold {}\\nclick: cleanup",
@@ -207,7 +211,11 @@ fn log_history(id: &str, probe: &Probe, outcome: &Outcome, before: u64, after: u
         "free_before": before,
         "free_after": after,
     });
-    let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else {
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    else {
         return;
     };
     use std::io::Write;

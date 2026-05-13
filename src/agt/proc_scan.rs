@@ -53,9 +53,10 @@ pub fn scan() -> Vec<UnmanagedAgent> {
         };
         let base = argv0_str.rsplit('/').next().unwrap_or(argv0_str);
 
-        let Some(provider) = PROVIDERS.iter().find_map(|(name, pats)| {
-            pats.iter().any(|p| base == *p).then_some(*name)
-        }) else {
+        let Some(provider) = PROVIDERS
+            .iter()
+            .find_map(|(name, pats)| pats.iter().any(|p| base == *p).then_some(*name))
+        else {
             continue;
         };
 
@@ -137,7 +138,9 @@ pub fn format_age(secs: u64) -> String {
 
 pub fn focus_window(pid: u32) -> std::io::Result<bool> {
     use std::process::Command;
-    let out = Command::new("niri").args(["msg", "-j", "windows"]).output()?;
+    let out = Command::new("niri")
+        .args(["msg", "-j", "windows"])
+        .output()?;
     if !out.status.success() {
         return Ok(false);
     }

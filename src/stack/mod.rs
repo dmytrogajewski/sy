@@ -141,7 +141,6 @@ pub fn dispatch(cmd: StackCmd) -> Result<()> {
 /// Stable exit codes for `sy stack` (CLIG: documented in plan).
 #[derive(Debug)]
 pub struct StackError {
-    #[allow(dead_code)] // read by main.rs via downcast for std::process::exit
     pub code: i32,
     pub msg: String,
 }

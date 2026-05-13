@@ -27,8 +27,15 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "ne
 toml = "0.8"
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
-iced = { version = "0.14", optional = true, features = ["tokio", "wgpu"] }
+iced = { version = "0.14", optional = true, features = ["tokio", "wgpu", "image"] }
 iced_layershell = { version = "0.17", optional = true }
+# Stack-bar thumbnail pipeline. Decoders pinned to the formats
+# cliphist surfaces in its binary-data preview (`parse_image_ext` in
+# src/stack/clip.rs); cache always re-encodes as PNG so the bar reads
+# one format off disk. `default-features = false` keeps openexr / hdr
+# / pnm / tiff / qoi off the build path — none of them appear in the
+# clipboard or stack pools.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 
 # Knowledge plane
 #
@@ -60,6 +67,14 @@ libc = "0.2"
 # Format-preserving TOML editor used by `sy knowledge add/rm/schedule` so
 # comments and section ordering survive round-trips.
 toml_edit = "0.22"
+
+[dev-dependencies]
+# Already a transitive of iced_layershell + notify-debouncer-mini, so
+# pulling it as a dev-dep adds no compile-tree weight. Used by the
+# stack-bar thumbnail tests (`src/stack/state.rs`,
+# `src/stack/clip.rs`) to spin up isolated cache dirs without
+# touching the user's `XDG_CACHE_HOME`.
+tempfile = "3"
 
 [profile.release]
 lto = "thin"

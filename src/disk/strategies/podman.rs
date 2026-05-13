@@ -67,9 +67,8 @@ fn sum_reclaimable(v: &Value) -> u64 {
 // Parse podman's human size (e.g. "1.234GB", "0B").
 fn parse_size(s: &str) -> u64 {
     let t = s.trim();
-    let (num_part, suf_part): (String, String) = t
-        .chars()
-        .partition(|c| c.is_ascii_digit() || *c == '.');
+    let (num_part, suf_part): (String, String) =
+        t.chars().partition(|c| c.is_ascii_digit() || *c == '.');
     let n: f64 = num_part.parse().unwrap_or(0.0);
     let mult: f64 = match suf_part.trim().to_ascii_lowercase().as_str() {
         "b" | "" => 1.0,

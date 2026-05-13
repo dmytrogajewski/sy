@@ -88,8 +88,7 @@ pub fn toggle(key: &str) -> Result<()> {
         .spawn()
         .context("spawn foot")?;
 
-    fs::write(&pid_file, child.id().to_string())
-        .with_context(|| format!("write {pid_file}"))?;
+    fs::write(&pid_file, child.id().to_string()).with_context(|| format!("write {pid_file}"))?;
     Ok(())
 }
 

@@ -80,10 +80,7 @@ impl CleanStrategy for UserCache {
         let (count_after, total_after) = probe_stale();
         Ok(Outcome {
             reclaimed: total_before.saturating_sub(total_after),
-            log: vec![format!(
-                "{} stale files remaining",
-                count_after
-            )],
+            log: vec![format!("{} stale files remaining", count_after)],
         })
     }
 }

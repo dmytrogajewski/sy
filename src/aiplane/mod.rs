@@ -35,4 +35,13 @@ pub mod reexec;
 pub mod registry;
 pub mod session;
 pub mod status;
+pub mod supervisor;
+pub mod worker;
+pub mod worker_ipc;
 pub mod workloads;
+
+/// Shared process-wide mutex for tests that mutate `XDG_RUNTIME_DIR`.
+/// All daemon-in-thread / worker-in-thread tests acquire this so they
+/// don't cross-route requests when cargo runs them in parallel.
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

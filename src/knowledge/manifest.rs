@@ -248,10 +248,7 @@ pub fn discover(root: &Path, deep: bool) -> Vec<QdrManifest> {
         match QdrManifest::load(&folder) {
             Ok(m) => out.push(m),
             Err(e) => {
-                eprintln!(
-                    "sy knowledge: invalid {}: {e}",
-                    p.display()
-                );
+                eprintln!("sy knowledge: invalid {}: {e}", p.display());
             }
         }
     }

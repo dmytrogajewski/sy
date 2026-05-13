@@ -263,11 +263,7 @@ fn run() -> Result<()> {
             )?,
         };
         let syf = load_sy_file(&root)?;
-        let target = cli
-            .target
-            .clone()
-            .map(Ok)
-            .unwrap_or_else(default_target)?;
+        let target = cli.target.clone().map(Ok).unwrap_or_else(default_target)?;
         Ok((root, syf, target))
     };
 
@@ -291,8 +287,8 @@ fn run() -> Result<()> {
                 .unwrap_or_else(|| DEFAULT_THEME.to_string());
             let ctx = load_theme(&root, &name)?;
             let full = root.join("configs").join(&path);
-            let content = fs::read_to_string(&full)
-                .with_context(|| format!("read {}", full.display()))?;
+            let content =
+                fs::read_to_string(&full).with_context(|| format!("read {}", full.display()))?;
             let env = Environment::new();
             let rendered = env
                 .render_str(&content, &ctx)
@@ -307,13 +303,20 @@ fn run() -> Result<()> {
         Cmd::Net => net::menu(),
         Cmd::Install => install(false),
         Cmd::TgTheme => tg_theme(),
-        Cmd::Wallpaper { path, start, default } => wallpaper::run(path, start, default),
+        Cmd::Wallpaper {
+            path,
+            start,
+            default,
+        } => wallpaper::run(path, start, default),
         Cmd::Vol { action, waybar } => vol::run(action.as_deref(), waybar),
         Cmd::Bright { action, waybar } => bright::run(action.as_deref(), waybar),
         Cmd::Bat { waybar } => bat::run(waybar),
         Cmd::Gpu { waybar } => gpu::run(waybar),
         Cmd::Npu { waybar } => npu::run(waybar),
-        Cmd::Disk { waybar, threshold_gib } => disk::run(waybar, threshold_gib),
+        Cmd::Disk {
+            waybar,
+            threshold_gib,
+        } => disk::run(waybar, threshold_gib),
         Cmd::Notif { action, rest } => {
             let act = action.as_deref().unwrap_or("menu");
             notif::run(act, &rest)
@@ -343,7 +346,11 @@ fn find_root() -> Result<PathBuf> {
         }
         match cur.parent() {
             Some(p) => cur = p.to_path_buf(),
-            None => return Err(anyhow!("reached filesystem root without finding configs/ + themes/")),
+            None => {
+                return Err(anyhow!(
+                    "reached filesystem root without finding configs/ + themes/"
+                ))
+            }
         }
     }
 }
@@ -369,8 +376,7 @@ fn load_sy_file(root: &Path) -> Result<SyFile> {
 
 fn load_theme(root: &Path, name: &str) -> Result<toml::Table> {
     let p = root.join("themes").join(format!("{name}.toml"));
-    let s = fs::read_to_string(&p)
-        .with_context(|| format!("theme file {}", p.display()))?;
+    let s = fs::read_to_string(&p).with_context(|| format!("theme file {}", p.display()))?;
     let mut ctx: toml::Table =
         toml::from_str(&s).with_context(|| format!("parse {}", p.display()))?;
     // Environment bindings available to every template.
@@ -406,8 +412,8 @@ fn apply(root: &Path, target: &Path, ctx: &toml::Table, theme: &str, dry: bool) 
         }
         let rel = entry.path().strip_prefix(&source).context("strip_prefix")?;
         let dest = target.join(rel);
-        let raw = fs::read(entry.path())
-            .with_context(|| format!("read {}", entry.path().display()))?;
+        let raw =
+            fs::read(entry.path()).with_context(|| format!("read {}", entry.path().display()))?;
 
         // Binary files (e.g. asset PNGs) are copied byte-for-byte. Text files
         // are templated through minijinja.
@@ -435,8 +441,7 @@ fn apply(root: &Path, target: &Path, ctx: &toml::Table, theme: &str, dry: bool) 
                 fs::create_dir_all(parent)
                     .with_context(|| format!("mkdir {}", parent.display()))?;
             }
-            fs::write(&dest, &rendered)
-                .with_context(|| format!("write {}", dest.display()))?;
+            fs::write(&dest, &rendered).with_context(|| format!("write {}", dest.display()))?;
             println!("  + {}", rel.display());
         }
         changed += 1;
@@ -496,10 +501,11 @@ fn ensure_qdrant(dry: bool) -> Result<()> {
         ver = QDRANT_VERSION
     );
     if dry {
-        let from = installed_version
-            .as_deref()
-            .unwrap_or("(missing)");
-        println!("  ~ qdrant {from} → {QDRANT_VERSION} ({dest})", dest = dest.display());
+        let from = installed_version.as_deref().unwrap_or("(missing)");
+        println!(
+            "  ~ qdrant {from} → {QDRANT_VERSION} ({dest})",
+            dest = dest.display()
+        );
         return Ok(());
     }
 
@@ -609,9 +615,7 @@ fn ensure_cuda_runtime(_dry: bool) -> Result<()> {
             );
         }
         (None, _) => {
-            eprintln!(
-                "  ! nvidia-smi not found — no GPU detected; embeddings will run on CPU"
-            );
+            eprintln!("  ! nvidia-smi not found — no GPU detected; embeddings will run on CPU");
         }
     }
     Ok(())
@@ -649,12 +653,22 @@ fn ensure_bridges(dry: bool) -> Result<()> {
     let current = installed.as_deref().unwrap_or("(missing)");
     let target = latest.as_deref().unwrap_or("?");
 
+    // npm 11 sometimes leaves bin targets at mode 644; heal whatever is on
+    // disk first so a transient npm failure below still leaves a working
+    // launcher.
+    if installed.is_some() {
+        ensure_bin_executable(&prefix, pkg);
+    }
+
     if installed.is_some() && installed.as_deref() == latest.as_deref() {
         println!("  = npm:{pkg}@{current}");
         return Ok(());
     }
     if dry {
-        println!("  ~ npm install --prefix {} -g {pkg}  ({current} → {target})", prefix.display());
+        println!(
+            "  ~ npm install --prefix {} -g {pkg}  ({current} → {target})",
+            prefix.display()
+        );
         return Ok(());
     }
     let st = Command::new("npm")
@@ -665,8 +679,51 @@ fn ensure_bridges(dry: bool) -> Result<()> {
     if !st.success() {
         return Err(anyhow!("npm install -g {pkg} failed"));
     }
+    ensure_bin_executable(&prefix, pkg);
     println!("  + npm:{pkg}@{target}");
     Ok(())
+}
+
+/// Make sure every `bin` entry in the installed package's manifest is
+/// executable. Some packages (notably `@agentclientprotocol/claude-agent-acp`)
+/// ship the dist file at mode 644 and rely on npm to flip the +x bit; npm 11
+/// no longer does this reliably for ESM entrypoints, leaving the symlink in
+/// `~/.local/bin/` pointing at a non-executable file (EACCES on spawn).
+fn ensure_bin_executable(prefix: &Path, pkg: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let pkg_dir = prefix.join("lib/node_modules").join(pkg);
+    let manifest = match fs::read_to_string(pkg_dir.join("package.json")) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let v: serde_json::Value = match serde_json::from_str(&manifest) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let entries: Vec<String> = match v.get("bin") {
+        Some(serde_json::Value::Object(map)) => map
+            .values()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        Some(serde_json::Value::String(s)) => vec![s.clone()],
+        _ => return,
+    };
+    for rel in entries {
+        let target = pkg_dir.join(&rel);
+        let Ok(meta) = fs::metadata(&target) else {
+            continue;
+        };
+        let mut perm = meta.permissions();
+        let mode = perm.mode();
+        let new = mode | 0o111;
+        if new != mode {
+            perm.set_mode(new);
+            if fs::set_permissions(&target, perm).is_ok() {
+                println!("  + chmod +x {}", target.display());
+            }
+        }
+    }
 }
 
 fn npm_prefix() -> Result<PathBuf> {
@@ -708,8 +765,7 @@ fn tg_theme() -> Result<()> {
     use std::process::Command;
 
     let home = env::var("HOME").context("HOME not set")?;
-    let palette = Path::new(&home)
-        .join(".config/telegram-desktop/palette.tdesktop-palette");
+    let palette = Path::new(&home).join(".config/telegram-desktop/palette.tdesktop-palette");
     if !palette.exists() {
         return Err(anyhow!(
             "{} not found — run `sy apply` first",
@@ -795,8 +851,7 @@ fn install(dry: bool) -> Result<()> {
         return Ok(());
     }
 
-    fs::create_dir_all(&dest_dir)
-        .with_context(|| format!("mkdir {}", dest_dir.display()))?;
+    fs::create_dir_all(&dest_dir).with_context(|| format!("mkdir {}", dest_dir.display()))?;
 
     // Remove any existing file/symlink first; waybar can't follow a symlink
     // whose target has the wrong SELinux label, so we always install a real
@@ -830,7 +885,11 @@ fn list_themes(root: &Path) -> Result<()> {
         .filter_map(|e| {
             let p = e.path();
             (p.extension().and_then(|s| s.to_str()) == Some("toml"))
-                .then(|| p.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string()))
+                .then(|| {
+                    p.file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.to_string())
+                })
                 .flatten()
         })
         .collect();

@@ -99,13 +99,15 @@ fn tools() -> Value {
     json!([
         {
             "name": "knowledge_search",
-            "description": "Semantic search over the user's indexed files. Returns ranked text chunks with file_path, chunk_index, score.",
+            "description": "Semantic search over the user's indexed files. Two-stage by default: embed → qdrant top-`candidates` → bge-reranker-v2-m3 cross-encoder → top-`limit`. Set `rerank=false` for the low-latency embed-only path.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "query":  { "type": "string" },
-                    "limit":  { "type": "integer", "default": 8 },
-                    "source": { "type": "string", "description": "Optional registered source path prefix to restrict to" }
+                    "query":      { "type": "string" },
+                    "limit":      { "type": "integer", "default": 8 },
+                    "source":     { "type": "string", "description": "Optional registered source path prefix to restrict to" },
+                    "rerank":     { "type": "boolean", "default": true, "description": "Apply cross-encoder rerank on top of qdrant cosine retrieval. Adds ~0.5–1 s." },
+                    "candidates": { "type": "integer", "default": 30, "description": "Top-N from qdrant before reranking. Ignored when rerank=false." }
                 },
                 "required": ["query"]
             }
@@ -149,30 +151,38 @@ fn tool_search(args: &Value) -> Result<String> {
         .get("query")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing query"))?;
-    let limit = args
-        .get("limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(8) as usize;
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
     let prefix = args
         .get("source")
         .and_then(|v| v.as_str())
         .map(|s| sources::expand(s).map(|p| p.display().to_string()).ok())
         .flatten();
+    let rerank = args.get("rerank").and_then(|v| v.as_bool()).unwrap_or(true);
+    let candidates = args
+        .get("candidates")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(30) as usize;
     // Delegate to the shared helper. The daemon owns the NPU, so
-    // when it's up we round-trip a single Search request and avoid
-    // loading a second ORT session in this process. If the daemon
-    // is down, the helper falls back to in-process embedding so
+    // when it's up we round-trip a single Search/SearchRerank request
+    // and avoid loading a second ORT session in this process. If the
+    // daemon is down, the helper falls back to in-process embedding so
     // the MCP server still works offline.
-    let hits = cli::search_hits(query, limit, prefix.as_deref())?;
+    let hits = cli::search_hits_opts(query, limit, prefix.as_deref(), rerank, candidates)?;
     let arr: Vec<_> = hits
         .iter()
         .map(|h| {
-            json!({
+            let mut row = json!({
                 "score": h.score,
                 "file_path": h.file_path,
                 "chunk_index": h.chunk_index,
                 "chunk_text": h.chunk_text,
-            })
+            });
+            if let Some(es) = h.embed_score {
+                row.as_object_mut()
+                    .unwrap()
+                    .insert("embed_score".into(), json!(es));
+            }
+            row
         })
         .collect();
     Ok(serde_json::to_string(&arr)?)

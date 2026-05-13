@@ -30,7 +30,10 @@ pub fn pick() -> Result<()> {
         return Ok(());
     }
 
-    let Some((_, ssid, _)) = entries.iter().find(|(_, ssid, _)| choice.contains(ssid.as_str())) else {
+    let Some((_, ssid, _)) = entries
+        .iter()
+        .find(|(_, ssid, _)| choice.contains(ssid.as_str()))
+    else {
         notify("wifi", "could not resolve picked entry");
         return Ok(());
     };
@@ -41,12 +44,20 @@ pub fn pick() -> Result<()> {
 pub fn list() -> Vec<(bool, String, String)> {
     let out = Command::new("nmcli")
         .args([
-            "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY",
-            "dev", "wifi", "list", "--rescan", "no",
+            "-t",
+            "-f",
+            "IN-USE,SSID,SIGNAL,SECURITY",
+            "dev",
+            "wifi",
+            "list",
+            "--rescan",
+            "no",
         ])
         .output()
         .ok();
-    let Some(o) = out else { return Vec::new(); };
+    let Some(o) = out else {
+        return Vec::new();
+    };
 
     let mut entries: Vec<(bool, String, String)> = String::from_utf8_lossy(&o.stdout)
         .lines()
@@ -54,10 +65,7 @@ pub fn list() -> Vec<(bool, String, String)> {
         .filter(|(_, ssid, _)| !ssid.is_empty() && ssid != "--")
         .collect();
 
-    entries.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| signal(&b.2).cmp(&signal(&a.2)))
-    });
+    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| signal(&b.2).cmp(&signal(&a.2))));
     entries.dedup_by(|a, b| a.1 == b.1);
     entries
 }
@@ -147,7 +155,10 @@ pub fn parse_colon_fields(l: &str) -> Vec<String> {
 }
 
 fn signal(meta: &str) -> u32 {
-    meta.split('%').next().and_then(|n| n.trim().parse().ok()).unwrap_or(0)
+    meta.split('%')
+        .next()
+        .and_then(|n| n.trim().parse().ok())
+        .unwrap_or(0)
 }
 
 pub fn run_fuzzel(input: &str, prompt: &str, password: bool) -> Result<String> {

@@ -86,7 +86,9 @@ pub fn run() -> Result<()> {
         Action::OpenInspector(id) => popup::toggle(&format!("agt:{id}")),
         Action::StopSession(id) => {
             let mut c = Client::connect()?;
-            let _ = c.round_trip(&ClientReq::Stop { session_id: id.clone() })?;
+            let _ = c.round_trip(&ClientReq::Stop {
+                session_id: id.clone(),
+            })?;
             wifi::notify("agents", &format!("stopped {id}"));
             Ok(())
         }
@@ -118,7 +120,11 @@ pub fn list_sessions() -> Result<Vec<SessionInfo>> {
     match c.round_trip(&ClientReq::List)? {
         ClientReply::ListReply { sessions } => Ok(sessions),
         ClientReply::Error { message, code } => Err(AgtError {
-            code: if code == 2 { exit::NO_SESSION } else { exit::DAEMON_UNAVAILABLE },
+            code: if code == 2 {
+                exit::NO_SESSION
+            } else {
+                exit::DAEMON_UNAVAILABLE
+            },
             msg: message,
         }
         .into()),
@@ -171,6 +177,9 @@ fn truncate(s: &str, max: usize) -> String {
 /// Hide /proc-detected agents that match the pid of a sy-managed session's
 /// underlying child process (we don't currently expose those PIDs through the
 /// IPC, so this is a best-effort de-dup by command pattern).
-fn exclude_managed(unmanaged: Vec<UnmanagedAgent>, _sessions: &[SessionInfo]) -> Vec<UnmanagedAgent> {
+fn exclude_managed(
+    unmanaged: Vec<UnmanagedAgent>,
+    _sessions: &[SessionInfo],
+) -> Vec<UnmanagedAgent> {
     unmanaged
 }

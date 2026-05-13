@@ -31,7 +31,10 @@ fn client() -> Result<reqwest::blocking::Client> {
 fn unreachable_error(e: anyhow::Error) -> anyhow::Error {
     super::KnowledgeError {
         code: exit::QDRANT_UNREACHABLE,
-        msg: format!("qdrant unreachable on {} — is the daemon running? ({e})", base_url()),
+        msg: format!(
+            "qdrant unreachable on {} — is the daemon running? ({e})",
+            base_url()
+        ),
     }
     .into()
 }
@@ -82,7 +85,11 @@ pub fn ensure_collection() -> Result<()> {
                 "distance": "Cosine"
             }
         });
-        let resp = c.put(&url).json(&body).send().context("create collection")?;
+        let resp = c
+            .put(&url)
+            .json(&body)
+            .send()
+            .context("create collection")?;
         if !resp.status().is_success() {
             let status = resp.status();
             let txt = resp.text().unwrap_or_default();
@@ -183,7 +190,11 @@ pub fn delete_by_source(source: &str) -> Result<()> {
             }]
         }
     });
-    let resp = c.post(&url).json(&body).send().context("delete by source")?;
+    let resp = c
+        .post(&url)
+        .json(&body)
+        .send()
+        .context("delete by source")?;
     if !resp.status().is_success() {
         let status = resp.status();
         let txt = resp.text().unwrap_or_default();
@@ -215,8 +226,6 @@ pub fn delete_points(ids: &[String]) -> Result<()> {
 
 #[derive(Debug, Deserialize)]
 pub struct SearchHit {
-    #[allow(dead_code)]
-    pub id: Value,
     pub score: f32,
     pub payload: PointPayload,
 }
@@ -310,8 +319,7 @@ pub fn facet_tags(limit: usize) -> Result<Vec<(String, u64)>> {
         return Ok(Vec::new());
     }
     let r: FacetResponse = resp.json().context("parse facet response")?;
-    Ok(r
-        .result
+    Ok(r.result
         .hits
         .into_iter()
         .filter_map(|h| h.value.as_str().map(|s| (s.to_string(), h.count)))

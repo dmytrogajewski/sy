@@ -38,7 +38,9 @@ use anyhow::{Context, Result};
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 
-use super::{cli, embed, ipc, manifest, qdrant, runctx::RunCtx, sources, state, status, QDRANT_PORT};
+use super::{
+    cli, embed, ipc, manifest, qdrant, runctx::RunCtx, sources, state, status, QDRANT_PORT,
+};
 use sources::SourceMode;
 
 /// Floor between consecutive FS-triggered index passes. Scheduled ticks
@@ -65,6 +67,13 @@ pub fn run() -> Result<()> {
         return Err(e);
     }
     qdrant::ensure_collection()?;
+
+    // Start the aiplane supervisor. Each NPU workload (embed, rerank)
+    // runs in its own subprocess so each can own a /dev/accel/accel0
+    // HW context — XDNA limits to one HW context per process. The
+    // supervisor is required: if it can't bring the workers up the
+    // daemon refuses to start rather than degrading silently.
+    init_aiplane_supervisor().context("init aiplane supervisor")?;
 
     let (daemon_tx, daemon_rx) = mpsc::channel::<DaemonOp>();
 
@@ -255,16 +264,12 @@ pub fn run() -> Result<()> {
             // (or got disabled) and drop their points from qdrant.
             let new_manifests = manifest::discover_all();
             let new_folders = enabled_folders(&new_manifests);
-            let added: Vec<PathBuf> =
-                new_folders.difference(&active_folders).cloned().collect();
-            let retired: Vec<PathBuf> =
-                active_folders.difference(&new_folders).cloned().collect();
+            let added: Vec<PathBuf> = new_folders.difference(&active_folders).cloned().collect();
+            let retired: Vec<PathBuf> = active_folders.difference(&new_folders).cloned().collect();
             for r in &retired {
                 let label = r.display().to_string();
                 if let Err(e) = qdrant::delete_by_source(&label) {
-                    eprintln!(
-                        "sy knowledge daemon: delete_by_source({label}) failed: {e}"
-                    );
+                    eprintln!("sy knowledge daemon: delete_by_source({label}) failed: {e}");
                 } else {
                     eprintln!("sy knowledge daemon: retired manifest {label}");
                 }
@@ -351,6 +356,10 @@ pub fn run() -> Result<()> {
 
     eprintln!("sy knowledge daemon: shutting down");
     write_shutdown_status(&last_pass, interval, last_run, &active_manifests);
+    if let Some(supv) = crate::aiplane::supervisor::current() {
+        eprintln!("sy knowledge daemon: stopping aiplane workers");
+        supv.shutdown(Duration::from_secs(5));
+    }
     shutdown_qdrant(&mut child);
     let _ = std::fs::remove_file(ipc::socket_path());
     Ok(())
@@ -486,8 +495,8 @@ fn build_status(
         manifests_disabled,
         points,
         indexing,
-        paused: false,         // overwritten by callers that know the flag
-        cancelling: false,     // overwritten by callers
+        paused: false,     // overwritten by callers that know the flag
+        cancelling: false, // overwritten by callers
         embed_backend: embed::current_backend().to_string(),
         embed_hardware: embed::current_hardware(),
         last_throughput_chunks_per_s: last.throughput,
@@ -499,13 +508,104 @@ fn build_status(
         last_index_deleted: last.deleted,
         last_index_chunks: last.chunks,
         last_error: last.error.clone(),
-        // Per-workload health goes here when the daemon migrates to
-        // aiplane::daemon and dispatches via Registry::run. For now
-        // the knowledge plane carries only the embed workload — its
-        // backend + hardware are surfaced via the legacy fields
-        // above so the waybar tile stays unchanged.
-        workloads: std::collections::HashMap::new(),
+        // Per-workload health, one row per kind the supervisor is
+        // managing. Empty until the supervisor has performed at
+        // least one health poll (sub-second after init).
+        workloads: supervisor_health(),
     }
+}
+
+/// Convert the supervisor's `HashMap<WorkloadKind, Option<WorkerHealth>>`
+/// into the status snapshot's `HashMap<String, WorkloadHealth>` shape.
+/// `None` (no poll yet) maps to a `Loading` row so the waybar can
+/// distinguish "worker not yet ready" from "worker not registered".
+fn supervisor_health() -> std::collections::HashMap<String, crate::aiplane::registry::WorkloadHealth>
+{
+    use crate::aiplane::registry::{WorkloadHealth, WorkloadState};
+    let Some(sup) = crate::aiplane::supervisor::current() else {
+        return std::collections::HashMap::new();
+    };
+    sup.all_health()
+        .into_iter()
+        .map(|(k, maybe_h)| {
+            let h = match maybe_h {
+                Some(wh) => WorkloadHealth {
+                    state: wh.state.clone(),
+                    loaded: wh.state.is_ready(),
+                    last_call_unix: wh.ready_at_unix,
+                    ema_ms: wh.ema_ms,
+                    calls: wh.calls,
+                    errors: wh.errors,
+                    backend: match &wh.state {
+                        WorkloadState::Ready { backend } => backend.clone(),
+                        _ => String::new(),
+                    },
+                },
+                None => WorkloadHealth {
+                    state: WorkloadState::Loading,
+                    ..Default::default()
+                },
+            };
+            (k.as_str().to_string(), h)
+        })
+        .collect()
+}
+
+/// Spin up the aiplane supervisor, spawn embed + rerank worker
+/// children, block until each reaches `Ready`, install the
+/// process-shared handle, and start a background poll thread.
+/// Returns `Err(_)` if any of the configured workers fails to load —
+/// the daemon's caller catches that and falls back to the legacy
+/// in-process path (search keeps working on the embed side via
+/// `knowledge::embed::embed_one`; rerank goes unavailable).
+fn init_aiplane_supervisor() -> Result<()> {
+    use crate::aiplane::registry::WorkloadKind;
+    use crate::aiplane::supervisor::{self, Supervisor};
+    use std::sync::Arc;
+
+    let supv = Arc::new(Supervisor::new());
+
+    // Worker startup deadline: 30 min covers a first-time VAIP
+    // compile from a cold cache (xlm-roberta-large at (32, 512)
+    // measured ~12–15 min of AIE codegen end-to-end). Warm-cache
+    // loads finish in seconds; the long budget only matters on the
+    // first install or after a cache wipe. If you hit this deadline,
+    // run `prep_npu_workload.py` manually so it warms the cache
+    // outside the daemon's hot path.
+    let ready_deadline = Duration::from_secs(1800);
+    for kind in [WorkloadKind::Embed, WorkloadKind::Rerank] {
+        eprintln!("sy aiplane[supervisor]: ensuring worker {kind} is Ready (deadline 10m)");
+        match supv.ensure(kind, ready_deadline) {
+            Ok(h) => {
+                eprintln!(
+                    "sy aiplane[supervisor]: worker {kind} Ready (pid={}, backend={})",
+                    h.pid,
+                    match &h.state {
+                        crate::aiplane::registry::WorkloadState::Ready { backend } =>
+                            backend.as_str(),
+                        _ => "?",
+                    }
+                );
+            }
+            Err(e) => {
+                supv.shutdown(Duration::from_secs(5));
+                return Err(e);
+            }
+        }
+    }
+
+    // Background poll: every second, probe each child's Health and
+    // detect dead children for restart. Keeps the daemon's status
+    // snapshot fresh and recovers from worker crashes without
+    // user intervention.
+    let supv_for_poll = supv.clone();
+    thread::spawn(move || loop {
+        supv_for_poll.poll_once();
+        thread::sleep(Duration::from_secs(1));
+    });
+
+    supervisor::set_current(supv);
+    Ok(())
 }
 
 /// Write a status snapshot to disk, blending the indexing flag, the
@@ -725,35 +825,39 @@ fn build_watcher_set(
     // doesn't yet have its own non-recursive watch, so we use shallow-home
     // events as a "topology changed, re-walk" signal.
     let home_path: Option<PathBuf> = std::env::var("HOME").ok().map(PathBuf::from);
-    let mut debouncer = new_debouncer(Duration::from_secs(1), move |res: notify_debouncer_mini::DebounceEventResult| {
-        let events = match res {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-        let mut saw_qdr = false;
-        let mut saw_other = false;
-        let mut saw_home_topology = false;
-        for ev in &events {
-            if ev.path.file_name().and_then(|n| n.to_str()) == Some(manifest::MANIFEST_FILENAME) {
-                saw_qdr = true;
-            } else {
-                saw_other = true;
-            }
-            if let Some(home) = &home_path {
-                if let Some(parent) = ev.path.parent() {
-                    if parent == home.as_path() {
-                        saw_home_topology = true;
+    let mut debouncer = new_debouncer(
+        Duration::from_secs(1),
+        move |res: notify_debouncer_mini::DebounceEventResult| {
+            let events = match res {
+                Ok(e) => e,
+                Err(_) => return,
+            };
+            let mut saw_qdr = false;
+            let mut saw_other = false;
+            let mut saw_home_topology = false;
+            for ev in &events {
+                if ev.path.file_name().and_then(|n| n.to_str()) == Some(manifest::MANIFEST_FILENAME)
+                {
+                    saw_qdr = true;
+                } else {
+                    saw_other = true;
+                }
+                if let Some(home) = &home_path {
+                    if let Some(parent) = ev.path.parent() {
+                        if parent == home.as_path() {
+                            saw_home_topology = true;
+                        }
                     }
                 }
             }
-        }
-        if saw_qdr || saw_home_topology {
-            let _ = tx.send(DaemonOp::DiscoveryTickle);
-        }
-        if saw_other {
-            let _ = tx.send(DaemonOp::FsTickle);
-        }
-    })
+            if saw_qdr || saw_home_topology {
+                let _ = tx.send(DaemonOp::DiscoveryTickle);
+            }
+            if saw_other {
+                let _ = tx.send(DaemonOp::FsTickle);
+            }
+        },
+    )
     .context("notify debouncer")?;
 
     let watcher = debouncer.watcher();
@@ -826,10 +930,7 @@ fn spawn_qdrant() -> Result<Child> {
         .env("QDRANT__SERVICE__HTTP_PORT", QDRANT_PORT.to_string())
         .env("QDRANT__SERVICE__HOST", "127.0.0.1")
         .env("QDRANT__STORAGE__STORAGE_PATH", &storage)
-        .env(
-            "QDRANT__STORAGE__SNAPSHOTS_PATH",
-            storage.join("snapshots"),
-        )
+        .env("QDRANT__STORAGE__SNAPSHOTS_PATH", storage.join("snapshots"))
         .env("QDRANT__TELEMETRY_DISABLED", "true")
         .stdout(Stdio::null())
         .stderr(stderr)
@@ -903,9 +1004,7 @@ static SIGNAL_RECEIVED: AtomicBool = AtomicBool::new(false);
 /// time anyway (the underlying `Embedder` is a `Mutex<...>` in
 /// embed.rs), and we don't want a flood of search requests to head-of-line
 /// block the daemon's own indexing pass.
-fn spawn_req_worker(
-    req_rx: mpsc::Receiver<(ipc::Req, std::os::unix::net::UnixStream)>,
-) {
+fn spawn_req_worker(req_rx: mpsc::Receiver<(ipc::Req, std::os::unix::net::UnixStream)>) {
     thread::spawn(move || {
         use std::io::Write;
         while let Ok((req, mut stream)) = req_rx.recv() {
@@ -926,15 +1025,7 @@ fn spawn_req_worker(
 }
 
 fn handle_req(req: ipc::Req) -> ipc::Resp {
-    use crate::aiplane::registry::{WorkloadInput, WorkloadKind, WorkloadOutput};
-    use crate::aiplane::workloads;
     match req {
-        ipc::Req::Embed { text } => match embed::embed_one(&text) {
-            Ok(vec) => ipc::Resp::Embed { vector: vec },
-            Err(e) => ipc::Resp::Error {
-                msg: format!("embed: {e}"),
-            },
-        },
         ipc::Req::Search {
             query,
             limit,
@@ -957,6 +1048,7 @@ fn handle_req(req: ipc::Req) -> ipc::Resp {
                             file_path: h.payload.file_path,
                             chunk_index: h.payload.chunk_index,
                             chunk_text: h.payload.chunk_text,
+                            embed_score: None,
                         })
                         .collect(),
                 },
@@ -965,50 +1057,140 @@ fn handle_req(req: ipc::Req) -> ipc::Resp {
                 },
             }
         }
+        ipc::Req::SearchRerank {
+            query,
+            limit,
+            prefix,
+            candidates,
+        } => handle_search_rerank(query, limit, prefix.as_deref(), candidates),
         ipc::Req::Run { workload, input } => {
-            // Embed has a hot-path singleton (knowledge::embed) that
-            // we keep wired during the migration; everything else
-            // goes through the aiplane registry which lazy-loads its
-            // own session per kind.
-            if workload == WorkloadKind::Embed {
-                let text = match input {
-                    WorkloadInput::Text { text } => text,
-                    WorkloadInput::TextPair { a, .. } => a,
-                    other => {
-                        return ipc::Resp::Error {
-                            msg: format!("embed: expected Text input, got {other:?}"),
-                        };
-                    }
-                };
-                return match embed::embed_one(&text) {
-                    Ok(vec) => ipc::Resp::Run {
-                        output: WorkloadOutput::Vector { vector: vec },
+            // Every NPU workload runs in its own worker subprocess.
+            // The supervisor was started at daemon boot with embed +
+            // rerank eagerly Ready; lookup any other kind goes to a
+            // not-yet-spawned worker → clean error rather than
+            // silent in-process fallback.
+            let supv =
+                crate::aiplane::supervisor::current().expect("aiplane supervisor must be running");
+            match supv.run_batch(workload, vec![input]) {
+                Ok(mut outputs) => match outputs.pop() {
+                    Some(output) => ipc::Resp::Run { output },
+                    None => ipc::Resp::Error {
+                        msg: format!("{workload}: worker returned empty batch"),
                     },
-                    Err(e) => ipc::Resp::Error {
-                        msg: format!("embed: {e}"),
-                    },
-                };
-            }
-            // All other workloads: dispatch through a process-local
-            // registry. Lazy-load on first call. The registry is
-            // built once per daemon — `register_all` is cheap (just
-            // metadata), only `run()` triggers actual ONNX load.
-            use std::sync::Arc;
-            use std::sync::OnceLock;
-            static REGISTRY: OnceLock<crate::aiplane::registry::Registry> = OnceLock::new();
-            let reg = REGISTRY.get_or_init(|| {
-                workloads::register_all(Arc::new(
-                    crate::aiplane::session::SessionPool::new(),
-                ))
-            });
-            match reg.run(workload, input) {
-                Ok(output) => ipc::Resp::Run { output },
+                },
                 Err(e) => ipc::Resp::Error {
-                    msg: format!("{workload}: {e}"),
+                    msg: format!("{workload}: {e:#}"),
                 },
             }
         }
     }
+}
+
+/// Two-stage retrieval: embed → qdrant top-`candidates` → bge-reranker
+/// scores each pair → sort by rerank score and truncate to `limit`. The
+/// rerank pass routes through `aiplane::workloads` (lazy-loaded on
+/// first call), so the daemon owns the only NPU session for the
+/// reranker model just like it does for embed. If the rerank model
+/// isn't prepared on disk, returns an `Error` resp that the CLI/MCP
+/// layer can translate into a fallback.
+fn handle_search_rerank(
+    query: String,
+    limit: usize,
+    prefix: Option<&str>,
+    candidates: usize,
+) -> ipc::Resp {
+    use crate::aiplane::registry::{WorkloadInput, WorkloadKind, WorkloadOutput};
+    use std::time::Instant;
+
+    let t_total = Instant::now();
+    let n_candidates = candidates.max(limit).max(1);
+
+    // Stage 1: embed the query (knowledge::embed's hot singleton).
+    let t = Instant::now();
+    let qvec = match embed::embed_one(&query) {
+        Ok(v) => v,
+        Err(e) => {
+            return ipc::Resp::Error {
+                msg: format!("embed: {e}"),
+            };
+        }
+    };
+    let ms_embed = t.elapsed().as_secs_f64() * 1000.0;
+
+    // Stage 2: cosine top-N from qdrant.
+    let t = Instant::now();
+    let raw_hits = match qdrant::search(&qvec, n_candidates, prefix) {
+        Ok(h) => h,
+        Err(e) => {
+            return ipc::Resp::Error {
+                msg: format!("qdrant search: {e}"),
+            };
+        }
+    };
+    let ms_qdrant = t.elapsed().as_secs_f64() * 1000.0;
+
+    if raw_hits.is_empty() {
+        return ipc::Resp::Search { hits: Vec::new() };
+    }
+
+    // Stage 3: rerank via the worker subprocess. The supervisor was
+    // started at daemon boot with rerank eagerly Ready, so the run
+    // can't be the cold-compile path here.
+    let t = Instant::now();
+    let supv = crate::aiplane::supervisor::current().expect("aiplane supervisor must be running");
+    let inputs: Vec<WorkloadInput> = raw_hits
+        .iter()
+        .map(|h| WorkloadInput::TextPair {
+            a: query.clone(),
+            b: h.payload.chunk_text.clone(),
+        })
+        .collect();
+    let rerank_scores: Vec<f32> = match supv.run_batch(WorkloadKind::Rerank, inputs) {
+        Ok(outputs) => match outputs
+            .into_iter()
+            .map(|o| match o {
+                WorkloadOutput::Score { score } => Ok(score),
+                other => Err(format!("rerank: unexpected output {other:?}")),
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()
+        {
+            Ok(v) => v,
+            Err(msg) => return ipc::Resp::Error { msg },
+        },
+        Err(e) => {
+            return ipc::Resp::Error {
+                msg: format!("rerank worker: {e:#}"),
+            };
+        }
+    };
+    let ms_rerank = t.elapsed().as_secs_f64() * 1000.0;
+
+    // Zip + sort by rerank score desc. `SearchHit` isn't `Clone`, so we
+    // move it through a (score, hit) tuple.
+    let mut scored: Vec<(f32, qdrant::SearchHit)> =
+        rerank_scores.into_iter().zip(raw_hits).collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let take = limit.min(scored.len());
+    let hits: Vec<ipc::HitRow> = scored
+        .into_iter()
+        .take(take)
+        .map(|(rerank_score, h)| ipc::HitRow {
+            score: rerank_score,
+            file_path: h.payload.file_path,
+            chunk_index: h.payload.chunk_index,
+            chunk_text: h.payload.chunk_text,
+            embed_score: Some(h.score),
+        })
+        .collect();
+
+    let ms_total = t_total.elapsed().as_secs_f64() * 1000.0;
+    eprintln!(
+        "sy aiplane[search-rerank]: candidates={} limit={} \
+         embed_ms={:.0} qdrant_ms={:.0} rerank_ms={:.0} total_ms={:.0}",
+        n_candidates, take, ms_embed, ms_qdrant, ms_rerank, ms_total
+    );
+
+    ipc::Resp::Search { hits }
 }
 
 mod parking_lot_like_mutex {

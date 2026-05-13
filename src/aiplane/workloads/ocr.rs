@@ -87,8 +87,16 @@ impl Workload for OcrWorkload {
     }
 
     fn health(&self) -> WorkloadHealth {
+        let loaded = *self.loaded.lock().expect("ocr loaded poisoned");
         WorkloadHealth {
-            loaded: *self.loaded.lock().expect("ocr loaded poisoned"),
+            state: if loaded {
+                super::super::registry::WorkloadState::Ready {
+                    backend: String::new(),
+                }
+            } else {
+                super::super::registry::WorkloadState::NotPrepared
+            },
+            loaded,
             ..Default::default()
         }
     }

@@ -170,10 +170,7 @@ fn call_tool(params: &Value) -> Result<Value> {
 }
 
 fn tool_push(args: &Value) -> Result<String> {
-    let kind = args
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .unwrap_or("app");
+    let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("app");
     let kind = Kind::parse(kind)?;
     let name = args
         .get("name")
@@ -204,9 +201,7 @@ fn tool_push(args: &Value) -> Result<String> {
         });
         state::push_file(kind, display_name, p)?
     } else {
-        return Err(anyhow::anyhow!(
-            "stack_push requires `content` or `path`"
-        ));
+        return Err(anyhow::anyhow!("stack_push requires `content` or `path`"));
     };
 
     let id = item.id.clone();

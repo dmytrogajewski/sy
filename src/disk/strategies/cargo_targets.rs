@@ -71,7 +71,11 @@ impl CleanStrategy for CargoTargets {
     fn probe(&self) -> Result<Probe> {
         let dirs = find_stale_targets();
         let total: u64 = dirs.iter().map(|p| du_bytes(p)).sum();
-        let items: Vec<String> = dirs.iter().take(10).map(|p| p.display().to_string()).collect();
+        let items: Vec<String> = dirs
+            .iter()
+            .take(10)
+            .map(|p| p.display().to_string())
+            .collect();
         Ok(Probe {
             reclaimable: total,
             items,

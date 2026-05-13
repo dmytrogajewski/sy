@@ -104,7 +104,9 @@ pub fn find_root() -> Result<PathBuf> {
                         return Ok(guess);
                     }
                 }
-                anyhow::bail!("could not find sy repo root (set SY_ROOT or run from inside the repo)")
+                anyhow::bail!(
+                    "could not find sy repo root (set SY_ROOT or run from inside the repo)"
+                )
             }
         }
     }
@@ -283,11 +285,7 @@ fn write(section: &KnowledgeSection) -> Result<()> {
     // [[knowledge.sources]] — rebuild the array of tables. Preserves the
     // KEY's decoration (the comment block above `[[knowledge.sources]]`),
     // only the entries themselves get rewritten.
-    set_or_remove(
-        k,
-        "discover_home",
-        section.discover_home.map(|b| value(b)),
-    );
+    set_or_remove(k, "discover_home", section.discover_home.map(|b| value(b)));
     set_or_remove(
         k,
         "cpu_throttle_ms",
@@ -350,11 +348,6 @@ pub fn notify_daemon_refresh() {
     let _ = super::ipc::send(&super::ipc::Op::RefreshSources);
 }
 
-#[allow(dead_code)] // used by tests / future tooling
-pub fn save_for_test(section: &KnowledgeSection) -> Result<()> {
-    write(section)
-}
-
 /// Return the list of enabled, expanded source roots in `Explicit` mode.
 /// Manifest-discovered roots are NOT returned here — they're enumerated
 /// dynamically by `manifest::discover_all()`.
@@ -405,7 +398,11 @@ pub fn cpu_throttle() -> Duration {
 pub fn cpu_max_percent() -> Option<u8> {
     if let Ok(v) = env::var("SY_KNOWLEDGE_CPU_MAX_PERCENT") {
         if let Ok(n) = v.parse::<u8>() {
-            return if (1..=100).contains(&n) { Some(n) } else { None };
+            return if (1..=100).contains(&n) {
+                Some(n)
+            } else {
+                None
+            };
         }
     }
     load()

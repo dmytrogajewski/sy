@@ -148,7 +148,16 @@ fn note_probe_roots(env: &ProbeEnv) -> Vec<PathBuf> {
     if let Some(d) = &env.xdg_documents {
         push(d.clone());
     }
-    for name in &["Documents", "Notes", "notes", "Obsidian", "Vault", "Vaults", "Knowledge", "knowledge"] {
+    for name in &[
+        "Documents",
+        "Notes",
+        "notes",
+        "Obsidian",
+        "Vault",
+        "Vaults",
+        "Knowledge",
+        "knowledge",
+    ] {
         push(env.home.join(name));
     }
     roots

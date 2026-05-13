@@ -83,8 +83,16 @@ impl Workload for SttWorkload {
     }
 
     fn health(&self) -> WorkloadHealth {
+        let loaded = *self.loaded.lock().expect("stt loaded poisoned");
         WorkloadHealth {
-            loaded: *self.loaded.lock().expect("stt loaded poisoned"),
+            state: if loaded {
+                super::super::registry::WorkloadState::Ready {
+                    backend: String::new(),
+                }
+            } else {
+                super::super::registry::WorkloadState::NotPrepared
+            },
+            loaded,
             ..Default::default()
         }
     }

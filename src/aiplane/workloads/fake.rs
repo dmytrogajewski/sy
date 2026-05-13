@@ -60,10 +60,7 @@ impl Workload for FakeWorkload {
                 v.extend_from_slice(b.as_bytes());
                 v
             }
-            WorkloadInput::Audio { pcm, .. } => pcm
-                .iter()
-                .flat_map(|s| s.to_le_bytes())
-                .collect(),
+            WorkloadInput::Audio { pcm, .. } => pcm.iter().flat_map(|s| s.to_le_bytes()).collect(),
             WorkloadInput::Image { bytes } => bytes.clone(),
         };
         Ok(match self.kind {
@@ -89,8 +86,16 @@ impl Workload for FakeWorkload {
     }
 
     fn health(&self) -> WorkloadHealth {
+        let loaded = *self.loaded.lock().expect("fake loaded poisoned");
         WorkloadHealth {
-            loaded: *self.loaded.lock().expect("fake loaded poisoned"),
+            state: if loaded {
+                super::super::registry::WorkloadState::Ready {
+                    backend: "fake".to_string(),
+                }
+            } else {
+                super::super::registry::WorkloadState::NotPrepared
+            },
+            loaded,
             backend: "fake".to_string(),
             ..Default::default()
         }
@@ -107,7 +112,9 @@ fn fake_vector(seed: &[u8], dim: usize) -> Vec<f32> {
     let mut out = Vec::with_capacity(dim);
     let mut sumsq = 0.0_f64;
     for _ in 0..dim {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let v = (state >> 33) as i32 as f32 / (i32::MAX as f32);
         out.push(v);
         sumsq += (v as f64).powi(2);
@@ -122,7 +129,9 @@ fn fake_vector(seed: &[u8], dim: usize) -> Vec<f32> {
 }
 
 fn fake_score(seed: &[u8]) -> f32 {
-    let h = seed.iter().fold(0u32, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u32));
+    let h = seed
+        .iter()
+        .fold(0u32, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u32));
     (h as f32 / u32::MAX as f32).clamp(0.0, 1.0)
 }
 
@@ -152,16 +161,8 @@ mod tests {
     fn fake_embed_is_deterministic() {
         let w = FakeWorkload::embed();
         w.load(&SessionPool::new()).unwrap();
-        let v1 = w
-            .run(WorkloadInput::Text {
-                text: "x".into(),
-            })
-            .unwrap();
-        let v2 = w
-            .run(WorkloadInput::Text {
-                text: "x".into(),
-            })
-            .unwrap();
+        let v1 = w.run(WorkloadInput::Text { text: "x".into() }).unwrap();
+        let v2 = w.run(WorkloadInput::Text { text: "x".into() }).unwrap();
         match (v1, v2) {
             (WorkloadOutput::Vector { vector: a }, WorkloadOutput::Vector { vector: b }) => {
                 assert_eq!(a, b);

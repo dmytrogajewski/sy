@@ -28,8 +28,15 @@ use crate::agt::registry::AgentSpec;
 
 #[derive(Debug)]
 pub enum AcpInbound {
-    Notification { method: String, params: Value },
-    Request { id: Value, method: String, params: Value },
+    Notification {
+        method: String,
+        params: Value,
+    },
+    Request {
+        id: Value,
+        method: String,
+        params: Value,
+    },
     Closed,
 }
 
@@ -49,7 +56,9 @@ impl AcpChild {
             cmd.env(k, v);
         }
         cmd.current_dir(cwd);
-        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         let mut child = cmd
             .spawn()
             .with_context(|| format!("spawn ACP child: {}", spec.command))?;

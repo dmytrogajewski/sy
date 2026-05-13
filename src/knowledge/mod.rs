@@ -81,7 +81,10 @@ pub enum KnowledgeCmd {
     /// to sy.toml.
     Schedule { interval: Option<String> },
 
-    /// Semantic search over indexed content.
+    /// Semantic search over indexed content. Two-stage by default:
+    /// embed → qdrant top-`--candidates` → bge-reranker cross-encoder
+    /// → top-`--limit`. Pass `--no-rerank` for the embed-only path
+    /// (~150 ms warm vs ~1 s with rerank).
     Search {
         query: String,
         #[arg(short = 'k', long, default_value = "8")]
@@ -91,6 +94,14 @@ pub enum KnowledgeCmd {
         /// Restrict to a registered source path prefix.
         #[arg(long)]
         source: Option<PathBuf>,
+        /// Skip the cross-encoder rerank pass. Matches the pre-rerank
+        /// behaviour for low-latency lookups.
+        #[arg(long)]
+        no_rerank: bool,
+        /// Candidates pulled from qdrant before reranking. Ignored
+        /// with `--no-rerank`.
+        #[arg(long, default_value_t = 30)]
+        candidates: usize,
     },
 
     /// List active `qdr.toml` manifests (auto-discovered + under explicit
@@ -198,7 +209,16 @@ pub fn dispatch(cmd: KnowledgeCmd) -> Result<()> {
             limit,
             json,
             source,
-        } => cli::search(&query, limit, json, source.as_deref()),
+            no_rerank,
+            candidates,
+        } => cli::search(
+            &query,
+            limit,
+            json,
+            source.as_deref(),
+            !no_rerank,
+            candidates,
+        ),
         KnowledgeCmd::Manifests { json } => cli::manifests(json),
         KnowledgeCmd::Waybar => cli::waybar(),
         KnowledgeCmd::Status { json } => cli::status_cmd(json),
@@ -234,12 +254,6 @@ pub mod exit {
     pub const SOURCE_NOT_FOUND: i32 = 3;
     pub const QDRANT_UNREACHABLE: i32 = 4;
     pub const EMBEDDING_FAILED: i32 = 5;
-    #[allow(dead_code)]
-    pub const ALREADY_RUNNING: i32 = 6;
-    #[allow(dead_code)] // raised by future hard-failure paths in cli::run_index
-    pub const INDEX_FAILED: i32 = 7;
-    #[allow(dead_code)] // surfaced via daemon eprintln + `manifests --json` errors[]
-    pub const MANIFEST_INVALID: i32 = 8;
 }
 
 /// Vector dimension for the chosen embedding model (multilingual-e5-base,

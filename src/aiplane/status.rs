@@ -22,6 +22,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::registry::WorkloadHealth;
+#[cfg(test)]
+use super::registry::WorkloadState;
 
 /// Waybar refresh signal used by `custom/sy-knowledge` (matches the
 /// `"signal": 11` field in `configs/waybar/config.jsonc`). Sent as
@@ -209,6 +211,9 @@ mod tests {
         workloads.insert(
             "embed".to_string(),
             WorkloadHealth {
+                state: WorkloadState::Ready {
+                    backend: "vitisai".to_string(),
+                },
                 loaded: true,
                 last_call_unix: 1_700_000_000,
                 ema_ms: 25.4,

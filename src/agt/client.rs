@@ -22,14 +22,12 @@ pub struct Client {
 impl Client {
     pub fn connect() -> Result<Self> {
         let path = socket_path();
-        let stream = UnixStream::connect(&path).map_err(|e| {
-            AgtError {
-                code: exit::DAEMON_UNAVAILABLE,
-                msg: format!(
-                    "connect {} (is sy-agentd running? `sy agt diag` to check): {e}",
-                    path.display()
-                ),
-            }
+        let stream = UnixStream::connect(&path).map_err(|e| AgtError {
+            code: exit::DAEMON_UNAVAILABLE,
+            msg: format!(
+                "connect {} (is sy-agentd running? `sy agt diag` to check): {e}",
+                path.display()
+            ),
         })?;
         let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
         let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
@@ -68,8 +66,10 @@ impl Client {
 
 /// Read replies until EOF or a non-Event reply arrives.
 /// Used by `sy agt tail --follow` and the inspector.
-#[allow(dead_code)]
-pub fn stream_events(client: &mut Client, mut on_event: impl FnMut(ClientReply) -> bool) -> Result<()> {
+pub fn stream_events(
+    client: &mut Client,
+    mut on_event: impl FnMut(ClientReply) -> bool,
+) -> Result<()> {
     loop {
         match client.recv() {
             Ok(reply) => {

@@ -73,7 +73,10 @@ fn data_root() -> PathBuf {
 
 fn day_dir(ts: u64) -> PathBuf {
     let (y, m, d) = ts_to_ymd(ts);
-    data_root().join(format!("{y:04}")).join(format!("{m:02}")).join(format!("{d:02}"))
+    data_root()
+        .join(format!("{y:04}"))
+        .join(format!("{m:02}"))
+        .join(format!("{d:02}"))
 }
 
 fn day_file(ts: u64) -> PathBuf {
@@ -122,8 +125,7 @@ fn read_day(path: &Path) -> Vec<Record> {
 
 fn write_day(path: &Path, items: &[Record]) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("mkdir {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
     }
     let s = serde_json::to_string_pretty(items)?;
     fs::write(path, s).with_context(|| format!("write {}", path.display()))?;
@@ -155,7 +157,10 @@ fn list_recent(days: u32) -> Vec<Record> {
 }
 
 fn unread_count() -> usize {
-    list_recent(SCAN_DAYS).into_iter().filter(|r| !r.read).count()
+    list_recent(SCAN_DAYS)
+        .into_iter()
+        .filter(|r| !r.read)
+        .count()
 }
 
 // -- waybar -----------------------------------------------------------------

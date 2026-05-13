@@ -145,8 +145,7 @@ pub fn push_content(kind: Kind, name: String, bytes: &[u8], content_kind: &str) 
 
 /// Push a file-path reference under a fresh id; returns the new Item.
 pub fn push_file(kind: Kind, name: String, path: &Path) -> Result<Item> {
-    let abs = fs::canonicalize(path)
-        .with_context(|| format!("canonicalize {}", path.display()))?;
+    let abs = fs::canonicalize(path).with_context(|| format!("canonicalize {}", path.display()))?;
     let meta = fs::metadata(&abs).with_context(|| format!("stat {}", abs.display()))?;
     let content_kind = sniff_kind(&abs);
     Ok(Item {
@@ -240,6 +239,23 @@ pub fn delete_blobs(id: &str) {
             }
         }
     }
+    if let Ok(t) = thumbs_dir() {
+        delete_thumbs_in(&t, id);
+    }
+}
+
+/// Remove every `<id>.<size>.png` thumbnail in `cache_dir`. Split
+/// out so tests can drive it without `XDG_CACHE_HOME` env tricks.
+pub fn delete_thumbs_in(cache_dir: &Path, id: &str) {
+    if let Ok(rd) = fs::read_dir(cache_dir) {
+        for e in rd.flatten() {
+            if let Some(name) = e.file_name().to_str() {
+                if name.starts_with(&format!("{id}.")) && name.ends_with(".png") {
+                    let _ = fs::remove_file(e.path());
+                }
+            }
+        }
+    }
 }
 
 /// Cap a pool to `max` items, evicting oldest. Returns ids that were removed.
@@ -254,12 +270,8 @@ pub fn enforce_cap(items: &mut Items, kind: Kind, max: usize) -> Vec<String> {
     if indices.len() <= max {
         return Vec::new();
     }
-    indices.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
-    let evict: Vec<usize> = indices
-        .into_iter()
-        .skip(max)
-        .map(|(_, idx)| idx)
-        .collect();
+    indices.sort_by_key(|i| std::cmp::Reverse(i.0)); // newest first
+    let evict: Vec<usize> = indices.into_iter().skip(max).map(|(_, idx)| idx).collect();
     let mut removed_ids = Vec::with_capacity(evict.len());
     // Remove highest indices first to keep earlier indices valid.
     let mut sorted = evict.clone();
@@ -276,4 +288,240 @@ pub fn check_caps(items: &mut Items, max_app: usize, max_user: usize) -> Vec<Str
     let mut evicted = enforce_cap(items, Kind::App, max_app);
     evicted.extend(enforce_cap(items, Kind::User, max_user));
     evicted
+}
+
+fn cache_base() -> Result<PathBuf> {
+    if let Ok(x) = env::var("XDG_CACHE_HOME") {
+        if !x.is_empty() {
+            return Ok(PathBuf::from(x));
+        }
+    }
+    let home = env::var("HOME").context("HOME not set")?;
+    Ok(PathBuf::from(home).join(".cache"))
+}
+
+/// `$XDG_CACHE_HOME/sy/stack/thumbs/` — created on demand. Used by
+/// the bar to materialise 20×20 and 256×256 PNGs for image slots so
+/// every repaint reads pre-decoded pixels off disk instead of
+/// re-decoding the original.
+pub fn thumbs_dir() -> Result<PathBuf> {
+    let d = cache_base()?.join("sy").join("stack").join("thumbs");
+    fs::create_dir_all(&d).with_context(|| format!("mkdir {}", d.display()))?;
+    Ok(d)
+}
+
+fn is_image_item(item: &Item) -> bool {
+    if item.content_kind == "image" {
+        return true;
+    }
+    if let Some(p) = &item.path {
+        let ext = p
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        matches!(
+            ext.as_str(),
+            "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+        )
+    } else {
+        false
+    }
+}
+
+/// Write an aspect-letterboxed `size×size` PNG of `src_img` to
+/// `cache_dir/<file_stem>.<size>.png`. Skips the work if the
+/// destination already exists, so callers can call freely from a
+/// per-frame view path. Shared between
+/// `state::thumbnail_path_at` (stack items) and
+/// `clip::decode_to_thumb` (cliphist binary entries).
+pub fn write_thumbnail_png(
+    cache_dir: &Path,
+    file_stem: &str,
+    src_img: image::DynamicImage,
+    size: u32,
+) -> Result<PathBuf> {
+    fs::create_dir_all(cache_dir).with_context(|| format!("mkdir {}", cache_dir.display()))?;
+    let dest = cache_dir.join(format!("{file_stem}.{size}.png"));
+    if dest.exists() {
+        return Ok(dest);
+    }
+    let scaled = src_img.resize(size, size, image::imageops::FilterType::Triangle);
+    let scaled_rgba = scaled.to_rgba8();
+    let (sw, sh) = (scaled_rgba.width(), scaled_rgba.height());
+    let mut canvas = image::RgbaImage::from_pixel(size, size, image::Rgba([0, 0, 0, 0]));
+    let ox = ((size - sw) / 2) as i64;
+    let oy = ((size - sh) / 2) as i64;
+    image::imageops::overlay(&mut canvas, &scaled_rgba, ox, oy);
+    canvas
+        .save(&dest)
+        .with_context(|| format!("write thumbnail {}", dest.display()))?;
+    Ok(dest)
+}
+
+/// Render a `size×size` aspect-letterboxed PNG thumbnail of the
+/// image referenced by `item` into `cache_dir`. Returns `Ok(None)`
+/// for non-image items so callers can dispatch on the result. The
+/// destination file is `cache_dir/<id>.<size>.png`; re-uses the
+/// cached copy if already present (mtime-stable across calls).
+pub fn thumbnail_path_at(cache_dir: &Path, item: &Item, size: u32) -> Result<Option<PathBuf>> {
+    if !is_image_item(item) {
+        return Ok(None);
+    }
+    // Bar repaints once per second; an early stat avoids re-opening
+    // the source image and re-encoding the PNG when the cache is
+    // already warm. The detailed cache-check inside
+    // `write_thumbnail_png` still covers concurrent first-decodes.
+    let dest = cache_dir.join(format!("{}.{}.png", item.id, size));
+    if dest.exists() {
+        return Ok(Some(dest));
+    }
+    let source = match &item.path {
+        Some(p) => p.clone(),
+        None => blobs_dir()?.join(&item.id).join("payload"),
+    };
+    let src_img = image::open(&source).with_context(|| format!("decode {}", source.display()))?;
+    Ok(Some(write_thumbnail_png(
+        cache_dir, &item.id, src_img, size,
+    )?))
+}
+
+/// Convenience wrapper that resolves the cache dir from
+/// `thumbs_dir()` before delegating to `thumbnail_path_at`.
+pub fn thumbnail_path(item: &Item, size: u32) -> Result<Option<PathBuf>> {
+    let dir = thumbs_dir()?;
+    thumbnail_path_at(&dir, item, size)
+}
+
+/// Render a hover-preview body for a text/code payload.
+///
+/// Returns the first `max_lines` lines of the UTF-8-lossy decode of
+/// `bytes`, joined with `\n`. Inputs longer than `max_lines` get an
+/// ellipsis line appended so the viewer knows the body was clipped.
+/// Used by the bar's hover popup for text and code slots.
+pub fn text_preview(bytes: &[u8], max_lines: usize) -> String {
+    let s = String::from_utf8_lossy(bytes);
+    let total = s.lines().count();
+    let mut out: String = s
+        .lines()
+        .take(max_lines)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if total > max_lines {
+        out.push_str("\n…");
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_png(path: &Path, w: u32, h: u32) {
+        let img: image::RgbImage =
+            image::ImageBuffer::from_fn(w, h, |_, _| image::Rgb([200, 50, 50]));
+        img.save(path).expect("write fixture png");
+    }
+
+    fn image_item(id: &str, path: PathBuf) -> Item {
+        Item {
+            id: id.into(),
+            kind: Kind::User,
+            path: Some(path),
+            name: "fixture.png".into(),
+            created_at: 0,
+            content_kind: "file".into(),
+            size: 0,
+        }
+    }
+
+    #[test]
+    fn thumbnail_path_creates_20x20_png() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("fixture.png");
+        make_test_png(&src, 40, 40);
+        let item = image_item("abc12345", src);
+        let thumbs = tmp.path().join("thumbs");
+        let dest = thumbnail_path_at(&thumbs, &item, 20)
+            .expect("ok result")
+            .expect("Some path");
+        assert!(dest.exists(), "cached PNG should exist at {dest:?}");
+        let decoded = image::open(&dest).expect("decode cached png");
+        assert_eq!(decoded.width(), 20);
+        assert_eq!(decoded.height(), 20);
+    }
+
+    #[test]
+    fn thumbnail_path_is_cached_on_second_call() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("fixture.png");
+        make_test_png(&src, 32, 32);
+        let item = image_item("def67890", src);
+        let thumbs = tmp.path().join("thumbs");
+        let first = thumbnail_path_at(&thumbs, &item, 20).unwrap().unwrap();
+        let first_mtime = fs::metadata(&first).unwrap().modified().unwrap();
+        let second = thumbnail_path_at(&thumbs, &item, 20).unwrap().unwrap();
+        assert_eq!(first, second);
+        let second_mtime = fs::metadata(&second).unwrap().modified().unwrap();
+        assert_eq!(
+            first_mtime, second_mtime,
+            "second call must hit the cache, not re-encode"
+        );
+    }
+
+    #[test]
+    fn delete_blobs_removes_thumbnails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("fixture.png");
+        make_test_png(&src, 32, 32);
+        let item = image_item("delthumb", src);
+        let thumbs = tmp.path().join("thumbs");
+        thumbnail_path_at(&thumbs, &item, 20).unwrap();
+        thumbnail_path_at(&thumbs, &item, 256).unwrap();
+        assert!(thumbs.join("delthumb.20.png").exists());
+        assert!(thumbs.join("delthumb.256.png").exists());
+        delete_thumbs_in(&thumbs, "delthumb");
+        assert!(!thumbs.join("delthumb.20.png").exists());
+        assert!(!thumbs.join("delthumb.256.png").exists());
+    }
+
+    #[test]
+    fn text_preview_truncates_to_24_lines() {
+        const MAX: usize = 24;
+        let body: String = (0..100).map(|i| format!("line {i}\n")).collect();
+        let preview = text_preview(body.as_bytes(), MAX);
+        let lines: Vec<&str> = preview.lines().collect();
+        assert_eq!(
+            lines.len(),
+            MAX + 1,
+            "should be {MAX} body lines + one ellipsis marker"
+        );
+        assert_eq!(lines[0], "line 0");
+        assert_eq!(lines[MAX - 1], "line 23");
+        assert_eq!(lines[MAX], "…");
+    }
+
+    #[test]
+    fn text_preview_returns_short_input_verbatim() {
+        let preview = text_preview(b"only\ntwo\n", 24);
+        let lines: Vec<&str> = preview.lines().collect();
+        assert_eq!(lines, vec!["only", "two"]);
+    }
+
+    #[test]
+    fn thumbnail_path_returns_none_for_text_item() {
+        let tmp = tempfile::tempdir().unwrap();
+        let item = Item {
+            id: "txt00001".into(),
+            kind: Kind::User,
+            path: None,
+            name: "snippet".into(),
+            created_at: 0,
+            content_kind: "text".into(),
+            size: 0,
+        };
+        let thumbs = tmp.path().join("thumbs");
+        let res = thumbnail_path_at(&thumbs, &item, 20).unwrap();
+        assert!(res.is_none());
+    }
 }

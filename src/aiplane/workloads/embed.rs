@@ -172,6 +172,9 @@ impl Workload for EmbedWorkload {
         let guard = self.state.lock().expect("embed state poisoned");
         match guard.as_ref() {
             Some(e) => WorkloadHealth {
+                state: super::super::registry::WorkloadState::Ready {
+                    backend: e.backend.to_string(),
+                },
                 loaded: true,
                 backend: e.backend.to_string(),
                 ..Default::default()
@@ -268,8 +271,8 @@ fn run_one(emb: &mut LoadedEmbedder, prefixed: &str) -> Result<Vec<f32>> {
     let (ids, mask) = encode(&emb.tokenizer, prefixed)?;
     let shape: [i64; 2] = [1, SEQ_LEN as i64];
     let ids_t = Tensor::from_array((shape, ids)).map_err(|e| anyhow::anyhow!("tensor ids: {e}"))?;
-    let mask_t = Tensor::from_array((shape, mask))
-        .map_err(|e| anyhow::anyhow!("tensor mask: {e}"))?;
+    let mask_t =
+        Tensor::from_array((shape, mask)).map_err(|e| anyhow::anyhow!("tensor mask: {e}"))?;
     let outputs = emb
         .session
         .run(inputs![
@@ -321,9 +324,7 @@ mod tests {
     #[test]
     fn embed_run_without_load_errors_clearly() {
         let w = EmbedWorkload::new();
-        let res = w.run(WorkloadInput::Text {
-            text: "hi".into(),
-        });
+        let res = w.run(WorkloadInput::Text { text: "hi".into() });
         // Without the model on disk, load() bails before run() is
         // reachable; we just confirm `run` itself doesn't panic when
         // state is uninitialised.

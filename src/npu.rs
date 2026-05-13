@@ -186,7 +186,9 @@ fn read_pci_name(_bdf: &str) -> String {
 
 fn find_holders() -> Vec<String> {
     let mut holders = Vec::new();
-    let Ok(rd) = std::fs::read_dir("/proc") else { return holders };
+    let Ok(rd) = std::fs::read_dir("/proc") else {
+        return holders;
+    };
     for entry in rd.flatten() {
         let name = entry.file_name();
         let n = name.to_string_lossy();
@@ -195,7 +197,9 @@ fn find_holders() -> Vec<String> {
         }
         let pid = n.into_owned();
         let fd_dir: PathBuf = entry.path().join("fd");
-        let Ok(fds) = std::fs::read_dir(&fd_dir) else { continue };
+        let Ok(fds) = std::fs::read_dir(&fd_dir) else {
+            continue;
+        };
         let mut hit = false;
         for fd in fds.flatten() {
             if let Ok(target) = std::fs::read_link(fd.path()) {
@@ -241,7 +245,11 @@ fn waybar_out(s: &Snapshot) -> Result<()> {
         name,
         s.util_pct,
         if s.active { "D0 (active)" } else { "D3 (idle)" },
-        if s.fw_version.is_empty() { "?" } else { &s.fw_version },
+        if s.fw_version.is_empty() {
+            "?"
+        } else {
+            &s.fw_version
+        },
         holders,
     );
     // 󰍛 = nerd-font chip glyph; matches the CPU/RAM bar styling.

@@ -86,8 +86,16 @@ impl Workload for VadWorkload {
     }
 
     fn health(&self) -> WorkloadHealth {
+        let loaded = *self.loaded.lock().expect("vad loaded poisoned");
         WorkloadHealth {
-            loaded: *self.loaded.lock().expect("vad loaded poisoned"),
+            state: if loaded {
+                super::super::registry::WorkloadState::Ready {
+                    backend: String::new(),
+                }
+            } else {
+                super::super::registry::WorkloadState::NotPrepared
+            },
+            loaded,
             ..Default::default()
         }
     }

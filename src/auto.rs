@@ -132,8 +132,18 @@ impl ProbeEnv {
         let xdg_documents = resolve_xdg_dir(&home, "DOCUMENTS", "Documents");
         let xdg_download = resolve_xdg_dir(&home, "DOWNLOAD", "Downloads");
         let installed_bins = probe_bins(&[
-            "obsidian", "logseq", "joplin", "zettlr", "anki", "zotero", "calibre",
-            "code", "cursor", "lmstudio", "bruno", "telegram-desktop",
+            "obsidian",
+            "logseq",
+            "joplin",
+            "zettlr",
+            "anki",
+            "zotero",
+            "calibre",
+            "code",
+            "cursor",
+            "lmstudio",
+            "bruno",
+            "telegram-desktop",
         ]);
         let flatpak_apps = probe_flatpak_apps();
         Self {
@@ -147,8 +157,7 @@ impl ProbeEnv {
 
     /// Convenience: union of binary names and flatpak app ids.
     pub fn has_app(&self, key: &str) -> bool {
-        self.installed_bins.contains(key)
-            || self.flatpak_apps.iter().any(|a| a.contains(key))
+        self.installed_bins.contains(key) || self.flatpak_apps.iter().any(|a| a.contains(key))
     }
 }
 
@@ -241,7 +250,13 @@ fn select_detectors<'a>(
 
 // ─── Configure ──────────────────────────────────────────────────────────
 
-pub fn configure(apply: bool, json_out: bool, only: &[String], skip: &[String], force: bool) -> Result<()> {
+pub fn configure(
+    apply: bool,
+    json_out: bool,
+    only: &[String],
+    skip: &[String],
+    force: bool,
+) -> Result<()> {
     let env = ProbeEnv::build();
     let all = detectors();
     let chosen = select_detectors(&all, only, skip);
@@ -406,7 +421,12 @@ fn suggestion_to_json(s: &Suggestion) -> serde_json::Value {
             },
             "reason": s.reason,
         }),
-        Action::AddMcpServer { agent, name, command, args } => json!({
+        Action::AddMcpServer {
+            agent,
+            name,
+            command,
+            args,
+        } => json!({
             "detector": s.detector_id,
             "kind": "add-mcp-server",
             "agent": agent.id(),
@@ -446,24 +466,22 @@ fn apply_suggestions(suggestions: &[Suggestion], force: bool, quiet: bool) -> Re
     for s in suggestions {
         match &s.action {
             Action::Hint { .. } => {}
-            Action::AddKnowledgeSource { path, mode } => {
-                match sources::add(path, false, *mode) {
-                    Ok(true) => {
-                        added += 1;
-                        sources_dirty = true;
-                        if !quiet {
-                            eprintln!("  + source {}", path.display());
-                        }
+            Action::AddKnowledgeSource { path, mode } => match sources::add(path, false, *mode) {
+                Ok(true) => {
+                    added += 1;
+                    sources_dirty = true;
+                    if !quiet {
+                        eprintln!("  + source {}", path.display());
                     }
-                    Ok(false) => {
-                        skipped += 1;
-                        if !quiet {
-                            eprintln!("  = source {} (already registered)", path.display());
-                        }
-                    }
-                    Err(e) => errs.push(format!("add source {}: {e}", path.display())),
                 }
-            }
+                Ok(false) => {
+                    skipped += 1;
+                    if !quiet {
+                        eprintln!("  = source {} (already registered)", path.display());
+                    }
+                }
+                Err(e) => errs.push(format!("add source {}: {e}", path.display())),
+            },
             Action::DropQdrManifest { folder, template } => {
                 match write_manifest(folder, template, force) {
                     Ok(true) => {
@@ -475,7 +493,10 @@ fn apply_suggestions(suggestions: &[Suggestion], force: bool, quiet: bool) -> Re
                     Ok(false) => {
                         skipped += 1;
                         if !quiet {
-                            eprintln!("  = qdr.toml {} (exists; --force to overwrite)", folder.display());
+                            eprintln!(
+                                "  = qdr.toml {} (exists; --force to overwrite)",
+                                folder.display()
+                            );
                         }
                     }
                     Err(e) => errs.push(format!("write manifest {}: {e}", folder.display())),
@@ -537,11 +558,7 @@ fn apply_suggestions(suggestions: &[Suggestion], force: bool, quiet: bool) -> Re
         let names: Vec<&&str> = interactive_agents.iter().collect();
         eprintln!(
             "sy auto-configure: restart {} to pick up the new MCP server",
-            names
-                .into_iter()
-                .copied()
-                .collect::<Vec<_>>()
-                .join(", ")
+            names.into_iter().copied().collect::<Vec<_>>().join(", ")
         );
     }
     let _ = mcp_changed;

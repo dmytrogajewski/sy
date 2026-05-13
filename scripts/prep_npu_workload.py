@@ -49,6 +49,13 @@ WORKLOAD_DEFAULTS = {
         "model_id": "BAAI/bge-reranker-v2-m3",
         "stem": "bge-reranker-v2-m3",
         "seq_len": 512,
+        # batch=1 is the only shape VAIP can compile for this
+        # backbone — at batch > 1 the partition pass serialises the
+        # graph (with per-tensor `value_info` shape metadata for
+        # every intermediate) and trips libprotobuf's 2 GB hard cap.
+        # The Rust worker still amortises kernel-launch overhead by
+        # holding the Session across N sequential calls.
+        "batch_size": 1,
         "quant_preset": "BF16",
         "no_bf16_shrink": True,
         "ships_tokenizer": True,
@@ -149,16 +156,82 @@ def export_onnx_embed(model_id: str, seq_len: int, out_path: Path) -> None:
 # Rerank / VAD / STT / OCR: scaffolded
 # =============================================================================
 
-def export_onnx_rerank(model_id: str, seq_len: int, out_path: Path) -> None:
-    raise NotImplementedError(
-        f"rerank export not yet implemented for {model_id}.\n"
-        f"Follow the /workload skill (.claude/commands/workload.md):\n"
-        f"  1. Load AutoModelForSequenceClassification.\n"
-        f"  2. Wrap with a module that returns logits[..., 0].sigmoid().\n"
-        f"  3. Export to ({out_path}) with input_ids + attention_mask\n"
-        f"     shape (1, {seq_len}).\n"
-        f"  4. Update aiplane::workloads::rerank::run() to encode\n"
-        f"     (query, doc) as one concatenated XLM-RoBERTa sequence.\n"
+def export_onnx_rerank(model_id: str, seq_len: int, out_path: Path,
+                       batch_size: int = 1) -> None:
+    """Export a BGE-style cross-encoder reranker to ONNX with the
+    ``sigmoid(logits[..., 0])`` head baked into the graph so the
+    downstream Rust workload doesn't need to know about logits shape.
+
+    ``batch_size`` controls the static batch dimension baked into the
+    exported graph. The VitisAI EP wants fully static shapes, so the
+    cache is keyed on ``(stem, batch_size, seq_len)``. Run the prep
+    again with a different ``--batch-size`` to produce a separate
+    cache. The Rust worker pads incoming batches up to this size
+    and discards the extra outputs."""
+    import torch
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(model_id)
+    base = AutoModelForSequenceClassification.from_pretrained(model_id)
+    base.eval()
+
+    tok.save_pretrained(out_path.parent / f"{out_path.stem}.tokenizer")
+
+    class RerankWrapper(torch.nn.Module):
+        """``logits[..., 0]`` → sigmoid → scalar relevance in [0, 1].
+
+        bge-reranker-v2-m3 is an XLM-RoBERTa-large SequenceClassification
+        head with ``num_labels=1``; raw output shape is ``(B, 1)``. We
+        squeeze the last dim and apply sigmoid so the daemon can read
+        one ``f32`` per pair regardless of model family."""
+
+        def __init__(self, base):
+            super().__init__()
+            self.base = base
+
+        def forward(self, input_ids, attention_mask):
+            logits = self.base(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            ).logits                                          # (B, 1)
+            return torch.sigmoid(logits[..., 0])              # (B,)
+
+    wrapper = RerankWrapper(base)
+    wrapper.eval()
+
+    # Tokenise the same dummy pair `batch_size` times so the exported
+    # graph sees a (B, seq_len) input. ``truncation="only_second"`` (HF
+    # default for pairs) keeps the query intact and chops the doc tail —
+    # matches what the Rust workload's `encode_pair` relies on.
+    dummy_q = "exporting to onnx"
+    dummy_d = "exporting to onnx " * 64
+    enc = tok([dummy_q] * batch_size, [dummy_d] * batch_size,
+              return_tensors="pt", padding="max_length", truncation=True,
+              max_length=seq_len)
+    input_ids = enc["input_ids"].to(torch.int64)
+    attn = enc["attention_mask"].to(torch.int64)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.onnx.export(
+        wrapper,
+        (input_ids, attn),
+        out_path.as_posix(),
+        input_names=["input_ids", "attention_mask"],
+        output_names=["score"],
+        dynamic_axes=None,
+        opset_version=17,
+    )
+    # Re-save with external data to dodge the >2 GB protobuf cap
+    # (xlm-roberta-large weights push close to it after the QDQ pass).
+    import onnx
+    model = onnx.load(out_path.as_posix(), load_external_data=True)
+    onnx.save_model(
+        model,
+        out_path.as_posix(),
+        save_as_external_data=True,
+        all_tensors_to_one_file=True,
+        location=out_path.name + ".data",
+        size_threshold=1024,
     )
 
 
@@ -410,6 +483,14 @@ def main() -> int:
     ap.add_argument("--bf16-shrink", action="store_true",
                     help="Force-enable the shrink even if the workload "
                          "default would skip it.")
+    ap.add_argument("--batch-size", type=int, default=None,
+                    help="Static batch dim baked into the exported ONNX. "
+                         "Default is per-workload (see WORKLOAD_DEFAULTS): "
+                         "rerank=32, others=1. VitisAI wants fully static "
+                         "shapes so the cache key includes this value — "
+                         "re-prep with a different batch produces a "
+                         "separate cache. The Rust worker pads incoming "
+                         "batches up to this size.")
     ap.add_argument("--json", action="store_true",
                     help="Emit a final JSON summary on stdout.")
     args = ap.parse_args()
@@ -439,22 +520,32 @@ def main() -> int:
     fp32 = out_dir / f"{stem}.onnx"
     suffix = preset.lower()
     quant = out_dir / f"{stem}.{suffix}.onnx"
-    cache_key = f"compiled_{stem}_{suffix}_seq{seq_len}"
+    batch_size = max(1, args.batch_size or defaults.get("batch_size", 1))
+    # Cache key always folds the batch dim in; we don't carry a
+    # back-compat suffix-free variant.
+    cache_key = f"compiled_{stem}_{suffix}_seq{seq_len}_b{batch_size}"
 
     summary: dict = {
         "workload": args.workload,
         "model_id": model_id,
         "model_stem": stem,
         "seq_len": seq_len,
+        "batch_size": batch_size,
         "quant_preset": preset,
         "output_dir": str(out_dir),
     }
 
-    print(f"[1/3] Exporting {model_id} → ONNX (workload={args.workload}, seq_len={seq_len})",
+    print(f"[1/3] Exporting {model_id} → ONNX "
+          f"(workload={args.workload}, seq_len={seq_len}, batch={batch_size})",
           file=sys.stderr)
     if not fp32.is_file():
         try:
-            EXPORTERS[args.workload](model_id, seq_len, fp32)
+            # rerank's exporter accepts batch_size; others ignore it for now.
+            if args.workload == "rerank":
+                EXPORTERS[args.workload](model_id, seq_len, fp32,
+                                         batch_size=batch_size)
+            else:
+                EXPORTERS[args.workload](model_id, seq_len, fp32)
         except NotImplementedError as e:
             print(f"\n{e}", file=sys.stderr)
             return 2

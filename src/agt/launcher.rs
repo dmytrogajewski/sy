@@ -113,7 +113,10 @@ fn fuzzel_prompt() -> Result<Option<String>> {
 fn prompt_via_editor() -> Result<String> {
     let editor = env::var("EDITOR").unwrap_or_else(|_| "nano".into());
     let tmp = tempfile_path("sy-agt-prompt", "md");
-    fs::write(&tmp, "# Type your prompt below this line; save & exit when done.\n\n")?;
+    fs::write(
+        &tmp,
+        "# Type your prompt below this line; save & exit when done.\n\n",
+    )?;
     // Spawn editor inside a foot popup so it works under wayland regardless of
     // where Super+A was triggered from.
     let st = Command::new("foot")
@@ -139,11 +142,10 @@ fn prompt_via_editor() -> Result<String> {
 }
 
 fn tempfile_path(stem: &str, ext: &str) -> PathBuf {
-    let dir = env::var("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/tmp"));
-    dir.join(format!(
-        "{stem}-{}.{ext}",
-        uuid::Uuid::new_v4().simple()
-    ))
+    let dir = env::var("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp"));
+    dir.join(format!("{stem}-{}.{ext}", uuid::Uuid::new_v4().simple()))
 }
 
 pub fn detect_cwd_from_niri() -> Option<PathBuf> {

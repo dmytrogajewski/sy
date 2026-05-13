@@ -66,14 +66,12 @@ pub fn send(op: &Op) -> Result<()> {
 
 /// Listen for ops on the socket. Drops messages into the supplied mpsc
 /// sender; the bar's main loop polls the receiver each tick.
-#[allow(dead_code)]
 pub fn serve(tx: mpsc::Sender<Op>) -> Result<()> {
     let p = socket_path();
     if p.exists() {
         let _ = std::fs::remove_file(&p);
     }
-    let listener = UnixListener::bind(&p)
-        .with_context(|| format!("bind {}", p.display()))?;
+    let listener = UnixListener::bind(&p).with_context(|| format!("bind {}", p.display()))?;
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
     thread::spawn(move || {

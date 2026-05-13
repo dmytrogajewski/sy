@@ -49,15 +49,25 @@ fn parse_device(line: &str) -> Option<(String, String)> {
 
 fn waybar_out() -> Result<()> {
     if !is_powered() {
-        println!(r#"{{"text":"BT:off","class":"off","tooltip":"Bluetooth off\nclick: open menu"}}"#);
+        println!(
+            r#"{{"text":"BT:off","class":"off","tooltip":"Bluetooth off\nclick: open menu"}}"#
+        );
         return Ok(());
     }
     let connected = devices("Connected");
     let (text, class, tip) = if let Some((_, name)) = connected.first() {
         let short = truncate(name, 16);
-        (format!("BT:{short}"), "connected", format!("Connected: {name}"))
+        (
+            format!("BT:{short}"),
+            "connected",
+            format!("Connected: {name}"),
+        )
     } else {
-        ("BT:on".to_string(), "on", "Bluetooth on, no device connected".to_string())
+        (
+            "BT:on".to_string(),
+            "on",
+            "Bluetooth on, no device connected".to_string(),
+        )
     };
     let tip = format!("{tip}\\nclick: menu · right-click: toggle");
     println!(r#"{{"text":"{text}","class":"{class}","tooltip":"{tip}"}}"#);
@@ -152,13 +162,18 @@ fn dispatch(a: Action) -> Result<()> {
         Action::Noop => Ok(()),
         Action::Toggle => {
             let target = if is_powered() { "off" } else { "on" };
-            Command::new("bluetoothctl").args(["power", target]).status().context("power")?;
+            Command::new("bluetoothctl")
+                .args(["power", target])
+                .status()
+                .context("power")?;
             notify(&format!("Bluetooth {target}"));
             Ok(())
         }
         Action::Connect(mac) => connect(&mac),
         Action::Disconnect(mac) => {
-            let _ = Command::new("bluetoothctl").args(["disconnect", &mac]).status();
+            let _ = Command::new("bluetoothctl")
+                .args(["disconnect", &mac])
+                .status();
             notify("Disconnected");
             Ok(())
         }
@@ -174,7 +189,9 @@ fn dispatch(a: Action) -> Result<()> {
 fn connect(mac: &str) -> Result<()> {
     notify("Connecting…");
     let _ = Command::new("bluetoothctl").args(["trust", mac]).status();
-    let out = Command::new("bluetoothctl").args(["connect", mac]).output()?;
+    let out = Command::new("bluetoothctl")
+        .args(["connect", mac])
+        .output()?;
     if out.status.success() {
         notify("Connected");
     } else {
@@ -184,7 +201,10 @@ fn connect(mac: &str) -> Result<()> {
         } else {
             err.to_string()
         };
-        notify(&format!("Connect failed: {}", msg.trim().lines().next().unwrap_or("")));
+        notify(&format!(
+            "Connect failed: {}",
+            msg.trim().lines().next().unwrap_or("")
+        ));
     }
     Ok(())
 }

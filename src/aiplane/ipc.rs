@@ -80,31 +80,44 @@ pub enum Req {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prefix: Option<String>,
     },
-    /// Legacy adapter: pre-aiplane CLIs sent `Req::Embed { text }`.
-    /// The daemon translates this to `Run { Embed, Text(text) }`
-    /// internally so older `sy` binaries keep working through the
-    /// upgrade window.
-    Embed { text: String },
+    /// Two-stage retrieval: embed → qdrant top-`candidates` →
+    /// bge-reranker cross-encoder scores every (query, doc) pair →
+    /// truncate to `limit`. Done daemon-side so the client doesn't
+    /// pay one IPC per pair, and so the NPU mutex is held across the
+    /// whole rerank pass (no re-entry cost between pairs).
+    SearchRerank {
+        query: String,
+        limit: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prefix: Option<String>,
+        /// Top-N pulled from qdrant before reranking. Default 30 in
+        /// the CLI / MCP surfaces; tune up for higher recall on long
+        /// tails, down for tighter latency.
+        candidates: usize,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "resp", rename_all = "kebab-case")]
 pub enum Resp {
     Run { output: WorkloadOutput },
-    /// Legacy: kept so the old `Req::Embed` adapter has a
-    /// dedicated response shape that maps 1:1 to what the previous
-    /// CLI version expected.
-    Embed { vector: Vec<f32> },
     Search { hits: Vec<HitRow> },
     Error { msg: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HitRow {
+    /// Final score callers should rank by. Cosine similarity for
+    /// `Req::Search`; rerank sigmoid for `Req::SearchRerank`.
     pub score: f32,
     pub file_path: String,
     pub chunk_index: u32,
     pub chunk_text: String,
+    /// Pre-rerank cosine score from qdrant. `None` on the embed-only
+    /// path; `Some(_)` only when the daemon reranked the hit so UIs
+    /// can show "moved from rank N → M" later if useful.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embed_score: Option<f32>,
 }
 
 #[derive(Debug)]
@@ -197,10 +210,7 @@ pub fn request(req: &Req) -> std::result::Result<Resp, IpcError> {
 ///   * `Req` (request-response) → forwarded on `req_tx` as
 ///     `(Req, UnixStream)`. The receiver owns the stream, writes
 ///     the `Resp` JSON line on it, and drops to close.
-pub fn serve(
-    ops_tx: mpsc::Sender<Op>,
-    req_tx: mpsc::Sender<(Req, UnixStream)>,
-) -> Result<()> {
+pub fn serve(ops_tx: mpsc::Sender<Op>, req_tx: mpsc::Sender<(Req, UnixStream)>) -> Result<()> {
     let p = socket_path();
     if p.exists() {
         let _ = std::fs::remove_file(&p);
@@ -317,13 +327,50 @@ mod tests {
     }
 
     #[test]
-    fn legacy_embed_req_still_parses() {
-        let s = r#"{"req":"embed","text":"привет"}"#;
-        let r: Req = serde_json::from_str(s).unwrap();
-        match r {
-            Req::Embed { text } => assert_eq!(text, "привет"),
-            _ => panic!("expected Embed variant"),
+    fn req_search_rerank_roundtrip() {
+        let r = Req::SearchRerank {
+            query: "Анна Лу".into(),
+            limit: 5,
+            prefix: None,
+            candidates: 30,
+        };
+        let s = serde_json::to_string(&r).unwrap();
+        assert!(s.contains("\"req\":\"search-rerank\""));
+        assert!(s.contains("\"candidates\":30"));
+        let back: Req = serde_json::from_str(&s).unwrap();
+        match back {
+            Req::SearchRerank {
+                query,
+                limit,
+                candidates,
+                prefix,
+            } => {
+                assert_eq!(query, "Анна Лу");
+                assert_eq!(limit, 5);
+                assert_eq!(candidates, 30);
+                assert!(prefix.is_none());
+            }
+            _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn hit_row_embed_score_omitted_when_none() {
+        let h = HitRow {
+            score: 0.5,
+            file_path: "/x".into(),
+            chunk_index: 0,
+            chunk_text: "".into(),
+            embed_score: None,
+        };
+        let s = serde_json::to_string(&h).unwrap();
+        assert!(!s.contains("embed_score"));
+        let h2 = HitRow {
+            embed_score: Some(0.42),
+            ..h
+        };
+        let s2 = serde_json::to_string(&h2).unwrap();
+        assert!(s2.contains("\"embed_score\":0.42"));
     }
 
     #[test]
@@ -371,6 +418,9 @@ mod tests {
     /// `/dev/accel/accel0`, no qdrant child, no real ONNX.
     #[test]
     fn daemon_smoke_run_roundtrip_via_fake_workload() {
+        let _smoke = crate::aiplane::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use crate::aiplane::registry::Registry;
         use crate::aiplane::session::SessionPool;
         use crate::aiplane::workloads::fake::FakeWorkload;
@@ -410,26 +460,17 @@ mod tests {
         thread::spawn(move || {
             while let Ok((req, mut stream)) = req_rx.recv() {
                 let resp = match req {
-                    Req::Run { workload, input } => match registry_for_worker
-                        .run(workload, input)
-                    {
-                        Ok(out) => Resp::Run { output: out },
-                        Err(e) => Resp::Error { msg: e.to_string() },
-                    },
-                    Req::Embed { text } => match registry_for_worker.run(
-                        WorkloadKind::Embed,
-                        WorkloadInput::Text { text },
-                    ) {
-                        Ok(WorkloadOutput::Vector { vector }) => {
-                            Resp::Embed { vector }
+                    Req::Run { workload, input } => {
+                        match registry_for_worker.run(workload, input) {
+                            Ok(out) => Resp::Run { output: out },
+                            Err(e) => Resp::Error { msg: e.to_string() },
                         }
-                        Ok(_) => Resp::Error {
-                            msg: "unexpected non-Vector".into(),
-                        },
-                        Err(e) => Resp::Error { msg: e.to_string() },
-                    },
+                    }
                     Req::Search { .. } => Resp::Error {
                         msg: "search not exercised by smoke".into(),
+                    },
+                    Req::SearchRerank { .. } => Resp::Error {
+                        msg: "search-rerank not exercised by smoke".into(),
                     },
                 };
                 let _ = writeln!(stream, "{}", serde_json::to_string(&resp).unwrap());
@@ -481,19 +522,154 @@ mod tests {
             _ => panic!("non-Vector responses"),
         }
 
-        // Legacy Embed adapter still works.
-        let legacy = request(&Req::Embed {
-            text: "legacy".into(),
-        })
-        .expect("legacy embed");
-        match legacy {
-            Resp::Embed { vector } => {
-                assert_eq!(vector.len(), crate::aiplane::workloads::VECTOR_DIM);
+        // Cleanup the hermetic socket.
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(v) = prev {
+            env::set_var("XDG_RUNTIME_DIR", v);
+        } else {
+            env::remove_var("XDG_RUNTIME_DIR");
+        }
+    }
+
+    /// `Req::SearchRerank` wire path: the daemon's real
+    /// `handle_search_rerank` orchestrates embed → qdrant top-N →
+    /// rerank, which can't run hermetically (qdrant child + an actual
+    /// reranker model). This test exercises the *IPC* contract instead:
+    /// it stands up `serve()`, wires a worker that mimics the
+    /// orchestration with synthetic candidates and a deterministic
+    /// FakeWorkload(Rerank), and verifies the response shape, ordering,
+    /// `embed_score` preservation, and limit truncation.
+    #[test]
+    fn daemon_smoke_search_rerank_via_fake_workload() {
+        let _smoke = crate::aiplane::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        use crate::aiplane::registry::{Registry, WorkloadInput};
+        use crate::aiplane::session::SessionPool;
+        use crate::aiplane::workloads::fake::FakeWorkload;
+        use std::io::Write as _;
+        use std::sync::Arc;
+        use std::thread;
+
+        let unique = format!(
+            "sy-test-rerank-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let tmp = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let prev = env::var("XDG_RUNTIME_DIR").ok();
+        env::set_var("XDG_RUNTIME_DIR", &tmp);
+
+        let (ops_tx, _ops_rx) = mpsc::channel::<Op>();
+        let (req_tx, req_rx) = mpsc::channel::<(Req, UnixStream)>();
+        serve(ops_tx, req_tx).expect("serve");
+
+        let registry: Arc<Registry> = {
+            let pool = Arc::new(SessionPool::new());
+            let mut r = Registry::new(pool);
+            r.register(Arc::new(FakeWorkload::new(WorkloadKind::Rerank)));
+            Arc::new(r)
+        };
+        let reg_w = registry.clone();
+        thread::spawn(move || {
+            while let Ok((req, mut stream)) = req_rx.recv() {
+                let resp = match req {
+                    Req::SearchRerank {
+                        query,
+                        limit,
+                        candidates,
+                        prefix: _,
+                    } => {
+                        // Synthetic candidate set with descending
+                        // cosine score so we can verify the rerank
+                        // actually changed ordering and the
+                        // `embed_score` field carries the prior rank.
+                        let raw: Vec<(f32, String, String)> = (0..candidates)
+                            .map(|i| {
+                                let cosine = 1.0 - (i as f32) * 0.01;
+                                let doc = format!("doc-{i}");
+                                let path = format!("/tmp/{i}.md");
+                                (cosine, path, doc)
+                            })
+                            .collect();
+                        let mut scored: Vec<(f32, f32, String, String)> = raw
+                            .into_iter()
+                            .map(|(cos, path, doc)| {
+                                let s = match reg_w
+                                    .run(
+                                        WorkloadKind::Rerank,
+                                        WorkloadInput::TextPair {
+                                            a: query.clone(),
+                                            b: doc.clone(),
+                                        },
+                                    )
+                                    .expect("fake rerank")
+                                {
+                                    WorkloadOutput::Score { score } => score,
+                                    _ => panic!("expected Score"),
+                                };
+                                (s, cos, path, doc)
+                            })
+                            .collect();
+                        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+                        let hits: Vec<HitRow> = scored
+                            .into_iter()
+                            .take(limit)
+                            .enumerate()
+                            .map(|(i, (rerank, cos, path, doc))| HitRow {
+                                score: rerank,
+                                file_path: path,
+                                chunk_index: i as u32,
+                                chunk_text: doc,
+                                embed_score: Some(cos),
+                            })
+                            .collect();
+                        Resp::Search { hits }
+                    }
+                    other => Resp::Error {
+                        msg: format!("unexpected variant: {other:?}"),
+                    },
+                };
+                let _ = writeln!(stream, "{}", serde_json::to_string(&resp).unwrap());
             }
-            other => panic!("expected Resp::Embed, got {other:?}"),
+        });
+
+        let resp = request(&Req::SearchRerank {
+            query: "what gifts does Anna Lu like".into(),
+            limit: 3,
+            prefix: None,
+            candidates: 10,
+        })
+        .expect("request");
+
+        match resp {
+            Resp::Search { hits } => {
+                assert!(hits.len() <= 3, "limit truncation");
+                assert!(!hits.is_empty(), "non-empty result");
+                // Scores monotonically non-increasing.
+                for w in hits.windows(2) {
+                    assert!(
+                        w[0].score >= w[1].score,
+                        "rerank scores must be descending: {} then {}",
+                        w[0].score,
+                        w[1].score,
+                    );
+                }
+                // embed_score is preserved end-to-end.
+                for h in &hits {
+                    assert!(
+                        h.embed_score.is_some(),
+                        "rerank path must carry the pre-rerank cosine score"
+                    );
+                }
+            }
+            other => panic!("expected Search resp, got {other:?}"),
         }
 
-        // Cleanup the hermetic socket.
         let _ = std::fs::remove_dir_all(&tmp);
         if let Some(v) = prev {
             env::set_var("XDG_RUNTIME_DIR", v);

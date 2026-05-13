@@ -119,12 +119,27 @@ impl SessionStatus {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TranscriptEntry {
-    AgentText { text: String },
-    UserText { text: String },
-    ToolCall { tool: String, input: Value },
-    ToolResult { tool: String, output: Value, ok: bool },
-    Plan { items: Vec<String> },
-    Status { msg: String },
+    AgentText {
+        text: String,
+    },
+    UserText {
+        text: String,
+    },
+    ToolCall {
+        tool: String,
+        input: Value,
+    },
+    ToolResult {
+        tool: String,
+        output: Value,
+        ok: bool,
+    },
+    Plan {
+        items: Vec<String>,
+    },
+    Status {
+        msg: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -143,4 +158,3 @@ pub mod exit {
     pub const REGISTRY: i32 = 3;
     pub const NO_SESSION: i32 = 4;
 }
-

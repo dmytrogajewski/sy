@@ -9,12 +9,7 @@
 //! session pool, status snapshot, CLI dispatch — picks it up by
 //! enumerating `WorkloadKind`.
 
-use std::{
-    fmt,
-    path::PathBuf,
-    sync::Mutex,
-    time::Instant,
-};
+use std::{fmt, path::PathBuf, sync::Mutex, time::Instant};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -89,7 +84,10 @@ impl std::str::FromStr for WorkloadKind {
                 return Ok(k);
             }
         }
-        anyhow::bail!("unknown workload {s:?}; one of {:?}", WorkloadKind::ALL.map(|k| k.as_str()))
+        anyhow::bail!(
+            "unknown workload {s:?}; one of {:?}",
+            WorkloadKind::ALL.map(|k| k.as_str())
+        )
     }
 }
 
@@ -125,6 +123,13 @@ pub struct SpeechSpan {
 /// Per-workload runtime state surfaced to `sy aiplane status`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkloadHealth {
+    /// Coarse lifecycle phase. Drives CLI / waybar messaging and
+    /// short-circuits dispatch (a `Loading` worker returns "not
+    /// ready" rather than blocking the request path).
+    #[serde(default)]
+    pub state: WorkloadState,
+    /// Legacy: `state == Ready{..}` for any backend. Kept for
+    /// backwards-compat with pre-supervisor status consumers.
     pub loaded: bool,
     /// Wall-clock seconds of the most recent successful `run()`.
     pub last_call_unix: u64,
@@ -137,6 +142,38 @@ pub struct WorkloadHealth {
     /// Effective execution provider after `load()` succeeded.
     /// `"vitisai"` / `"cpu"` / `""` (unloaded).
     pub backend: String,
+}
+
+/// Coarse lifecycle phase for a registered workload. Read by status
+/// writers, the supervisor's child manager, and the dispatch path
+/// (which short-circuits if a workload isn't `Ready`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum WorkloadState {
+    /// Model artefact missing from `cache_dir()`. The user hasn't
+    /// run `prep_npu_workload.py --workload <kind>` yet.
+    #[default]
+    NotPrepared,
+    /// Background load thread is running (ONNX → VAIP partition →
+    /// Session::commit). `dispatch` returns "not ready" while in
+    /// this state rather than blocking the req worker.
+    Loading,
+    /// Session attached, serving requests. `backend` carries the
+    /// effective execution provider for status display.
+    Ready { backend: String },
+    /// Load attempted and failed. The daemon won't auto-retry; the
+    /// user must either fix the cause (re-prep the model, free the
+    /// HW context) and restart the worker, or accept the degraded
+    /// state. `reason` is the underlying error chain rendered.
+    Failed { reason: String },
+    /// Explicitly disabled in sy.toml `[aiplane] enabled_workloads`.
+    Unavailable,
+}
+
+impl WorkloadState {
+    pub fn is_ready(&self) -> bool {
+        matches!(self, WorkloadState::Ready { .. })
+    }
 }
 
 /// Anything that can serve an NPU-eligible workload through the
@@ -161,6 +198,20 @@ pub trait Workload: Send + Sync {
     /// variant matches what they expect; mismatched variants
     /// return a clear error rather than panicking.
     fn run(&self, input: WorkloadInput) -> Result<WorkloadOutput>;
+
+    /// Run a batched inference. Default impl loops over `run`; the
+    /// supervisor calls this from `run_batch` so a workload that
+    /// supports session-level batching (e.g. a rerank model exported
+    /// at `(B, 512)`) can override and turn N kernel launches into
+    /// one. Returns one output per input, in order, or `Err` on the
+    /// first failure.
+    fn run_batch(&self, inputs: Vec<WorkloadInput>) -> Result<Vec<WorkloadOutput>> {
+        let mut out = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            out.push(self.run(input)?);
+        }
+        Ok(out)
+    }
 
     /// Best-effort release of the loaded ORT session. Called by the
     /// pool's LRU eviction when memory pressure forces it. Workloads
@@ -246,10 +297,22 @@ impl Registry {
             .unwrap_or_default();
         if let Some(w) = self.workloads.get(&kind) {
             let from_workload = w.health();
+            h.state = from_workload.state;
             h.loaded = from_workload.loaded;
             h.backend = from_workload.backend;
         }
         h
+    }
+
+    /// Snapshot of every registered workload's health, keyed by
+    /// `WorkloadKind::as_str()`. Used by the daemon's status writer
+    /// to enumerate *all* registered kinds, not just the ones that
+    /// have been called. Unregistered kinds are omitted.
+    pub fn all_health(&self) -> std::collections::HashMap<String, WorkloadHealth> {
+        self.kinds()
+            .into_iter()
+            .map(|k| (k.as_str().to_string(), self.health(k)))
+            .collect()
     }
 }
 
@@ -327,6 +390,48 @@ mod tests {
         assert!(h.loaded);
         assert!(h.calls >= 1);
         assert_eq!(h.backend, "fake");
+    }
+
+    #[test]
+    fn all_health_enumerates_every_registered_kind() {
+        // The status snapshot must list a row for every kind in
+        // the registry, even those that have never been called —
+        // that's how `NotPrepared` and `Failed` states become
+        // visible to the user without first triggering a request.
+        use super::super::session::SessionPool;
+        use super::super::workloads::fake::FakeWorkload;
+        use std::sync::Arc;
+        let pool = Arc::new(SessionPool::new());
+        let mut reg = Registry::new(pool);
+        reg.register(Arc::new(FakeWorkload::new(WorkloadKind::Embed)));
+        reg.register(Arc::new(FakeWorkload::new(WorkloadKind::Rerank)));
+        let all = reg.all_health();
+        assert_eq!(all.len(), 2);
+        assert!(all.contains_key("embed"));
+        assert!(all.contains_key("rerank"));
+        // Both unloaded → NotPrepared, not Ready.
+        for (_, h) in &all {
+            assert_eq!(h.state, WorkloadState::NotPrepared);
+            assert!(!h.loaded);
+        }
+    }
+
+    #[test]
+    fn workload_state_ready_serializes_with_backend() {
+        let s = WorkloadState::Ready {
+            backend: "vitisai".into(),
+        };
+        let j = serde_json::to_string(&s).unwrap();
+        assert!(j.contains("\"state\":\"ready\""));
+        assert!(j.contains("\"backend\":\"vitisai\""));
+        let back: WorkloadState = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn workload_state_default_is_not_prepared() {
+        assert_eq!(WorkloadState::default(), WorkloadState::NotPrepared);
+        assert!(!WorkloadState::default().is_ready());
     }
 
     #[test]

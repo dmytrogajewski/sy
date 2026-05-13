@@ -104,7 +104,8 @@ impl Session {
     }
 
     pub fn broadcast(&mut self, event: DaemonEvent) {
-        self.subscribers.retain(|tx| tx.try_send(event.clone()).is_ok());
+        self.subscribers
+            .retain(|tx| tx.try_send(event.clone()).is_ok());
     }
 
     pub fn subscribe(&mut self) -> mpsc::Receiver<DaemonEvent> {
@@ -219,7 +220,11 @@ pub fn entry_from_update(update: &Value) -> Option<TranscriptEntry> {
                 .and_then(|e| e.as_array())
                 .map(|a| {
                     a.iter()
-                        .filter_map(|e| e.get("content").and_then(|c| c.as_str()).map(str::to_string))
+                        .filter_map(|e| {
+                            e.get("content")
+                                .and_then(|c| c.as_str())
+                                .map(str::to_string)
+                        })
                         .collect()
                 })
                 .unwrap_or_default();

@@ -32,7 +32,7 @@ fn ticks_per_sec() -> f64 {
 /// toward the target. Self-correcting; no privileged calls.
 #[derive(Debug)]
 pub struct AdaptiveThrottle {
-    target: f64,            // 0.0..1.0
+    target: f64, // 0.0..1.0
     last_sample: Instant,
     last_jiffies: u64,
     ticks_per_sec: f64,
@@ -124,8 +124,8 @@ impl RunCtx {
     /// Build the daemon's per-pass context. Reuses the daemon's owned
     /// cancellation flag so the user can preempt mid-pass.
     pub fn for_daemon_pass(cancel: Arc<AtomicBool>, throttle: Duration) -> Self {
-        let adaptive = sources::cpu_max_percent()
-            .map(|p| Arc::new(Mutex::new(AdaptiveThrottle::new(p))));
+        let adaptive =
+            sources::cpu_max_percent().map(|p| Arc::new(Mutex::new(AdaptiveThrottle::new(p))));
         Self {
             throttle,
             cancel,

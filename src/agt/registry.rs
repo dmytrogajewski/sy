@@ -50,16 +50,13 @@ pub fn load() -> Result<Vec<AgentSpec>> {
 }
 
 pub fn find(name: &str) -> Result<AgentSpec> {
-    load()?
-        .into_iter()
-        .find(|a| a.name == name)
-        .ok_or_else(|| {
-            AgtError {
-                code: exit::REGISTRY,
-                msg: format!("agent not found in registry: {name}"),
-            }
-            .into()
-        })
+    load()?.into_iter().find(|a| a.name == name).ok_or_else(|| {
+        AgtError {
+            code: exit::REGISTRY,
+            msg: format!("agent not found in registry: {name}"),
+        }
+        .into()
+    })
 }
 
 fn path() -> PathBuf {

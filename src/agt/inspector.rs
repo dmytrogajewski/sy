@@ -223,16 +223,16 @@ fn decode_csi(seq: &[u8]) -> Option<Key> {
     // seq is the body after `ESC [`, including the final byte.
     let last = *seq.last()?;
     match last {
-        b'A' => Some(Key::ScrollUp(1)),         // Up
-        b'B' => Some(Key::ScrollDown(1)),       // Down
+        b'A' => Some(Key::ScrollUp(1)),   // Up
+        b'B' => Some(Key::ScrollDown(1)), // Down
         b'H' => Some(Key::Home),
         b'F' => Some(Key::End),
         b'~' => {
             let params = &seq[..seq.len() - 1];
             let head = params.split(|&c| c == b';').next()?;
             match head {
-                b"5" => Some(Key::ScrollUp(body_rows().saturating_sub(2).max(1))),  // PgUp
-                b"6" => Some(Key::ScrollDown(body_rows().saturating_sub(2).max(1))),// PgDn
+                b"5" => Some(Key::ScrollUp(body_rows().saturating_sub(2).max(1))), // PgUp
+                b"6" => Some(Key::ScrollDown(body_rows().saturating_sub(2).max(1))), // PgDn
                 b"1" | b"7" => Some(Key::Home),
                 b"4" | b"8" => Some(Key::End),
                 _ => None,
@@ -300,7 +300,9 @@ fn apply_event(state: &mut State, event: DaemonEvent) {
             state.permission = Some(summary);
         }
         DaemonEvent::Closed { reason, .. } => {
-            state.transcript.push(format!("\x1b[2m── closed: {reason}\x1b[0m"));
+            state
+                .transcript
+                .push(format!("\x1b[2m── closed: {reason}\x1b[0m"));
             appended += 1;
         }
     }

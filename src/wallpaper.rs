@@ -51,7 +51,8 @@ pub fn run(path: Option<PathBuf>, start: bool, default: bool) -> Result<()> {
             }
         },
         Some(p) => {
-            let abs = p.canonicalize()
+            let abs = p
+                .canonicalize()
                 .with_context(|| format!("resolve {}", p.display()))?;
             if !abs.is_file() {
                 return Err(anyhow!("{} is not a regular file", abs.display()));

@@ -31,17 +31,15 @@ pub fn push(
         std::io::stdin()
             .read_to_end(&mut buf)
             .context("read stdin")?;
-        let display_name = name
-            .map(str::to_string)
-            .unwrap_or_else(|| {
-                let head = String::from_utf8_lossy(&buf);
-                head.lines()
-                    .next()
-                    .unwrap_or("(content)")
-                    .chars()
-                    .take(40)
-                    .collect()
-            });
+        let display_name = name.map(str::to_string).unwrap_or_else(|| {
+            let head = String::from_utf8_lossy(&buf);
+            head.lines()
+                .next()
+                .unwrap_or("(content)")
+                .chars()
+                .take(40)
+                .collect()
+        });
         let content_kind = if std::str::from_utf8(&buf).is_ok() {
             "text"
         } else {
@@ -63,14 +61,12 @@ pub fn push(
         if !p.exists() {
             anyhow::bail!("path not found: {}", p.display());
         }
-        let display_name = name
-            .map(str::to_string)
-            .unwrap_or_else(|| {
-                p.file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("(file)")
-                    .to_string()
-            });
+        let display_name = name.map(str::to_string).unwrap_or_else(|| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("(file)")
+                .to_string()
+        });
         if dry_run {
             eprintln!(
                 "would push (dry-run): kind={} name={} path={}",
@@ -461,7 +457,9 @@ fn agent_via_picker(id: &str) -> Result<()> {
     // user's prompt + a context line pointing at the materialised file.
     let agents = crate::agt::registry::load().unwrap_or_default();
     if agents.is_empty() {
-        return Err(anyhow::anyhow!("no agents registered (configs/sy/agents.toml)"));
+        return Err(anyhow::anyhow!(
+            "no agents registered (configs/sy/agents.toml)"
+        ));
     }
     let names: Vec<String> = agents.iter().map(|a| a.name.clone()).collect();
     let pick = fuzzel_pick("agent", &names)?;
@@ -514,8 +512,8 @@ fn fuzzel_pick(prompt: &str, options: &[String]) -> Result<String> {
 }
 
 pub fn toggle() -> Result<()> {
-    // Tries socket first; if the daemon isn't listening, that's a no-op.
-    // No PID-fallback for now — `sy stack bar` is a single foreground
-    // process and users can manage its lifecycle via niri's spawn-at-startup.
+    // Socket-only: missing socket = silent no-op. `sy stack bar` runs as a
+    // single foreground process and is started via niri's spawn-at-startup,
+    // so a PID fallback would just race the socket.
     ipc::send(&ipc::Op::Toggle)
 }

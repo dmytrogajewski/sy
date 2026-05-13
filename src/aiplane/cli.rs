@@ -49,6 +49,21 @@ pub enum AiplaneCmd {
         #[arg(long)]
         json: bool,
     },
+
+    /// Worker child entrypoint. Spawned by the daemon supervisor —
+    /// not for direct human use. Hosts one `Workload` on its own
+    /// /dev/accel/accel0 HW context and exposes `WorkerReq` on the
+    /// passed Unix socket.
+    #[command(hide = true)]
+    Worker {
+        /// Workload kind this worker hosts.
+        #[arg(long, value_name = "KIND")]
+        kind: String,
+        /// Unix socket path to bind. Supervisor passes the
+        /// deterministic per-kind path (`sy-aiplane-worker-<K>.sock`).
+        #[arg(long, value_name = "PATH")]
+        socket: std::path::PathBuf,
+    },
 }
 
 pub fn dispatch(cmd: AiplaneCmd) -> Result<()> {
@@ -60,6 +75,10 @@ pub fn dispatch(cmd: AiplaneCmd) -> Result<()> {
             input,
             json,
         } => run(&workload, &input, json),
+        AiplaneCmd::Worker { kind, socket } => {
+            let parsed: WorkloadKind = kind.parse()?;
+            super::worker::run(parsed, socket)
+        }
     }
 }
 
@@ -94,7 +113,11 @@ fn status(json_out: bool) -> Result<()> {
     }
     println!(
         "daemon:    {}",
-        if s.daemon_running && fresh { "up" } else { "down" }
+        if s.daemon_running && fresh {
+            "up"
+        } else {
+            "down"
+        }
     );
     if !s.embed_hardware.is_empty() {
         println!("hardware:  {} ({})", s.embed_hardware, s.embed_backend);
@@ -121,7 +144,11 @@ fn list(json_out: bool) -> Result<()> {
     for k in WorkloadKind::ALL {
         let stem = stem_for_kind(k);
         let dir = root.join(stem);
-        let prepared = dir.is_dir() && dir.read_dir().map(|mut r| r.next().is_some()).unwrap_or(false);
+        let prepared = dir.is_dir()
+            && dir
+                .read_dir()
+                .map(|mut r| r.next().is_some())
+                .unwrap_or(false);
         rows.push((k, stem, dir, prepared));
     }
     if json_out {
@@ -139,7 +166,10 @@ fn list(json_out: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&arr)?);
         return Ok(());
     }
-    println!("{:<10}  {:<24}  {:<9}  cache_dir", "kind", "model_stem", "prepared");
+    println!(
+        "{:<10}  {:<24}  {:<9}  cache_dir",
+        "kind", "model_stem", "prepared"
+    );
     for (k, stem, dir, prepared) in rows {
         println!(
             "{:<10}  {:<24}  {:<9}  {}",
@@ -193,7 +223,11 @@ fn run(workload: &str, input: &str, json_out: bool) -> Result<()> {
         // Compact human format per output variant.
         match &output {
             super::registry::WorkloadOutput::Vector { vector } => {
-                println!("vector[{}]: {:?}…", vector.len(), &vector[..vector.len().min(6)]);
+                println!(
+                    "vector[{}]: {:?}…",
+                    vector.len(),
+                    &vector[..vector.len().min(6)]
+                );
             }
             super::registry::WorkloadOutput::Score { score } => println!("score: {score}"),
             super::registry::WorkloadOutput::Text { text } => println!("{text}"),

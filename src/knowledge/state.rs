@@ -89,18 +89,8 @@ pub fn qdrant_storage_dir() -> Result<PathBuf> {
     Ok(d)
 }
 
-#[allow(dead_code)] // wired by ensure_qdrant + future log-rotation tooling
-pub fn daemon_log_path() -> Result<PathBuf> {
-    Ok(root_dir()?.join("daemon.log"))
-}
-
 pub fn qdrant_log_path() -> Result<PathBuf> {
     Ok(root_dir()?.join("qdrant.log"))
-}
-
-#[allow(dead_code)] // wired by ensure_cuda_runtime in main.rs
-pub fn cuda_state_path() -> Result<PathBuf> {
-    Ok(root_dir()?.join("cuda.json"))
 }
 
 pub fn load() -> Result<Index> {

@@ -1,13 +1,7 @@
 //! sy-agentd: long-lived daemon owning all ACP child processes and serving
 //! a Unix-socket protocol used by `sy agt …` clients.
 
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    process::Stdio,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
@@ -44,8 +38,7 @@ async fn run() -> Result<()> {
     }
     let _ = std::fs::remove_file(&sock);
 
-    let listener = UnixListener::bind(&sock)
-        .with_context(|| format!("bind {}", sock.display()))?;
+    let listener = UnixListener::bind(&sock).with_context(|| format!("bind {}", sock.display()))?;
     {
         use std::os::unix::fs::PermissionsExt;
         let mut p = std::fs::metadata(&sock)?.permissions();
@@ -128,7 +121,9 @@ async fn handle_client(stream: UnixStream, sessions: Sessions) -> Result<()> {
         match req {
             ClientReq::Run { agent, cwd, prompt } => {
                 match start_session(&sessions, &agent, &cwd, &prompt).await {
-                    Ok(id) => write_line(&mut wr, &ClientReply::RunReply { session_id: id }).await?,
+                    Ok(id) => {
+                        write_line(&mut wr, &ClientReply::RunReply { session_id: id }).await?
+                    }
                     Err(e) => {
                         write_line(
                             &mut wr,
@@ -283,7 +278,9 @@ async fn start_session(
         child,
         acp_session_id.clone(),
     )?;
-    session.append(TranscriptEntry::UserText { text: prompt.to_string() });
+    session.append(TranscriptEntry::UserText {
+        text: prompt.to_string(),
+    });
     let _ = session.set_status(SessionStatus::Running);
     let shared: SharedSession = Arc::new(Mutex::new(session));
     sessions.lock().await.insert(id.clone(), shared.clone());
@@ -313,7 +310,10 @@ async fn start_session(
             let s = prompt_session.lock().await;
             s.child.clone()
         };
-        let _ = prompt_session.lock().await.set_status(SessionStatus::Working);
+        let _ = prompt_session
+            .lock()
+            .await
+            .set_status(SessionStatus::Working);
         let res = child
             .lock()
             .await
@@ -340,7 +340,11 @@ async fn start_session(
     Ok(id)
 }
 
-async fn run_inbound_loop(session: SharedSession, acp_session_id: String, mut inbound: mpsc::Receiver<AcpInbound>) {
+async fn run_inbound_loop(
+    session: SharedSession,
+    acp_session_id: String,
+    mut inbound: mpsc::Receiver<AcpInbound>,
+) {
     while let Some(msg) = inbound.recv().await {
         match msg {
             AcpInbound::Notification { method, params } if method == "session/update" => {
@@ -351,7 +355,9 @@ async fn run_inbound_loop(session: SharedSession, acp_session_id: String, mut in
                 }
             }
             AcpInbound::Notification { .. } => { /* ignore */ }
-            AcpInbound::Request { id, method, params } if method == "session/request_permission" => {
+            AcpInbound::Request { id, method, params }
+                if method == "session/request_permission" =>
+            {
                 handle_permission(session.clone(), id, params).await;
             }
             AcpInbound::Request { id, .. } => {
@@ -430,7 +436,9 @@ async fn handle_permission(session: SharedSession, req_id: Value, params: Value)
     };
     let option_id = match decision {
         Decision::Allow => pick(&["allow", "accept"]).unwrap_or_else(|| "allow_once".into()),
-        Decision::Deny => pick(&["reject", "deny", "cancel"]).unwrap_or_else(|| "reject_once".into()),
+        Decision::Deny => {
+            pick(&["reject", "deny", "cancel"]).unwrap_or_else(|| "reject_once".into())
+        }
     };
 
     let outcome = json!({
@@ -447,7 +455,11 @@ async fn handle_permission(session: SharedSession, req_id: Value, params: Value)
         s.append(TranscriptEntry::Status {
             msg: format!(
                 "permission {}: {}",
-                if matches!(decision, Decision::Allow) { "allowed" } else { "denied" },
+                if matches!(decision, Decision::Allow) {
+                    "allowed"
+                } else {
+                    "denied"
+                },
                 summary
             ),
         });
@@ -468,7 +480,9 @@ async fn send_prompt(sessions: &Sessions, session_id: &str, text: &str) -> Resul
     };
     {
         let mut s = shared.lock().await;
-        s.append(TranscriptEntry::UserText { text: text.to_string() });
+        s.append(TranscriptEntry::UserText {
+            text: text.to_string(),
+        });
         let _ = s.set_status(SessionStatus::Working);
     }
     let session_for_status = shared.clone();
@@ -568,7 +582,10 @@ async fn stream_tail(
     }
     if let Some(ref mut rx) = rx {
         while let Some(e) = rx.recv().await {
-            if write_line(wr, &ClientReply::Event { event: e }).await.is_err() {
+            if write_line(wr, &ClientReply::Event { event: e })
+                .await
+                .is_err()
+            {
                 break;
             }
         }

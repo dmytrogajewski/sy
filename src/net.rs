@@ -46,11 +46,25 @@ pub fn menu() -> Result<()> {
     }
 
     items.push((
-        format!("  wi-fi       {}", if wifi_on { "on   (click to disable)" } else { "off  (click to enable)" }),
+        format!(
+            "  wi-fi       {}",
+            if wifi_on {
+                "on   (click to disable)"
+            } else {
+                "off  (click to enable)"
+            }
+        ),
         Action::ToggleWifi(wifi_on),
     ));
     items.push((
-        format!("  networking  {}", if net_on { "on   (click to disable)" } else { "off  (click to enable)" }),
+        format!(
+            "  networking  {}",
+            if net_on {
+                "on   (click to disable)"
+            } else {
+                "off  (click to enable)"
+            }
+        ),
         Action::ToggleNet(net_on),
     ));
     items.push(("  nmtui…".into(), Action::Nmtui));
@@ -95,14 +109,26 @@ pub fn menu() -> Result<()> {
         Action::Noop => Ok(()),
         Action::ToggleWifi(on) => {
             let v = if on { "off" } else { "on" };
-            let ok = Command::new("nmcli").args(["radio", "wifi", v]).status()?.success();
-            wifi::notify("net", &format!("wi-fi {v}{}", if ok { "" } else { " (failed)" }));
+            let ok = Command::new("nmcli")
+                .args(["radio", "wifi", v])
+                .status()?
+                .success();
+            wifi::notify(
+                "net",
+                &format!("wi-fi {v}{}", if ok { "" } else { " (failed)" }),
+            );
             Ok(())
         }
         Action::ToggleNet(on) => {
             let v = if on { "off" } else { "on" };
-            let ok = Command::new("nmcli").args(["networking", v]).status()?.success();
-            wifi::notify("net", &format!("networking {v}{}", if ok { "" } else { " (failed)" }));
+            let ok = Command::new("nmcli")
+                .args(["networking", v])
+                .status()?
+                .success();
+            wifi::notify(
+                "net",
+                &format!("networking {v}{}", if ok { "" } else { " (failed)" }),
+            );
             Ok(())
         }
         Action::Nmtui => popup::toggle("nmtui"),
@@ -111,7 +137,10 @@ pub fn menu() -> Result<()> {
                 .args(["connection", "up", "id", &name])
                 .status()?
                 .success();
-            wifi::notify("net", &format!("{name} up{}", if ok { "" } else { " (failed)" }));
+            wifi::notify(
+                "net",
+                &format!("{name} up{}", if ok { "" } else { " (failed)" }),
+            );
             Ok(())
         }
         Action::ConnDown(name) => {
@@ -119,7 +148,10 @@ pub fn menu() -> Result<()> {
                 .args(["connection", "down", "id", &name])
                 .status()?
                 .success();
-            wifi::notify("net", &format!("{name} down{}", if ok { "" } else { " (failed)" }));
+            wifi::notify(
+                "net",
+                &format!("{name} down{}", if ok { "" } else { " (failed)" }),
+            );
             Ok(())
         }
         Action::Wifi(ssid) => wifi::connect(&ssid),
@@ -146,7 +178,14 @@ fn networking_enabled() -> bool {
 
 fn active_connections() -> Vec<(String, String, String)> {
     let Some(out) = Command::new("nmcli")
-        .args(["-t", "-f", "NAME,TYPE,DEVICE", "connection", "show", "--active"])
+        .args([
+            "-t",
+            "-f",
+            "NAME,TYPE,DEVICE",
+            "connection",
+            "show",
+            "--active",
+        ])
         .output()
         .ok()
     else {

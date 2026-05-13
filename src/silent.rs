@@ -118,8 +118,7 @@ fn read_state() -> String {
 fn write_state(s: &str) -> Result<()> {
     let p = state_path();
     if let Some(parent) = p.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("mkdir {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
     }
     fs::write(&p, format!("{s}\n")).with_context(|| format!("write {}", p.display()))?;
     Ok(())
@@ -380,9 +379,7 @@ fn waybar_out() -> Result<()> {
         _ => format!("auto window {}–{}", cfg.start, cfg.end),
     };
     let tooltip = format!("silent mode ({scope})\\nclick: toggle");
-    println!(
-        r#"{{"text":"{GLYPH_MOON}","class":"active","tooltip":"{tooltip}"}}"#
-    );
+    println!(r#"{{"text":"{GLYPH_MOON}","class":"active","tooltip":"{tooltip}"}}"#);
     Ok(())
 }
 

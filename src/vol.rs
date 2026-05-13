@@ -93,7 +93,9 @@ fn step(delta: &str, beep_hz: f32) -> Result<()> {
 }
 
 fn toggle(sink: &str, label: &str) -> Result<()> {
-    Command::new("wpctl").args(["set-mute", sink, "toggle"]).status()?;
+    Command::new("wpctl")
+        .args(["set-mute", sink, "toggle"])
+        .status()?;
     notify(sink, label)
 }
 
@@ -120,7 +122,10 @@ fn notify(sink: &str, label: &str) -> Result<()> {
             "-t",
             "800",
             "-h",
-            &format!("string:x-canonical-private-synchronous:sy-{}", label.to_lowercase()),
+            &format!(
+                "string:x-canonical-private-synchronous:sy-{}",
+                label.to_lowercase()
+            ),
             "-h",
             &format!("int:value:{}", pct),
             &body,

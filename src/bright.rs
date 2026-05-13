@@ -26,7 +26,9 @@ pub fn run(action: Option<&str>, waybar: bool) -> Result<()> {
 }
 
 fn step(delta: &str) -> Result<()> {
-    Command::new("brightnessctl").args(["set", delta]).status()?;
+    Command::new("brightnessctl")
+        .args(["set", delta])
+        .status()?;
     notify()?;
     refresh_waybar();
     Ok(())

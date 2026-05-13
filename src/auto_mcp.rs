@@ -290,9 +290,7 @@ fn atomic_write_json(path: &Path, v: &Value) -> Result<()> {
     let body = serde_json::to_vec_pretty(v)?;
     let tmp = path.with_extension(format!(
         "{}.sy-tmp",
-        path.extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("json")
+        path.extension().and_then(|s| s.to_str()).unwrap_or("json")
     ));
     if let Some(parent) = tmp.parent() {
         if !parent.exists() {
@@ -357,8 +355,9 @@ fn write_codex_entry(path: &Path, name: &str, entry: &McpEntry) -> Result<()> {
     } else {
         String::new()
     };
-    let mut doc: toml_edit::DocumentMut =
-        body.parse().with_context(|| format!("parse {}", path.display()))?;
+    let mut doc: toml_edit::DocumentMut = body
+        .parse()
+        .with_context(|| format!("parse {}", path.display()))?;
     if doc.get("mcp_servers").is_none() {
         doc.insert("mcp_servers", Item::Table(Table::new()));
     }
@@ -382,8 +381,9 @@ fn remove_codex_entry(path: &Path, name: &str) -> Result<bool> {
         return Ok(false);
     }
     let body = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let mut doc: toml_edit::DocumentMut =
-        body.parse().with_context(|| format!("parse {}", path.display()))?;
+    let mut doc: toml_edit::DocumentMut = body
+        .parse()
+        .with_context(|| format!("parse {}", path.display()))?;
     let Some(servers) = doc.get_mut("mcp_servers").and_then(|i| i.as_table_mut()) else {
         return Ok(false);
     };
@@ -400,9 +400,7 @@ fn remove_codex_entry(path: &Path, name: &str) -> Result<bool> {
 fn atomic_write_str(path: &Path, body: &str) -> Result<()> {
     let tmp = path.with_extension(format!(
         "{}.sy-tmp",
-        path.extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("toml")
+        path.extension().and_then(|s| s.to_str()).unwrap_or("toml")
     ));
     {
         let mut f = File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
@@ -458,8 +456,7 @@ fn write_goose_entry(path: &Path, name: &str, entry: &McpEntry) -> Result<()> {
         if body.trim().is_empty() {
             Value::Mapping(Mapping::new())
         } else {
-            serde_yml::from_str(&body)
-                .with_context(|| format!("parse {}", path.display()))?
+            serde_yml::from_str(&body).with_context(|| format!("parse {}", path.display()))?
         }
     } else {
         Value::Mapping(Mapping::new())
@@ -503,10 +500,7 @@ fn write_goose_entry(path: &Path, name: &str, entry: &McpEntry) -> Result<()> {
         Value::String("env_keys".into()),
         Value::Sequence(Vec::new()),
     );
-    e.insert(
-        Value::String("envs".into()),
-        Value::Mapping(Mapping::new()),
-    );
+    e.insert(Value::String("envs".into()), Value::Mapping(Mapping::new()));
     e.insert(Value::String("timeout".into()), Value::Number(300.into()));
     e.insert(Value::String("bundled".into()), Value::Bool(false));
 
@@ -522,10 +516,7 @@ fn remove_goose_entry(path: &Path, name: &str) -> Result<bool> {
     let body = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let mut root: serde_yml::Value =
         serde_yml::from_str(&body).with_context(|| format!("parse {}", path.display()))?;
-    let Some(extensions) = root
-        .get_mut("extensions")
-        .and_then(|v| v.as_mapping_mut())
-    else {
+    let Some(extensions) = root.get_mut("extensions").and_then(|v| v.as_mapping_mut()) else {
         return Ok(false);
     };
     let key = serde_yml::Value::String(name.into());
@@ -539,7 +530,10 @@ fn remove_goose_entry(path: &Path, name: &str) -> Result<bool> {
 // ── helpers ────────────────────────────────────────────────────────────
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var("HOME").ok().filter(|h| !h.is_empty()).map(PathBuf::from)
+    std::env::var("HOME")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
 }
 
 /// Resolve the absolute path of the running `sy` binary so the entry

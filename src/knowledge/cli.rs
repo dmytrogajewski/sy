@@ -6,9 +6,8 @@
 
 use std::{
     collections::HashSet,
-    io::Write,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
 };
 
 use anyhow::{Context, Result};
@@ -143,12 +142,22 @@ pub fn list(json_out: bool) -> Result<()> {
                 SourceMode::Explicit => "explicit",
                 SourceMode::Discover => "discover",
             };
-            println!("{:<3} {:<8} {}  ({})", mark, mode, s.path, resolved.display());
+            println!(
+                "{:<3} {:<8} {}  ({})",
+                mark,
+                mode,
+                s.path,
+                resolved.display()
+            );
         }
     }
     if !discovered.is_empty() {
         println!();
-        println!("discovered ({} qdr.toml manifest{})", discovered.len(), if discovered.len() == 1 { "" } else { "s" });
+        println!(
+            "discovered ({} qdr.toml manifest{})",
+            discovered.len(),
+            if discovered.len() == 1 { "" } else { "s" }
+        );
         for m in &discovered {
             let mark = if m.enabled { "y" } else { "-" };
             println!("{:<3} {}  [{}]", mark, m.folder.display(), m.name);
@@ -288,7 +297,10 @@ fn build_tooltip(s: &status::Status) -> String {
     let now = state::now_secs();
     let next_in = s.next_run_unix.saturating_sub(now);
     let last_ago = if s.last_index_at_unix > 0 {
-        format!("{} ago", human_secs(now.saturating_sub(s.last_index_at_unix)))
+        format!(
+            "{} ago",
+            human_secs(now.saturating_sub(s.last_index_at_unix))
+        )
     } else {
         "never".into()
     };
@@ -433,7 +445,10 @@ pub fn status_cmd(json_out: bool) -> Result<()> {
         Ok(s) => s,
         Err(_) => {
             if json_out {
-                println!("{}", serde_json::to_string_pretty(&json!({"daemon_running": false}))?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({"daemon_running": false}))?
+                );
             } else {
                 println!("(daemon down — no status file)");
             }
@@ -534,9 +549,7 @@ fn send_or_warn(op: &ipc::Op, label: &str) -> Result<()> {
     // the socket separately so we can give the user a hint when the
     // daemon's actually down.
     if !ipc::socket_path().exists() {
-        eprintln!(
-            "sy knowledge: daemon socket missing — `sy knowledge {label}` had no effect"
-        );
+        eprintln!("sy knowledge: daemon socket missing — `sy knowledge {label}` had no effect");
         return Ok(());
     }
     ipc::send(op)?;
@@ -595,9 +608,7 @@ pub fn bench(n: usize, json_out: bool) -> Result<()> {
         println!("throughput:    {:.0} chunks/s", chunks_per_s);
         println!("batch:         mean {:.1} ms, p95 {} ms", mean_ms, p95_ms);
         println!();
-        println!(
-            "Tip: in another terminal, `nvidia-smi dmon -s u -c 30` polls GPU SM/MEM"
-        );
+        println!("Tip: in another terminal, `nvidia-smi dmon -s u -c 30` polls GPU SM/MEM");
         println!("utilisation at 1 Hz — run alongside this bench to see GPU spikes.");
     }
     Ok(())
@@ -684,10 +695,7 @@ pub fn mcp_status_cmd(json_out: bool) -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "[knowledge].mcp_enabled = {}",
-        sources::mcp_enabled()
-    );
+    println!("[knowledge].mcp_enabled = {}", sources::mcp_enabled());
     println!();
     println!("{:<14} {:<3} {:<3} PATH", "AGENT", "WR", "ON");
     for r in &rows {
@@ -867,12 +875,13 @@ pub fn sync(yes: bool) -> Result<()> {
     // only services one HW context at a time), and falls back to
     // 14-thread CPU EP when it can't grab the device — turning a 2 h
     // NPU re-embed into a 30 h CPU storm.
-    if status::load().ok().filter(|s| status::is_fresh(s) && s.daemon_running).is_some() {
-        ipc::send(&ipc::Op::FullResync)
-            .with_context(|| "send FullResync to daemon")?;
-        println!(
-            "queued full resync on daemon — watch `sy knowledge status`"
-        );
+    if status::load()
+        .ok()
+        .filter(|s| status::is_fresh(s) && s.daemon_running)
+        .is_some()
+    {
+        ipc::send(&ipc::Op::FullResync).with_context(|| "send FullResync to daemon")?;
+        println!("queued full resync on daemon — watch `sy knowledge status`");
         return Ok(());
     }
     qdrant::recreate_collection()?;
@@ -905,14 +914,21 @@ pub fn schedule(interval: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-pub fn search(query: &str, limit: usize, json_out: bool, source: Option<&Path>) -> Result<()> {
+pub fn search(
+    query: &str,
+    limit: usize,
+    json_out: bool,
+    source: Option<&Path>,
+    rerank: bool,
+    candidates: usize,
+) -> Result<()> {
     let prefix = source.map(|p| {
         sources::expand(&p.display().to_string())
             .unwrap_or_else(|_| p.to_path_buf())
             .display()
             .to_string()
     });
-    let hits = search_hits(query, limit, prefix.as_deref())?;
+    let hits = search_hits_opts(query, limit, prefix.as_deref(), rerank, candidates)?;
     if json_out {
         let arr: Vec<_> = hits
             .iter()
@@ -933,10 +949,7 @@ pub fn search(query: &str, limit: usize, json_out: bool, source: Option<&Path>) 
         return Ok(());
     }
     for h in &hits {
-        println!(
-            "── {:.3}  {}  [{}]",
-            h.score, h.file_path, h.chunk_index
-        );
+        println!("── {:.3}  {}  [{}]", h.score, h.file_path, h.chunk_index);
         for line in h.chunk_text.lines().take(4) {
             println!("  {}", line);
         }
@@ -945,61 +958,61 @@ pub fn search(query: &str, limit: usize, json_out: bool, source: Option<&Path>) 
     Ok(())
 }
 
-/// Shared search path: prefer the daemon (it owns the NPU) and fall
-/// back to in-process embedding if the daemon is down. Used by
-/// `sy knowledge search`, `sy knowledge pick`, and the embedded MCP
-/// server's `tool_search`. Without this, every consumer loads its
-/// own ORT session and fights the daemon for /dev/accel/accel0 —
-/// the loser silently downgrades to CUDA / CPU.
-pub fn search_hits(
-    query: &str,
-    limit: usize,
-    prefix: Option<&str>,
-) -> Result<Vec<ipc::HitRow>> {
-    if let Some(hits) = try_daemon_search(query, limit, prefix)? {
-        return Ok(hits);
-    }
-    // Daemon down / unreachable → embed in-process and hit qdrant
-    // directly. Keeps `sy knowledge search` working offline.
-    let vec = embed::embed_one(query)?;
-    let hits = qdrant::search(&vec, limit, prefix)?;
-    Ok(hits
-        .into_iter()
-        .map(|h| ipc::HitRow {
-            score: h.score,
-            file_path: h.payload.file_path,
-            chunk_index: h.payload.chunk_index,
-            chunk_text: h.payload.chunk_text,
-        })
-        .collect())
+/// Shared search path. The daemon is the only process that owns the
+/// NPU — used by `sy knowledge search`, `sy knowledge pick`, and the
+/// embedded MCP server's `tool_search`. Returns a hard error if the
+/// daemon isn't reachable; there is no in-process fallback (that
+/// path would race the daemon for /dev/accel/accel0 and end up on
+/// CPU silently).
+///
+/// Default flow is two-stage (embed → qdrant top-N → bge-reranker).
+/// See `search_hits_opts` for the flag-aware version.
+pub fn search_hits(query: &str, limit: usize, prefix: Option<&str>) -> Result<Vec<ipc::HitRow>> {
+    search_hits_opts(query, limit, prefix, true, 30)
 }
 
-fn try_daemon_search(
+/// Flag-aware search. `rerank=true` (default) does embed → qdrant
+/// top-`candidates` → bge-reranker → top-`limit`. `rerank=false`
+/// skips the cross-encoder pass for lower latency.
+pub fn search_hits_opts(
     query: &str,
     limit: usize,
     prefix: Option<&str>,
-) -> Result<Option<Vec<ipc::HitRow>>> {
-    // Liveness probe via the daemon's status snapshot — same shape
-    // as `sync()` uses to decide whether to delegate FullResync.
+    rerank: bool,
+    candidates: usize,
+) -> Result<Vec<ipc::HitRow>> {
     let alive = status::load()
         .ok()
         .map(|s| status::is_fresh(&s) && s.daemon_running)
         .unwrap_or(false);
     if !alive {
-        return Ok(None);
+        anyhow::bail!(
+            "sy-knowledge daemon is not running — start it with \
+             `systemctl --user start sy-knowledge.service` \
+             (or `sy knowledge install-service` for first-time setup)"
+        );
     }
-    let req = ipc::Req::Search {
-        query: query.to_string(),
-        limit,
-        prefix: prefix.map(String::from),
+    let req = if rerank {
+        ipc::Req::SearchRerank {
+            query: query.to_string(),
+            limit,
+            prefix: prefix.map(String::from),
+            candidates,
+        }
+    } else {
+        ipc::Req::Search {
+            query: query.to_string(),
+            limit,
+            prefix: prefix.map(String::from),
+        }
     };
     match ipc::request(&req) {
-        Ok(ipc::Resp::Search { hits }) => Ok(Some(hits)),
-        Ok(ipc::Resp::Error { msg }) => {
-            anyhow::bail!("daemon search: {msg}")
-        }
+        Ok(ipc::Resp::Search { hits }) => Ok(hits),
+        Ok(ipc::Resp::Error { msg }) => anyhow::bail!("daemon: {msg}"),
         Ok(other) => anyhow::bail!("daemon: unexpected response {other:?}"),
-        Err(ipc::IpcError::DaemonDown) => Ok(None),
+        Err(ipc::IpcError::DaemonDown) => {
+            anyhow::bail!("daemon socket disappeared between liveness probe and request")
+        }
         Err(ipc::IpcError::Wire(e)) => Err(e.context("ipc request")),
     }
 }
@@ -1168,7 +1181,10 @@ pub fn run_index(
             let unchanged = if full_resync {
                 false
             } else {
-                idx.files.get(&key).map(|e| e.mtime == mtime).unwrap_or(false)
+                idx.files
+                    .get(&key)
+                    .map(|e| e.mtime == mtime)
+                    .unwrap_or(false)
             };
             if unchanged {
                 continue;
@@ -1183,11 +1199,17 @@ pub fn run_index(
                             | extract::SkipReason::PdfFailed(_)
                             | extract::SkipReason::ReadFailed(_)
                     ) {
-                        eprintln!(
-                            "sy knowledge: skip {} ({})",
-                            p.display(),
-                            reason.label()
-                        );
+                        match reason.detail() {
+                            Some(detail) => eprintln!(
+                                "sy knowledge: skip {} ({}: {})",
+                                p.display(),
+                                reason.label(),
+                                detail
+                            ),
+                            None => {
+                                eprintln!("sy knowledge: skip {} ({})", p.display(), reason.label())
+                            }
+                        }
                     }
                     report.skipped += 1;
                     continue;
@@ -1353,25 +1375,7 @@ fn flush_batch(
     Ok(())
 }
 
-/// Helper used by other modules — write to wl-copy for any "copy result"
-/// flows we may add later. Not called from the main CLI today; kept for
-/// parity with the stack module's affordances.
-#[allow(dead_code)]
-pub fn copy_to_clipboard(text: &str) -> Result<()> {
-    let mut child = Command::new("wl-copy")
-        .stdin(Stdio::piped())
-        .spawn()
-        .context("wl-copy")?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(text.as_bytes())?;
-    }
-    let _ = child.wait();
-    Ok(())
-}
-
-const SY_KNOWLEDGE_UNIT: &str = include_str!(
-    "../../configs/systemd/system/sy-knowledge.service"
-);
+const SY_KNOWLEDGE_UNIT: &str = include_str!("../../configs/systemd/system/sy-knowledge.service");
 
 const UNIT_DEST: &str = "/etc/systemd/system/sy-knowledge.service";
 
@@ -1418,7 +1422,13 @@ pub fn install_service(dry_run: bool) -> Result<()> {
     std::fs::write(&tmp, rendered.as_bytes())
         .with_context(|| format!("write {}", tmp.display()))?;
     sudo(
-        &["install", "-m", "0644", &tmp.display().to_string(), UNIT_DEST],
+        &[
+            "install",
+            "-m",
+            "0644",
+            &tmp.display().to_string(),
+            UNIT_DEST,
+        ],
         "install unit file",
     )?;
     let _ = std::fs::remove_file(&tmp);
@@ -1443,7 +1453,14 @@ pub fn install_service(dry_run: bool) -> Result<()> {
         .unwrap_or(false);
     if !already {
         sudo(
-            &["semanage", "fcontext", "-a", "-t", "bin_t", &fcontext_pattern],
+            &[
+                "semanage",
+                "fcontext",
+                "-a",
+                "-t",
+                "bin_t",
+                &fcontext_pattern,
+            ],
             "register selinux fcontext",
         )?;
     }
@@ -1455,10 +1472,7 @@ pub fn install_service(dry_run: bool) -> Result<()> {
     let _ = Command::new("sudo")
         .args(["systemctl", "stop", "sy-knowledge.service"])
         .status();
-    sudo(
-        &["systemctl", "daemon-reload"],
-        "systemctl daemon-reload",
-    )?;
+    sudo(&["systemctl", "daemon-reload"], "systemctl daemon-reload")?;
     sudo(
         &["systemctl", "enable", "--now", "sy-knowledge.service"],
         "systemctl enable --now",
