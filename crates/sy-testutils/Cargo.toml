@@ -1,0 +1,18 @@
+[package]
+name = "sy-testutils"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Daemon-in-thread integration harness for sy workspace tests. Dev-dep only — never linked into sy itself."
+
+[dependencies]
+# Runtime deps are intentionally narrow: this crate is a dev-dep
+# consumed by other crates' [dev-dependencies], so anything it pulls
+# in lands in the test build tree of every consumer. Tokio is the
+# substrate so Zone 2's async IPC v1 server can be driven directly
+# from a `spawn_in_thread` closure without each consumer wiring its
+# own runtime.
+anyhow.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+sy-core = { path = "../sy-core" }

@@ -7,7 +7,6 @@
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use anyhow::{Context, Result};
@@ -134,7 +133,7 @@ pub fn list(json_out: bool) -> Result<()> {
         return Ok(());
     }
     if !section.sources.is_empty() {
-        println!("{:<3} {:<8} {}", "EN", "MODE", "PATH");
+        println!("{:<3} {:<8} PATH", "EN", "MODE");
         for s in &section.sources {
             let resolved = sources::expand(&s.path).unwrap_or_else(|_| PathBuf::from(&s.path));
             let mark = if s.enabled { "y" } else { "-" };
@@ -221,7 +220,7 @@ fn human_count_full(n: u64) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(bytes.len() + bytes.len() / 3);
     for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i) % 3 == 0 {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(*b as char);
@@ -334,7 +333,7 @@ fn build_tooltip(s: &status::Status) -> String {
     // Tags facet — best-effort. Empty list when qdrant is down or the
     // index isn't built yet; tooltip still renders without the section.
     let mut tags = qdrant::facet_tags(32).unwrap_or_default();
-    tags.sort_by(|a, b| b.1.cmp(&a.1));
+    tags.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
 
     let mut out = String::new();
     out.push_str("<tt>");
@@ -570,7 +569,7 @@ pub fn bench(n: usize, json_out: bool) -> Result<()> {
     let total_start = std::time::Instant::now();
     for chunk in texts.chunks(batch_size) {
         let t0 = std::time::Instant::now();
-        let _ = embed::embed_batch(&chunk.iter().cloned().collect::<Vec<_>>())?;
+        let _ = embed::embed_batch(chunk)?;
         batch_ms.push(t0.elapsed().as_millis());
     }
     let total_ms = total_start.elapsed().as_millis() as f64;
@@ -921,6 +920,7 @@ pub fn search(
     source: Option<&Path>,
     rerank: bool,
     candidates: usize,
+    priority: sy_core::Priority,
 ) -> Result<()> {
     let prefix = source.map(|p| {
         sources::expand(&p.display().to_string())
@@ -928,7 +928,14 @@ pub fn search(
             .display()
             .to_string()
     });
-    let hits = search_hits_opts(query, limit, prefix.as_deref(), rerank, candidates)?;
+    let hits = search_hits_opts(
+        query,
+        limit,
+        prefix.as_deref(),
+        rerank,
+        candidates,
+        priority,
+    )?;
     if json_out {
         let arr: Vec<_> = hits
             .iter()
@@ -968,18 +975,29 @@ pub fn search(
 /// Default flow is two-stage (embed → qdrant top-N → bge-reranker).
 /// See `search_hits_opts` for the flag-aware version.
 pub fn search_hits(query: &str, limit: usize, prefix: Option<&str>) -> Result<Vec<ipc::HitRow>> {
-    search_hits_opts(query, limit, prefix, true, 30)
+    search_hits_opts(
+        query,
+        limit,
+        prefix,
+        true,
+        30,
+        sy_core::Priority::Interactive,
+    )
 }
 
 /// Flag-aware search. `rerank=true` (default) does embed → qdrant
 /// top-`candidates` → bge-reranker → top-`limit`. `rerank=false`
-/// skips the cross-encoder pass for lower latency.
+/// skips the cross-encoder pass for lower latency. `priority`
+/// controls the scheduler class for the embed pass (SPEC §4.7);
+/// CLI surfaces default `Interactive`, daemon-internal callers
+/// override to `Background` for indexing passes.
 pub fn search_hits_opts(
     query: &str,
     limit: usize,
     prefix: Option<&str>,
     rerank: bool,
     candidates: usize,
+    priority: sy_core::Priority,
 ) -> Result<Vec<ipc::HitRow>> {
     let alive = status::load()
         .ok()
@@ -998,15 +1016,17 @@ pub fn search_hits_opts(
             limit,
             prefix: prefix.map(String::from),
             candidates,
+            priority,
         }
     } else {
         ipc::Req::Search {
             query: query.to_string(),
             limit,
             prefix: prefix.map(String::from),
+            priority,
         }
     };
-    match ipc::request(&req) {
+    match ipc::request_with_priority(&req, priority) {
         Ok(ipc::Resp::Search { hits }) => Ok(hits),
         Ok(ipc::Resp::Error { msg }) => anyhow::bail!("daemon: {msg}"),
         Ok(other) => anyhow::bail!("daemon: unexpected response {other:?}"),
@@ -1052,7 +1072,7 @@ fn explicit_job(root: &Path) -> IndexJob {
         .git_global(true);
     let job_root = root.to_path_buf();
     wb.filter_entry(move |dent| {
-        if !dent.file_type().map_or(false, |ft| ft.is_dir()) {
+        if !dent.file_type().is_some_and(|ft| ft.is_dir()) {
             return true;
         }
         if dent.path() == job_root.as_path() {
@@ -1137,15 +1157,7 @@ pub fn run_index(
 
     let mut report = IndexReport::default();
     let mut seen_files: HashSet<String> = HashSet::new();
-    // Per-file: (path, key, hash, chunks, source_tag, tags)
-    let mut pending_files: Vec<(
-        PathBuf,
-        String,
-        String,
-        Vec<chunk::Chunk>,
-        String,
-        Vec<String>,
-    )> = Vec::new();
+    let mut pending_files: Vec<PendingFile> = Vec::new();
 
     'outer: for job in &jobs {
         if !job.folder.exists() {
@@ -1234,14 +1246,14 @@ pub fn run_index(
                     qdrant::delete_points(&e.point_ids)?;
                 }
             }
-            pending_files.push((
-                p.to_path_buf(),
+            pending_files.push(PendingFile {
+                path: p.to_path_buf(),
                 key,
                 hash,
                 chunks,
-                job.source_tag.clone(),
-                job.tags.clone(),
-            ));
+                source_tag: job.source_tag.clone(),
+                tags: job.tags.clone(),
+            });
         }
     }
 
@@ -1254,7 +1266,7 @@ pub fn run_index(
         if ctx.cancelled() {
             break 'embed;
         }
-        let chunks = &item.3;
+        let chunks = &item.chunks;
         for (ci, c) in chunks.iter().enumerate() {
             batch_texts.push(c.text.clone());
             batch_meta.push((fi, ci));
@@ -1282,7 +1294,7 @@ pub fn run_index(
         ctx,
     )?;
 
-    for (i, (path, key, hash, _chunks, _src, _tags)) in pending_files.into_iter().enumerate() {
+    for (i, item) in pending_files.into_iter().enumerate() {
         // Only commit files whose chunks all made it into qdrant. After a
         // mid-pass cancel, late-pending files have empty point_ids vecs —
         // skip them so the next pass treats them as still-changed.
@@ -1290,10 +1302,10 @@ pub fn run_index(
             continue;
         }
         idx.files.insert(
-            key,
+            item.key,
             state::FileEntry {
-                mtime: state::mtime_secs(&path),
-                content_hash: hash,
+                mtime: state::mtime_secs(&item.path),
+                content_hash: item.hash,
                 point_ids: std::mem::take(&mut file_point_ids[i]),
             },
         );
@@ -1321,17 +1333,23 @@ pub fn run_index(
     Ok(report)
 }
 
+/// Per-file batch entry queued by `index_jobs` and consumed by
+/// `flush_batch`. Module-scope so both functions share the layout;
+/// not exposed outside this module because it carries internal
+/// chunking detail no other caller needs.
+struct PendingFile {
+    path: PathBuf,
+    key: String,
+    hash: String,
+    chunks: Vec<chunk::Chunk>,
+    source_tag: String,
+    tags: Vec<String>,
+}
+
 fn flush_batch(
     texts: &mut Vec<String>,
     meta: &mut Vec<(usize, usize)>,
-    pending: &[(
-        PathBuf,
-        String,
-        String,
-        Vec<chunk::Chunk>,
-        String,
-        Vec<String>,
-    )],
+    pending: &[PendingFile],
     file_point_ids: &mut [Vec<String>],
     report: &mut IndexReport,
     ctx: &RunCtx,
@@ -1349,21 +1367,21 @@ fn flush_batch(
     let mut points = Vec::with_capacity(vectors.len());
     for (i, vec) in vectors.into_iter().enumerate() {
         let (fi, ci) = meta[i];
-        let (path, key, hash, chunks, src, tags) = &pending[fi];
-        let chunk = &chunks[ci];
-        let id = chunk::point_id(key, chunk.index);
+        let item = &pending[fi];
+        let chunk = &item.chunks[ci];
+        let id = chunk::point_id(&item.key, chunk.index);
         file_point_ids[fi].push(id.clone());
         points.push(Point {
             id,
             vector: vec,
             payload: PointPayload {
-                source: src.clone(),
-                file_path: key.clone(),
+                source: item.source_tag.clone(),
+                file_path: item.key.clone(),
                 chunk_index: chunk.index,
                 chunk_text: chunk.text.clone(),
-                file_mtime: state::mtime_secs(path),
-                content_hash: hash.clone(),
-                tags: tags.clone(),
+                file_mtime: state::mtime_secs(&item.path),
+                content_hash: item.hash.clone(),
+                tags: item.tags.clone(),
             },
         });
         report.chunks += 1;
@@ -1375,122 +1393,3 @@ fn flush_batch(
     Ok(())
 }
 
-const SY_KNOWLEDGE_UNIT: &str = include_str!("../../configs/systemd/system/sy-knowledge.service");
-
-const UNIT_DEST: &str = "/etc/systemd/system/sy-knowledge.service";
-
-pub fn install_service(dry_run: bool) -> Result<()> {
-    let home = std::env::var("HOME").context("HOME not set")?;
-    let user = std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .context("USER/LOGNAME not set")?;
-    let uid = unsafe { libc::getuid() };
-
-    let mut env = minijinja::Environment::new();
-    env.add_template("unit", SY_KNOWLEDGE_UNIT)
-        .context("parse unit template")?;
-    let rendered = env
-        .get_template("unit")
-        .unwrap()
-        .render(minijinja::context!(home, user, uid))
-        .context("render unit template")?;
-
-    let bin = PathBuf::from(&home).join(".local/bin/sy");
-    if !bin.is_file() {
-        anyhow::bail!(
-            "sy binary not at {} — run `sy apply` first to install it",
-            bin.display()
-        );
-    }
-
-    if dry_run {
-        println!("--- {UNIT_DEST} ---\n{rendered}");
-        println!("--- selinux ---");
-        println!("sudo semanage fcontext -a -t bin_t '{}'", bin.display());
-        println!("sudo restorecon -v {}", bin.display());
-        println!("--- systemd ---");
-        println!("sudo install -m 0644 <rendered> {UNIT_DEST}");
-        println!("sudo systemctl daemon-reload");
-        println!("sudo systemctl enable --now sy-knowledge.service");
-        return Ok(());
-    }
-
-    // 1. Drop the rendered unit at /etc/systemd/system/. We have to go
-    //    through a tempfile + `sudo install` because the destination
-    //    isn't writeable as the caller.
-    let tmp = std::env::temp_dir().join(format!("sy-knowledge.service.{}", uid));
-    std::fs::write(&tmp, rendered.as_bytes())
-        .with_context(|| format!("write {}", tmp.display()))?;
-    sudo(
-        &[
-            "install",
-            "-m",
-            "0644",
-            &tmp.display().to_string(),
-            UNIT_DEST,
-        ],
-        "install unit file",
-    )?;
-    let _ = std::fs::remove_file(&tmp);
-
-    // 2. SELinux: relabel ~/.local/bin/sy as bin_t so system systemd can
-    //    exec it (default label there is gconf_home_t, status=203/EXEC).
-    //    Register the file-context rule so future `restorecon` keeps it.
-    let bin_str = bin.display().to_string();
-    let fcontext_pattern = format!("{}(/.*)?", bin_str);
-    // semanage fcontext -a is idempotent only the first time; subsequent
-    // calls fail with "rule already defined". Probe -l and skip if
-    // already present.
-    let existing = Command::new("sudo")
-        .args(["semanage", "fcontext", "-l"])
-        .output();
-    let already = existing
-        .as_ref()
-        .map(|o| {
-            let s = String::from_utf8_lossy(&o.stdout);
-            s.lines().any(|l| l.contains(&bin_str))
-        })
-        .unwrap_or(false);
-    if !already {
-        sudo(
-            &[
-                "semanage",
-                "fcontext",
-                "-a",
-                "-t",
-                "bin_t",
-                &fcontext_pattern,
-            ],
-            "register selinux fcontext",
-        )?;
-    }
-    sudo(&["restorecon", "-v", &bin_str], "restorecon binary")?;
-
-    // 3. Reload systemd, enable + start the unit. If a transient unit of
-    //    the same name is loaded (from a prior `systemd-run --unit=`),
-    //    stop it first.
-    let _ = Command::new("sudo")
-        .args(["systemctl", "stop", "sy-knowledge.service"])
-        .status();
-    sudo(&["systemctl", "daemon-reload"], "systemctl daemon-reload")?;
-    sudo(
-        &["systemctl", "enable", "--now", "sy-knowledge.service"],
-        "systemctl enable --now",
-    )?;
-
-    println!("sy-knowledge.service installed and started.");
-    println!("status: sudo systemctl status sy-knowledge.service");
-    println!("logs:   journalctl -u sy-knowledge.service -f");
-    Ok(())
-}
-
-fn sudo(args: &[&str], what: &str) -> Result<()> {
-    let st = Command::new("sudo")
-        .args(args)
-        .status()
-        .with_context(|| format!("spawn sudo for {what}"))?;
-    if !st.success() {
-        anyhow::bail!("sudo {what} failed (exit {:?})", st.code());
-    }
-    Ok(())
-}

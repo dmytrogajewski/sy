@@ -1,0 +1,61 @@
+[package]
+name = "sy-core"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Shared vocabulary for the sy workspace (types, errors, IPC envelope). Deliberately small — see SPEC.md §3.2 K1 'hub-crate' note."
+
+[dependencies]
+# Only data-shape needs: serde derives + an `anyhow::Error` type for
+# `FromStr::Err` on enums that bail with a context-rich message.
+# Resist the urge to widen this — sy-core's value is what it
+# doesn't transitively pull in (matklad, Fast Rust Builds).
+#
+# Exception: the observability initialiser (`obs.rs`, SPEC §4.6 /
+# arch-observability Step 1) lives here because every binary —
+# `sy` CLI, every daemon — calls `obs::init(Mode)` on the first
+# line of `main`. Putting it elsewhere would force every consumer
+# to depend on that crate. The `tracing*` family is added here
+# only for that initialiser; no other code in sy-core takes it.
+anyhow.workspace = true
+serde.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-journald.workspace = true
+tracing-appender.workspace = true
+# arch-observability Step 3: the OTel-shaped log formatter
+# (`obs::otel_fmt::OtelFormatter`) builds each line as a
+# `serde_json::Value` and timestamps with `chrono` RFC3339+millis.
+# Both are workspace-level deps already; this is the production
+# user — the previous `serde_json` dev-dep stays implied via the
+# main `[dependencies]` table.
+serde_json.workspace = true
+chrono.workspace = true
+# arch-observability Step 4: `TraceId` / `SpanId` mint fresh ids
+# from a ULID's 128-bit body. The IPC envelope re-exports the types
+# so wire-level call sites are unaffected; the ULID dep lives here
+# because the id is conceptually an observability primitive.
+ulid.workspace = true
+# arch-observability Step 7: `metrics::describe_*!` pre-registers the
+# SPEC §4.6 counter/gauge/histogram names so they surface in
+# `system.describe.capabilities.metrics` even before they're emitted.
+# The facade has no recorder installed in production yet (Zone 6.2
+# defers the prometheus UDS exporter); call-sites are no-ops until
+# a recorder lands.
+metrics.workspace = true
+# arch-supervision Step 4 (SPEC §4.5 "Rust integration"): the
+# `sy_core::notify` helper wraps `sd_notify(3)` for READY=1 / STOPPING=1
+# / WATCHDOG=1. Lives in sy-core alongside `obs::init` because every
+# daemon binary (knowledge, agentd, stack-bar) calls it from main —
+# putting it in a per-daemon module would force a circular dep. The
+# watchdog-ping loop is a single `std::thread::sleep` worker (no
+# tokio runtime), which keeps the dep set minimal and lets the
+# thread-based knowledge daemon use it without bolting on a runtime.
+sd-notify.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# `DebuggingRecorder` lets the Step 7 tests install a per-test
+# recorder, drive emissions, and snapshot the resulting counter /
+# gauge / histogram bag without leaking global state.
+metrics-util.workspace = true

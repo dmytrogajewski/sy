@@ -172,6 +172,17 @@ Pick is automatic at startup in that priority order; surface with
    systemctl --user start sy-knowledge.service   # if your unit is wired
    ```
 
+### Migration: system-level → user-level supervision
+
+The system-level `sy-knowledge.service` is deprecated. `sy apply`
+now symlinks user-level units under `~/.config/systemd/user/` and runs
+`systemctl --user daemon-reload`. If a stale
+`/etc/systemd/system/sy-knowledge.service` is still present, `sy apply`
+prints a `sudo rm /etc/systemd/system/sy-knowledge.service` recipe on
+stderr (it never `sudo`s on your behalf). After removing it,
+`systemctl --user enable --now sy.target` brings everything back up
+under the user manager.
+
 That's it — sy auto-detects the AMD venv at startup, re-execs itself
 with the right `LD_LIBRARY_PATH` + `ORT_DYLIB_PATH` + `RYZEN_AI_*`
 env baked in, and routes embeddings through the NPU.

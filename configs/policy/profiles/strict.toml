@@ -1,0 +1,24 @@
+# strict — MCP default profile.
+#
+# Per specs/research/architecture-refactor/SPEC.md §4.4:
+#   read_paths = ["$REPO"], write_paths = [],
+#   deny_network = true, require_consent = "every_call",
+#   exec_allowlist intentionally empty (deny-everything by construction).
+#
+# `$REPO` expands to the sy-agt daemon's `cwd` at Resolver::load time
+# (the value passed to `sy agentd run --cwd ...`). With an empty
+# exec_allowlist, every tool call returns Decision::Deny — strict is
+# the deny-by-default baseline; opt-in happens via per-tool overlays
+# under configs/policy/tools/.
+
+read_paths = ["$REPO"]
+write_paths = []
+exec_allowlist = []
+net_outbound_allowlist = []
+env_passthrough_allowlist = ["PATH", "HOME", "LANG", "TERM"]
+max_runtime_seconds = 30
+max_stdout_bytes = 16777216
+max_memory_mb = 512
+max_pids = 64
+deny_network = true
+require_consent = "every_call"

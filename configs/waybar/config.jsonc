@@ -11,7 +11,7 @@
 
     "modules-left":   ["niri/workspaces", "niri/language"],
     "modules-center": ["niri/window"],
-    "modules-right":  ["cpu", "memory", "custom/sy-gpu", "custom/sy-npu", "custom/sy-disk", "custom/sy-silent", "custom/sy-vol", "custom/sy-bl", "custom/notif", "custom/sy-knowledge", "custom/agents", "custom/bt", "network", "clock", "custom/pwr", "custom/sy-bat"],
+    "modules-right":  ["custom/sy-syauth", "cpu", "memory", "custom/sy-gpu", "custom/sy-npu", "custom/sy-disk", "custom/sy-silent", "custom/sy-vol", "custom/sy-bl", "custom/notif", "custom/sy-knowledge", "custom/agents", "custom/bt", "network", "clock", "custom/pwr", "custom/sy-bat"],
 
     "niri/workspaces": {
         "format": "{value}",
@@ -78,6 +78,15 @@
         "return-type": "json",
         "interval": 5,
         "on-click": "{{ home }}/.local/bin/sy bt"
+    },
+
+    "custom/sy-syauth": {
+        "exec":            "{{ home }}/.local/bin/sy syauth --waybar",
+        "return-type":     "json",
+        "interval":        1,
+        "on-click":        "{{ home }}/.local/bin/sy syauth accept",
+        "on-click-right":  "{{ home }}/.local/bin/sy syauth reject",
+        "tooltip":         true
     },
 
     "custom/pwr": {

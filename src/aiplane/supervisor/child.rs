@@ -24,11 +24,6 @@ pub trait Child: Send {
     /// flag (fake). Returns immediately; supervisor decides whether
     /// to wait for confirmation.
     fn terminate(&mut self);
-    /// What kind of workload this child hosts. Used by the
-    /// supervisor's reap path to log informatively. `None` only if
-    /// the spawn failed before kind was known (unreachable in
-    /// practice).
-    fn handle_kind(&self) -> Option<WorkloadKind>;
 }
 
 /// Strategy for spawning a worker child. Real impl uses
@@ -71,14 +66,12 @@ impl ChildSpawn for RealSpawn {
             .spawn()
             .with_context(|| format!("spawn sy aiplane worker --kind {kind}"))?;
         Ok(Box::new(RealChild {
-            kind,
             proc: Mutex::new(Some(proc)),
         }))
     }
 }
 
 struct RealChild {
-    kind: WorkloadKind,
     proc: Mutex<Option<std::process::Child>>,
 }
 
@@ -120,9 +113,5 @@ impl Child for RealChild {
         let _ = c.kill();
         let _ = c.wait();
         *guard = None;
-    }
-
-    fn handle_kind(&self) -> Option<WorkloadKind> {
-        Some(self.kind)
     }
 }

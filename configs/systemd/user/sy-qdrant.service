@@ -1,0 +1,35 @@
+# Local qdrant instance behind `sy-knowledge.service`. Qdrant is a
+# third-party binary that doesn't implement sd_notify, so it stays
+# `Type=simple` indefinitely (SPEC §4.5 explicitly carves this out —
+# notify support is for sy's own daemons only).
+#
+# Storage path and port are pinned via `QDRANT__STORAGE__STORAGE_PATH`
+# and `QDRANT__SERVICE__HTTP_PORT` (the env-var form qdrant looks at).
+# This MUST match what `sy::knowledge::daemon::spawn_qdrant` would
+# pass — otherwise we end up with two qdrant processes pointing at
+# different storage dirs and a phantom "all 60k embeddings missing"
+# (the daemon's HTTP client hits whichever port-bound qdrant is up,
+# but its index.json tracks what it thought it had written).
+#
+# `data_dir()` in `src/knowledge/state.rs` resolves to
+# `$XDG_DATA_HOME/sy` (default `%h/.local/share/sy`), and
+# `qdrant_storage_dir()` appends `/knowledge/qdrant`.
+#
+# Source: specs/research/architecture-refactor/SPEC.md §4.5.
+
+[Unit]
+Description=sy local qdrant
+PartOf=sy.target
+
+[Service]
+Type=simple
+Environment=QDRANT__SERVICE__HTTP_PORT=6333
+Environment=QDRANT__SERVICE__HOST=127.0.0.1
+Environment=QDRANT__STORAGE__STORAGE_PATH=%h/.local/share/sy/knowledge/qdrant
+Environment=QDRANT__STORAGE__SNAPSHOTS_PATH=%h/.local/share/sy/knowledge/qdrant/snapshots
+Environment=QDRANT__TELEMETRY_DISABLED=true
+ExecStart=%h/.local/bin/qdrant
+Restart=on-failure
+
+[Install]
+WantedBy=sy.target

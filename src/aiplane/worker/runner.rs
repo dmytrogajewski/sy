@@ -31,6 +31,12 @@ const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// process-level error — it's reflected in `WorkerState::Failed` and
 /// the supervisor decides whether to restart.
 pub fn run(kind: WorkloadKind, socket: PathBuf) -> Result<()> {
+    // SPEC §4.6 / arch-observability Step 1: each `sy aiplane worker`
+    // subprocess is a daemon-shaped process (one per workload kind),
+    // so it gets the journald + rolling-JSONL + stderr stack. The
+    // guard is held for the worker's full lifetime; dropping it
+    // could lose buffered log lines on a fast SIGTERM.
+    let _obs_guard = sy_core::obs::init(sy_core::obs::Mode::Daemon { name: "sy-aiplane" })?;
     let workload = build_workload(kind)?;
 
     let state = Arc::new(Mutex::new(InternalState {
@@ -44,10 +50,12 @@ pub fn run(kind: WorkloadKind, socket: PathBuf) -> Result<()> {
         errors: 0,
     }));
 
-    eprintln!(
-        "sy aiplane[worker:{kind}]: starting pid={} socket={}",
-        std::process::id(),
-        socket.display()
+    tracing::info!(
+        target: "sy::aiplane::worker",
+        kind = %kind,
+        pid = std::process::id(),
+        socket = %socket.display(),
+        "worker starting"
     );
 
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -66,7 +74,12 @@ pub fn run(kind: WorkloadKind, socket: PathBuf) -> Result<()> {
         req_rx,
     );
 
-    eprintln!("sy aiplane[worker:{kind}]: shutting down (result={result:?})");
+    tracing::info!(
+        target: "sy::aiplane::worker",
+        kind = %kind,
+        result = ?result,
+        "worker shutting down"
+    );
     workload.unload();
     let _ = std::fs::remove_file(&socket);
     result
@@ -84,7 +97,7 @@ struct InternalState {
 }
 
 impl InternalState {
-    fn to_health(&self) -> WorkerHealth {
+    fn to_health(&self, inflight_request_id: Option<ulid::Ulid>) -> WorkerHealth {
         WorkerHealth {
             kind: Some(self.kind),
             state: self.workload_state.clone(),
@@ -94,6 +107,7 @@ impl InternalState {
             ema_ms: self.ema_ms,
             calls: self.calls,
             errors: self.errors,
+            inflight_request_id,
         }
     }
 }
@@ -140,10 +154,11 @@ fn spawn_loader(workload: Arc<dyn Workload>, state: Arc<Mutex<InternalState>>) {
                     },
                 };
                 s.ready_at_unix = unix_now();
-                eprintln!(
-                    "sy aiplane[worker:{}]: ready ({})",
-                    s.kind,
-                    workload.health().backend
+                tracing::info!(
+                    target: "sy::aiplane::worker",
+                    kind = %s.kind,
+                    backend = %workload.health().backend,
+                    "worker ready"
                 );
             }
             Err(e) => {
@@ -152,7 +167,12 @@ fn spawn_loader(workload: Arc<dyn Workload>, state: Arc<Mutex<InternalState>>) {
                 s.workload_state = WorkloadState::Failed {
                     reason: reason.clone(),
                 };
-                eprintln!("sy aiplane[worker:{}]: load failed: {reason}", s.kind);
+                tracing::error!(
+                    target: "sy::aiplane::worker",
+                    kind = %s.kind,
+                    reason = %reason,
+                    "worker load failed"
+                );
             }
         }
     });
@@ -165,38 +185,100 @@ fn serve_loop(
     shutdown: Arc<AtomicBool>,
     req_rx: mpsc::Receiver<(WorkerReq, std::os::unix::net::UnixStream)>,
 ) -> Result<()> {
+    // SPEC §4.3 inflight tracker: holds the Ulid of the RunBatch the
+    // worker thread is currently processing (if any). A subsequent
+    // `WorkerReq::Cancel` whose `request_id` matches calls
+    // `Workload::try_cancel`; mismatches still ACK because cancel is
+    // idempotent (the caller learns the actual outcome from the
+    // RunBatch reply).
+    let inflight: Arc<Mutex<Option<ulid::Ulid>>> = Arc::new(Mutex::new(None));
     loop {
         if shutdown.load(Ordering::SeqCst) {
             return Ok(());
         }
         match req_rx.recv_timeout(HEALTH_POLL_INTERVAL) {
-            Ok((req, stream)) => {
-                let exit_after = matches!(req, WorkerReq::Shutdown);
-                let resp = dispatch(req, &workload, &state);
-                let _ = write_resp(stream, &resp);
-                if exit_after {
-                    eprintln!("sy aiplane[worker:{kind}]: shutdown requested");
-                    shutdown.store(true, Ordering::SeqCst);
+            Ok((req, stream)) => match req {
+                WorkerReq::RunBatch { request_id, inputs } => {
+                    spawn_run_batch(
+                        kind,
+                        workload.clone(),
+                        state.clone(),
+                        inflight.clone(),
+                        request_id,
+                        inputs,
+                        stream,
+                    );
                 }
-            }
+                WorkerReq::Cancel { request_id } => {
+                    if inflight.lock().expect("inflight poisoned").as_ref() == Some(&request_id) {
+                        let _ = workload.try_cancel();
+                    }
+                    let _ = write_resp(stream, &WorkerResp::CancelAck);
+                }
+                other => {
+                    let exit_after = matches!(other, WorkerReq::Shutdown);
+                    let resp = dispatch(other, &state, &inflight);
+                    let _ = write_resp(stream, &resp);
+                    if exit_after {
+                        tracing::info!(
+                            target: "sy::aiplane::worker",
+                            kind = %kind,
+                            "shutdown requested"
+                        );
+                        shutdown.store(true, Ordering::SeqCst);
+                    }
+                }
+            },
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
         }
     }
 }
 
+/// Spawn a one-shot thread that runs the inference, writes the
+/// response, and clears the inflight tracker. The thread takes
+/// ownership of the connection stream so the serve loop can keep
+/// pulling new requests (notably `WorkerReq::Cancel`) while the
+/// inference is in flight.
+fn spawn_run_batch(
+    kind: WorkloadKind,
+    workload: Arc<dyn Workload>,
+    state: Arc<Mutex<InternalState>>,
+    inflight: Arc<Mutex<Option<ulid::Ulid>>>,
+    request_id: ulid::Ulid,
+    inputs: Vec<WorkloadInput>,
+    stream: std::os::unix::net::UnixStream,
+) {
+    thread::Builder::new()
+        .name(format!("sy-aiplane-worker:{kind}:run"))
+        .spawn(move || {
+            *inflight.lock().expect("inflight poisoned") = Some(request_id);
+            let resp = run_batch(&workload, &state, inputs);
+            *inflight.lock().expect("inflight poisoned") = None;
+            let _ = write_resp(stream, &resp);
+        })
+        .expect("spawn run_batch thread");
+}
+
+/// Handle the cheap synchronous variants (Health / Shutdown).
+/// RunBatch and Cancel never reach here — `serve_loop` special-cases
+/// them so the inflight tracker can correlate the two across the
+/// dispatch-on-thread boundary.
 fn dispatch(
     req: WorkerReq,
-    workload: &Arc<dyn Workload>,
     state: &Arc<Mutex<InternalState>>,
+    inflight: &Arc<Mutex<Option<ulid::Ulid>>>,
 ) -> WorkerResp {
     match req {
         WorkerReq::Health => {
             let s = state.lock().expect("worker state poisoned");
-            WorkerResp::Health(s.to_health())
+            let inflight_id = *inflight.lock().expect("inflight poisoned");
+            WorkerResp::Health(s.to_health(inflight_id))
         }
-        WorkerReq::RunBatch { inputs } => run_batch(workload, state, inputs),
         WorkerReq::Shutdown => WorkerResp::ShutdownAck,
+        WorkerReq::RunBatch { .. } | WorkerReq::Cancel { .. } => WorkerResp::Error {
+            msg: "internal: RunBatch/Cancel must route through serve_loop".into(),
+        },
     }
 }
 
@@ -381,6 +463,7 @@ mod tests {
         let resp = request(
             &socket,
             &WorkerReq::RunBatch {
+                request_id: ulid::Ulid::nil(),
                 inputs: vec![
                     WorkloadInput::Text { text: "hi".into() },
                     WorkloadInput::Text {
@@ -423,6 +506,112 @@ mod tests {
         join.join().expect("worker thread");
 
         // Cleanup.
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(v) = prev {
+            env::set_var("XDG_RUNTIME_DIR", v);
+        } else {
+            env::remove_var("XDG_RUNTIME_DIR");
+        }
+    }
+
+    #[test]
+    fn set_terminate_unblocks_in_flight() {
+        // SPEC §4.3 "Cancellation pattern" / ROADMAP Step 4: a
+        // long-running RunBatch returns within 1 s after the
+        // supervisor sends `WorkerReq::Cancel` with the matching
+        // request_id — the serve loop's inflight tracker dispatches
+        // the RunBatch on a worker thread, observes the Cancel, calls
+        // `Workload::try_cancel`, and the FakeWorkload's sleep loop
+        // surfaces the cancel as `WorkerResp::Error { msg: "..cancelled.." }`.
+        use crate::aiplane::workloads::fake::FakeWorkload;
+        use std::env;
+        const SLEEP_MS: u64 = 5_000;
+        const CANCEL_AFTER_MS: u64 = 100;
+        const DEADLINE_MS: u64 = 1_500;
+
+        let _guard = crate::aiplane::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!(
+            "sy-worker-cancel-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let prev = env::var("XDG_RUNTIME_DIR").ok();
+        env::set_var("XDG_RUNTIME_DIR", &tmp);
+        let socket = socket_path(WorkloadKind::Embed);
+
+        let workload: Arc<dyn Workload> =
+            Arc::new(FakeWorkload::with_sleep_ms(WorkloadKind::Embed, SLEEP_MS));
+        let state = Arc::new(Mutex::new(InternalState {
+            kind: WorkloadKind::Embed,
+            model_stem: "fake".into(),
+            pid: std::process::id(),
+            workload_state: WorkloadState::Ready {
+                backend: "fake".into(),
+            },
+            ready_at_unix: 0,
+            ema_ms: 0.0,
+            calls: 0,
+            errors: 0,
+        }));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let (req_tx, req_rx) = mpsc::channel::<(WorkerReq, std::os::unix::net::UnixStream)>();
+        worker_ipc::serve(&socket, req_tx).expect("serve");
+        let serve_join = thread::spawn({
+            let workload = workload.clone();
+            let state = state.clone();
+            let shutdown = shutdown.clone();
+            move || {
+                let _ = serve_loop(WorkloadKind::Embed, workload, state, shutdown, req_rx);
+            }
+        });
+
+        let request_id = ulid::Ulid::new();
+        let cancel_socket = socket.clone();
+        let canceller = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(CANCEL_AFTER_MS));
+            request(
+                &cancel_socket,
+                &WorkerReq::Cancel { request_id },
+                Duration::from_secs(2),
+            )
+            .expect("cancel request")
+        });
+
+        let t0 = Instant::now();
+        let resp = request(
+            &socket,
+            &WorkerReq::RunBatch {
+                request_id,
+                inputs: vec![WorkloadInput::Text { text: "hi".into() }],
+            },
+            Duration::from_secs(10),
+        )
+        .expect("run_batch");
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(DEADLINE_MS),
+            "cancel must beat the {DEADLINE_MS}ms deadline; took {elapsed:?}"
+        );
+        match resp {
+            WorkerResp::Error { msg } => {
+                assert!(
+                    msg.contains("cancelled"),
+                    "response should advertise the cancel: {msg:?}"
+                );
+            }
+            other => panic!("expected Error(cancelled), got {other:?}"),
+        }
+        let cancel_resp = canceller.join().expect("canceller joins");
+        assert!(matches!(cancel_resp, WorkerResp::CancelAck));
+
+        shutdown.store(true, Ordering::SeqCst);
+        serve_join.join().expect("serve loop joins");
         let _ = std::fs::remove_dir_all(&tmp);
         if let Some(v) = prev {
             env::set_var("XDG_RUNTIME_DIR", v);

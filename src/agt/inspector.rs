@@ -11,15 +11,14 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::UnixStream,
-    sync::Mutex,
-};
+use futures_util::StreamExt;
+use sy_core::Priority;
+use sy_ipc::{CallOpts, Client as IpcClient, Event, Response};
+use tokio::{io::AsyncReadExt, sync::Mutex};
 
 use crate::agt::{
-    protocol::{ClientReply, ClientReq, DaemonEvent, TranscriptEntry},
-    socket_path,
+    protocol::{DaemonEvent, TranscriptEntry},
+    socket_path, wire,
 };
 
 pub fn run(session_id: &str) -> Result<()> {
@@ -50,32 +49,54 @@ async fn run_async(session_id: &str) -> Result<()> {
 async fn main_loop(session_id: &str) -> Result<()> {
     let state = Arc::new(Mutex::new(State::default()));
 
-    // Connect twice: one stream for tailing events, one for sending prompts.
-    let mut tail_stream = UnixStream::connect(socket_path())
+    // Open the v1 streaming tail. The initial Response::Ok ack
+    // confirms the daemon accepted `agt.tail`; subsequent frames on
+    // the same connection arrive as `sy_ipc::Event`s until the
+    // `closed` sentinel.
+    let mut tail_client = IpcClient::connect(&socket_path())
         .await
         .context("connect daemon (tail)")?;
-    let req = ClientReq::Tail {
+    let (method, params) = wire::to_request(&crate::agt::protocol::ClientReq::Tail {
         session_id: session_id.to_string(),
         follow: true,
         replay: true,
-    };
-    let line = serde_json::to_vec(&req)?;
-    tail_stream.write_all(&line).await?;
-    tail_stream.write_all(b"\n").await?;
-    tail_stream.flush().await?;
-
-    let (tail_rd, _tail_wr) = tail_stream.into_split();
+    });
+    let ack = tail_client
+        .call(
+            method,
+            params,
+            CallOpts {
+                priority: Priority::Interactive,
+                deadline_ms: None,
+                ..CallOpts::default()
+            },
+        )
+        .await
+        .context("agt.tail call")?;
+    if let Response::Err { error, .. } = ack {
+        anyhow::bail!("agt.tail rejected: {} ({})", error.message, error.code);
+    }
     let event_state = state.clone();
     let id_for_task = session_id.to_string();
     tokio::spawn(async move {
-        let mut lines = BufReader::new(tail_rd).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if let Ok(reply) = serde_json::from_str::<ClientReply>(&line) {
-                if let ClientReply::Event { event: e } = reply {
-                    let mut s = event_state.lock().await;
-                    apply_event(&mut s, e);
-                }
+        // After the ack response, the connection switches into a
+        // stream of length-prefixed `Event` frames. Steal the reader
+        // half via `into_event_stream` so we can decode events
+        // directly without going through the unary `Client::call`.
+        let mut events = tail_client.into_event_stream();
+        while let Some(decoded) = events.next().await {
+            let evt: Event = match decoded {
+                Ok(e) => e,
+                Err(_) => break,
+            };
+            if evt.is_closed() {
+                break;
             }
+            let Ok(daemon_event) = wire::stream_payload_to_event(&evt.kind, evt.params) else {
+                continue;
+            };
+            let mut s = event_state.lock().await;
+            apply_event(&mut s, daemon_event);
         }
         let _ = id_for_task;
     });
@@ -248,29 +269,21 @@ fn body_rows() -> usize {
 }
 
 async fn send_prompt(session_id: &str, text: &str) -> Result<()> {
-    let mut s = UnixStream::connect(socket_path()).await?;
-    let req = ClientReq::Prompt {
+    let mut c = IpcClient::connect(&socket_path()).await?;
+    let (method, params) = wire::to_request(&crate::agt::protocol::ClientReq::Prompt {
         session_id: session_id.to_string(),
         text: text.trim().to_string(),
-    };
-    let line = serde_json::to_vec(&req)?;
-    s.write_all(&line).await?;
-    s.write_all(b"\n").await?;
-    s.flush().await?;
-    let mut lines = BufReader::new(s).lines();
-    let _ = lines.next_line().await;
+    });
+    let _ = c.call(method, params, CallOpts::default()).await?;
     Ok(())
 }
 
 async fn send_stop(session_id: &str) -> Result<()> {
-    let mut s = UnixStream::connect(socket_path()).await?;
-    let req = ClientReq::Stop {
+    let mut c = IpcClient::connect(&socket_path()).await?;
+    let (method, params) = wire::to_request(&crate::agt::protocol::ClientReq::Stop {
         session_id: session_id.to_string(),
-    };
-    let line = serde_json::to_vec(&req)?;
-    s.write_all(&line).await?;
-    s.write_all(b"\n").await?;
-    s.flush().await?;
+    });
+    let _ = c.call(method, params, CallOpts::default()).await?;
     Ok(())
 }
 

@@ -17,10 +17,25 @@ pub struct AgentSpec {
     pub env: BTreeMap<String, String>,
     #[serde(default = "default_version_args")]
     pub version_args: Vec<String>,
+    /// Sandbox profile name (matches `configs/policy/profiles/<name>.toml`)
+    /// applied via `systemd-run --user --scope` + `sy agt sandbox-exec`
+    /// when the daemon spawns the ACP child. `None` disables sandboxing
+    /// for that agent — primarily for the in-tree daemon tests that
+    /// spawn `cat` as a synthetic stdio stand-in for ACP.
+    #[serde(default = "default_sandbox_profile")]
+    pub sandbox_profile: Option<String>,
 }
 
 fn default_version_args() -> Vec<String> {
     vec!["--version".into()]
+}
+
+/// Default sandbox profile applied when `agents.toml` omits the field.
+/// SPEC §4.4 step 4: every ACP child runs inside the cgroup + Landlock +
+/// seccomp envelope of the `normal` profile by default; operators can
+/// override per-agent in `~/.config/sy/agents.toml`.
+fn default_sandbox_profile() -> Option<String> {
+    Some("normal".into())
 }
 
 #[derive(Deserialize)]

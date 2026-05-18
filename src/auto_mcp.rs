@@ -57,12 +57,6 @@ impl McpAgent {
             McpAgent::Agents => "Custom agents (~/.agents/)",
         }
     }
-
-    /// Is this agent's MCP config writable yet? Antigravity / `~/.agents/`
-    /// have no canonical path so we ship hint-only detectors for them.
-    pub fn is_writable(self) -> bool {
-        !matches!(self, McpAgent::Antigravity | McpAgent::Agents)
-    }
 }
 
 #[derive(Debug, Clone)]

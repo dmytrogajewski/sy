@@ -106,8 +106,8 @@ fn tools() -> Value {
                     "query":      { "type": "string" },
                     "limit":      { "type": "integer", "default": 8 },
                     "source":     { "type": "string", "description": "Optional registered source path prefix to restrict to" },
-                    "rerank":     { "type": "boolean", "default": true, "description": "Apply cross-encoder rerank on top of qdrant cosine retrieval. Adds ~0.5–1 s." },
-                    "candidates": { "type": "integer", "default": 30, "description": "Top-N from qdrant before reranking. Ignored when rerank=false." }
+                    "rerank":     { "type": "boolean", "default": true, "description": "Apply cross-encoder rerank on top of qdrant cosine retrieval. Adds ~350 ms per candidate on AMD NPU (default 8 candidates ≈ 2.8 s)." },
+                    "candidates": { "type": "integer", "default": 8, "description": "Top-N from qdrant before reranking. Ignored when rerank=false. Each candidate is one NPU dispatch at ~350 ms; bump only when recall outranks latency." }
                 },
                 "required": ["query"]
             }
@@ -155,8 +155,7 @@ fn tool_search(args: &Value) -> Result<String> {
     let prefix = args
         .get("source")
         .and_then(|v| v.as_str())
-        .map(|s| sources::expand(s).map(|p| p.display().to_string()).ok())
-        .flatten();
+        .and_then(|s| sources::expand(s).map(|p| p.display().to_string()).ok());
     let rerank = args.get("rerank").and_then(|v| v.as_bool()).unwrap_or(true);
     let candidates = args
         .get("candidates")
@@ -167,7 +166,14 @@ fn tool_search(args: &Value) -> Result<String> {
     // and avoid loading a second ORT session in this process. If the
     // daemon is down, the helper falls back to in-process embedding so
     // the MCP server still works offline.
-    let hits = cli::search_hits_opts(query, limit, prefix.as_deref(), rerank, candidates)?;
+    let hits = cli::search_hits_opts(
+        query,
+        limit,
+        prefix.as_deref(),
+        rerank,
+        candidates,
+        sy_core::Priority::Interactive,
+    )?;
     let arr: Vec<_> = hits
         .iter()
         .map(|h| {
@@ -224,8 +230,7 @@ fn tool_index(args: &Value) -> Result<String> {
     let src = args
         .get("source")
         .and_then(|v| v.as_str())
-        .map(|s| sources::expand(s).ok())
-        .flatten();
+        .and_then(|s| sources::expand(s).ok());
     qdrant::ensure_collection()?;
     let mut idx = state::load().unwrap_or_default();
     let ctx = RunCtx::interactive();

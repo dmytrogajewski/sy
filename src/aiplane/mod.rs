@@ -30,12 +30,15 @@
 //! daemon and renames the systemd unit to `sy-aiplane.service`.
 
 pub mod cli;
+pub mod error;
 pub mod ipc;
 pub mod reexec;
 pub mod registry;
+pub mod scheduler;
 pub mod session;
 pub mod status;
 pub mod supervisor;
+pub mod warm_pool;
 pub mod worker;
 pub mod worker_ipc;
 pub mod workloads;
@@ -45,3 +48,128 @@ pub mod workloads;
 /// don't cross-route requests when cargo runs them in parallel.
 #[cfg(test)]
 pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+mod tests {
+    //! arch-observability Step 2 ratchet: production code under
+    //! `src/aiplane/` and `src/knowledge/daemon.rs` must not call
+    //! `eprintln!` or `println!` directly — those bypass the
+    //! `tracing` subscriber installed by `sy_core::obs::init` and so
+    //! don't make it into journald or the rolling JSONL appender
+    //! (SPEC §4.6). The two permitted classes of `println!` callers
+    //! are (a) `aiplane::cli` (user-facing primary output on stdout
+    //! per CLIG) and (b) `#[cfg(test)]` test code; everything else
+    //! must use `tracing::{info,warn,error}!`.
+
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    /// Files allowed to use `println!` because they are CLI-direct
+    /// user output sites (CLIG: primary output on stdout). The
+    /// supervisor / worker / daemon code paths still must NOT
+    /// `println!`.
+    const CLI_PRINTLN_ALLOWLIST: &[&str] = &["src/aiplane/cli.rs"];
+
+    /// Scan `path` (recursively if a directory) for lines that begin
+    /// — modulo leading whitespace — with `eprintln!(` or `println!(`,
+    /// skipping `#[cfg(test)]` modules and string-literal occurrences
+    /// in doc comments. Returns `(file, line_no, snippet)` tuples.
+    fn scan_print_macros(path: &Path) -> Vec<(PathBuf, usize, String)> {
+        let mut hits = Vec::new();
+        let mut stack = vec![path.to_path_buf()];
+        while let Some(p) = stack.pop() {
+            if p.is_dir() {
+                let Ok(rd) = fs::read_dir(&p) else { continue };
+                for ent in rd.flatten() {
+                    stack.push(ent.path());
+                }
+                continue;
+            }
+            if p.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let Ok(src) = fs::read_to_string(&p) else {
+                continue;
+            };
+            let mut in_test_mod = false;
+            let mut brace_depth_at_test_entry: i32 = 0;
+            let mut brace_depth: i32 = 0;
+            for (idx, raw) in src.lines().enumerate() {
+                let line = raw.trim_start();
+                // Skip block-/line-comments and doc comments at the
+                // start of the line — the trim already dropped leading
+                // whitespace; we only need to ignore `///`/`//` lines.
+                if line.starts_with("//") {
+                    continue;
+                }
+                // Cheap `#[cfg(test)]` detector. The follow-up `mod`
+                // block opens with a `{`; we track brace depth until
+                // it closes.
+                if !in_test_mod && line.starts_with("#[cfg(test)]") {
+                    in_test_mod = true;
+                    brace_depth_at_test_entry = brace_depth;
+                }
+                for ch in line.chars() {
+                    if ch == '{' {
+                        brace_depth += 1;
+                    } else if ch == '}' {
+                        brace_depth -= 1;
+                        if in_test_mod && brace_depth <= brace_depth_at_test_entry {
+                            in_test_mod = false;
+                        }
+                    }
+                }
+                if in_test_mod {
+                    continue;
+                }
+                if line.starts_with("eprintln!(") || line.starts_with("println!(") {
+                    hits.push((p.clone(), idx + 1, raw.to_string()));
+                }
+            }
+        }
+        hits
+    }
+
+    fn repo_root() -> PathBuf {
+        // CARGO_MANIFEST_DIR points at the crate that owns this test —
+        // the `sy` bin lives at the repo root, so the same path is the
+        // workspace root.
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    }
+
+    #[test]
+    fn no_eprintln_left_in_aiplane_or_knowledge_daemon() {
+        let root = repo_root();
+        let aiplane = root.join("src/aiplane");
+        let knowledge_daemon = root.join("src/knowledge/daemon.rs");
+
+        let mut offenders: Vec<(PathBuf, usize, String)> = Vec::new();
+        offenders.extend(scan_print_macros(&aiplane));
+        offenders.extend(scan_print_macros(&knowledge_daemon));
+
+        // Strip the CLI-output allowlist. The strip uses repo-relative
+        // path components so the test passes from any CWD.
+        offenders.retain(|(p, _, raw)| {
+            let rel = p.strip_prefix(&root).unwrap_or(p);
+            let rel_s = rel.to_string_lossy();
+            let cli_allowed = CLI_PRINTLN_ALLOWLIST
+                .iter()
+                .any(|&allowed| rel_s == allowed);
+            // The aiplane CLI file is allowed to `println!` for primary
+            // user output, but never `eprintln!` — all diagnostics must
+            // flow through `tracing`.
+            !(cli_allowed && raw.trim_start().starts_with("println!("))
+        });
+
+        assert!(
+            offenders.is_empty(),
+            "found {} forbidden `eprintln!`/`println!` call(s) in production code:\n{}",
+            offenders.len(),
+            offenders
+                .iter()
+                .map(|(p, n, raw)| format!("  {}:{} {}", p.display(), n, raw.trim()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+}

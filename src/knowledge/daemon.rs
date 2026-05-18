@@ -59,13 +59,48 @@ enum DaemonOp {
 }
 
 pub fn run() -> Result<()> {
+    // SPEC §4.6 / arch-observability Step 1: install the daemon's
+    // tracing subscriber (journald + rolling JSONL + stderr fmt)
+    // before any other startup work so even the migration warning
+    // and qdrant-spawn errors below land on every sink. The
+    // `WorkerGuard` is held for the daemon's lifetime via this
+    // binding — dropping it would risk losing buffered log lines.
+    let _obs_guard = sy_core::obs::init(sy_core::obs::Mode::Daemon {
+        name: "sy-knowledge",
+    })?;
     set_process_priority();
-    let mut child = spawn_qdrant().context("spawn qdrant")?;
-
-    if let Err(e) = qdrant::wait_ready(20) {
-        let _ = child.kill();
-        return Err(e);
+    if let Err(e) = crate::aiplane::status::migrate_state_dir() {
+        // Best-effort: a missing or unwritable XDG_STATE_HOME shouldn't
+        // block daemon startup, but the warning surfaces under
+        // `journalctl --user -u sy-aiplane`.
+        tracing::warn!(
+            target: "sy::knowledge::daemon",
+            error = %format!("{e:#}"),
+            "state-dir migration warning"
+        );
     }
+    // SPEC §4.5: when run under systemd, `sy-qdrant.service` owns the
+    // qdrant process. Probing the HTTP port first lets us coexist with
+    // that unit instead of fighting it for the port — the second
+    // spawn would silently die ([qdrant] <defunct>) and the daemon's
+    // HTTP client would still hit the unit-managed one, but pointed
+    // at the WRONG storage path, leaving `index.json` claiming chunks
+    // that don't exist in qdrant. Bug repro that lost ~60k embeddings.
+    let qdrant_child: Option<Child> = if qdrant::wait_ready(1).is_ok() {
+        tracing::info!(
+            target: "sy::knowledge::daemon",
+            "qdrant already up (likely sy-qdrant.service), skipping internal spawn"
+        );
+        None
+    } else {
+        let child = spawn_qdrant().context("spawn qdrant")?;
+        if let Err(e) = qdrant::wait_ready(20) {
+            let mut c = child;
+            let _ = c.kill();
+            return Err(e);
+        }
+        Some(child)
+    };
     qdrant::ensure_collection()?;
 
     // Start the aiplane supervisor. Each NPU workload (embed, rerank)
@@ -90,8 +125,8 @@ pub fn run() -> Result<()> {
     // second channel (req_rx) carries request-response ops; we spawn
     // a worker below that owns it.
     let (ipc_tx, ipc_rx) = mpsc::channel::<ipc::Op>();
-    let (req_tx, req_rx) = mpsc::channel::<(ipc::Req, std::os::unix::net::UnixStream)>();
-    ipc::serve(ipc_tx, req_tx).context("ipc serve")?;
+    let (req_tx, req_rx) = mpsc::channel::<(ipc::Req, tokio::sync::oneshot::Sender<ipc::Resp>)>();
+    ipc::serve(ipc_tx, req_tx, cancel.clone()).context("ipc serve")?;
     spawn_req_worker(req_rx);
     let bridge_tx = daemon_tx.clone();
     let bridge_paused = paused.clone();
@@ -102,11 +137,14 @@ pub fn run() -> Result<()> {
                 ipc::Op::Pause => {
                     bridge_paused.store(true, Ordering::SeqCst);
                     bridge_cancel.store(true, Ordering::SeqCst);
-                    eprintln!("sy knowledge daemon: paused (cancelling in-flight pass)");
+                    tracing::info!(
+                        target: "sy::knowledge::daemon",
+                        "paused (cancelling in-flight pass)"
+                    );
                 }
                 ipc::Op::Resume => {
                     if bridge_paused.swap(false, Ordering::SeqCst) {
-                        eprintln!("sy knowledge daemon: resumed");
+                        tracing::info!(target: "sy::knowledge::daemon", "resumed");
                         let _ = bridge_tx.send(DaemonOp::Ipc(ipc::Op::IndexNow));
                     }
                 }
@@ -115,15 +153,18 @@ pub fn run() -> Result<()> {
                     bridge_paused.store(now_paused, Ordering::SeqCst);
                     if now_paused {
                         bridge_cancel.store(true, Ordering::SeqCst);
-                        eprintln!("sy knowledge daemon: paused (cancelling in-flight pass)");
+                        tracing::info!(
+                            target: "sy::knowledge::daemon",
+                            "paused (cancelling in-flight pass)"
+                        );
                     } else {
-                        eprintln!("sy knowledge daemon: resumed");
+                        tracing::info!(target: "sy::knowledge::daemon", "resumed");
                         let _ = bridge_tx.send(DaemonOp::Ipc(ipc::Op::IndexNow));
                     }
                 }
                 ipc::Op::Cancel => {
                     bridge_cancel.store(true, Ordering::SeqCst);
-                    eprintln!("sy knowledge daemon: cancel requested");
+                    tracing::info!(target: "sy::knowledge::daemon", "cancel requested");
                 }
                 other => {
                     let _ = bridge_tx.send(DaemonOp::Ipc(other.clone()));
@@ -186,13 +227,25 @@ pub fn run() -> Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
     install_signal_handlers(shutdown.clone());
 
-    eprintln!(
-        "sy knowledge daemon: ready (qdrant on {}, schedule {}s, manifests {}, throttle {}ms, cap {})",
-        qdrant::base_url(),
-        interval.as_secs(),
-        active_manifests.iter().filter(|m| m.enabled).count(),
-        sources::cpu_throttle().as_millis(),
-        sources::cpu_max_percent().map(|p| format!("{p}%")).unwrap_or_else(|| "off".into()),
+    // SPEC §4.5 / arch-supervision Step 4: announce `READY=1` once
+    // qdrant is up, the IPC socket is bound, the aiplane workers
+    // have loaded, and the initial index pass has completed. After
+    // this point `systemctl --user status sy-knowledge.service`
+    // shows `active (running)` and the `WatchdogSec=30s` timer
+    // arms. The watchdog ping thread fires unconditionally — it
+    // returns `None` on dev hosts where the unit isn't notify-
+    // supervised, so the dev run incurs no extra thread.
+    sy_core::notify::ready();
+    let _watchdog = sy_core::notify::spawn_watchdog();
+
+    tracing::info!(
+        target: "sy::knowledge::daemon",
+        qdrant_url = %qdrant::base_url(),
+        schedule_secs = interval.as_secs(),
+        manifests = active_manifests.iter().filter(|m| m.enabled).count(),
+        throttle_ms = sources::cpu_throttle().as_millis() as u64,
+        cpu_cap = %sources::cpu_max_percent().map(|p| format!("{p}%")).unwrap_or_else(|| "off".into()),
+        "daemon ready"
     );
 
     loop {
@@ -257,7 +310,11 @@ pub fn run() -> Result<()> {
 
         if want_schedule_reload {
             interval = parse_schedule_or_default();
-            eprintln!("sy knowledge daemon: schedule = {}s", interval.as_secs());
+            tracing::info!(
+                target: "sy::knowledge::daemon",
+                schedule_secs = interval.as_secs(),
+                "schedule reloaded"
+            );
         }
         if want_rescan {
             // Re-walk discovery roots; figure out which folders went away
@@ -269,14 +326,27 @@ pub fn run() -> Result<()> {
             for r in &retired {
                 let label = r.display().to_string();
                 if let Err(e) = qdrant::delete_by_source(&label) {
-                    eprintln!("sy knowledge daemon: delete_by_source({label}) failed: {e}");
+                    tracing::error!(
+                        target: "sy::knowledge::daemon",
+                        label = %label,
+                        error = %e,
+                        "delete_by_source failed"
+                    );
                 } else {
-                    eprintln!("sy knowledge daemon: retired manifest {label}");
+                    tracing::info!(
+                        target: "sy::knowledge::daemon",
+                        label = %label,
+                        "retired manifest"
+                    );
                 }
                 purge_index_subtree(r);
             }
             for a in &added {
-                eprintln!("sy knowledge daemon: discovered manifest {}", a.display());
+                tracing::info!(
+                    target: "sy::knowledge::daemon",
+                    path = %a.display(),
+                    "discovered manifest"
+                );
             }
             active_manifests = new_manifests;
             active_folders = new_folders;
@@ -302,7 +372,11 @@ pub fn run() -> Result<()> {
         if want_refresh {
             match build_watcher_set(daemon_tx.clone(), &active_manifests) {
                 Ok(w) => *watch_handle.lock() = w,
-                Err(e) => eprintln!("sy knowledge daemon: rebuild watchers failed: {e}"),
+                Err(e) => tracing::error!(
+                    target: "sy::knowledge::daemon",
+                    error = %e,
+                    "rebuild watchers failed"
+                ),
             }
         }
         // Skip pass-firing while paused. FS-tickles still set `want_index_fs`,
@@ -354,13 +428,19 @@ pub fn run() -> Result<()> {
         }
     }
 
-    eprintln!("sy knowledge daemon: shutting down");
+    // SPEC §4.5 Step 4: emit `STOPPING=1 STATUS="draining"` before
+    // teardown so siblings linked via `BindsTo=sy-qdrant.service`
+    // see a clean shutdown rather than `Result=signal`.
+    sy_core::notify::stopping();
+    tracing::info!(target: "sy::knowledge::daemon", "shutting down");
     write_shutdown_status(&last_pass, interval, last_run, &active_manifests);
     if let Some(supv) = crate::aiplane::supervisor::current() {
-        eprintln!("sy knowledge daemon: stopping aiplane workers");
+        tracing::info!(target: "sy::knowledge::daemon", "stopping aiplane workers");
         supv.shutdown(Duration::from_secs(5));
     }
-    shutdown_qdrant(&mut child);
+    if let Some(mut child) = qdrant_child {
+        shutdown_qdrant(&mut child);
+    }
     let _ = std::fs::remove_file(ipc::socket_path());
     Ok(())
 }
@@ -512,6 +592,57 @@ fn build_status(
         // managing. Empty until the supervisor has performed at
         // least one health poll (sub-second after init).
         workloads: supervisor_health(),
+        // SPEC §4.3 admission caps + live per-class depths.
+        queue_caps: status::default_queue_caps(),
+        queue_depths: supervisor_queue_depths(),
+        // SPEC §4.3 warm-pool roster — empty until the supervisor
+        // has touched at least one workload (boot-time `ensure`).
+        warm_models: supervisor_warm_models(),
+        // SPEC §4.3 inflight count: workers currently mid-RunBatch.
+        inflight: supervisor_inflight(),
+    }
+}
+
+/// Snapshot the supervisor's warm-pool roster for the status writer.
+/// Returns the empty list when the supervisor isn't running so
+/// legacy CPU-fallback callers (Zone 1) don't crash.
+fn supervisor_warm_models() -> Vec<String> {
+    crate::aiplane::supervisor::current()
+        .map(|s| s.warm_models())
+        .unwrap_or_default()
+}
+
+/// Count workers currently mid-`RunBatch` (SPEC §4.3 NPU `inflight`).
+/// Derived from the supervisor's last poll of each child's
+/// `WorkerHealth.inflight_request_id`. 0 when the supervisor isn't
+/// running or no children are loaded.
+fn supervisor_inflight() -> usize {
+    let Some(sup) = crate::aiplane::supervisor::current() else {
+        return 0;
+    };
+    sup.all_health()
+        .into_values()
+        .filter(|h| {
+            h.as_ref()
+                .and_then(|wh| wh.inflight_request_id.as_ref())
+                .is_some()
+        })
+        .count()
+}
+
+/// Snapshot the per-class scheduler queue depths for the status
+/// writer. Reads the bridge's `Scheduler::queue_depths()` via the
+/// process-wide handle installed by the IPC bridge at boot. Returns
+/// the default all-zeros map when no bridge is running (e.g. CLI
+/// fallback path, daemon shutting down).
+fn supervisor_queue_depths() -> std::collections::HashMap<String, usize> {
+    match crate::aiplane::ipc::current_scheduler() {
+        Some(s) => s
+            .queue_depths()
+            .into_iter()
+            .map(|(k, v)| (k.as_str().to_string(), v))
+            .collect(),
+        None => status::default_queue_depths(),
     }
 }
 
@@ -574,17 +705,24 @@ fn init_aiplane_supervisor() -> Result<()> {
     // outside the daemon's hot path.
     let ready_deadline = Duration::from_secs(1800);
     for kind in [WorkloadKind::Embed, WorkloadKind::Rerank] {
-        eprintln!("sy aiplane[supervisor]: ensuring worker {kind} is Ready (deadline 10m)");
+        tracing::info!(
+            target: "sy::knowledge::daemon",
+            kind = %kind,
+            deadline_secs = ready_deadline.as_secs(),
+            "ensuring worker is Ready"
+        );
         match supv.ensure(kind, ready_deadline) {
             Ok(h) => {
-                eprintln!(
-                    "sy aiplane[supervisor]: worker {kind} Ready (pid={}, backend={})",
-                    h.pid,
-                    match &h.state {
-                        crate::aiplane::registry::WorkloadState::Ready { backend } =>
-                            backend.as_str(),
-                        _ => "?",
-                    }
+                let backend = match &h.state {
+                    crate::aiplane::registry::WorkloadState::Ready { backend } => backend.as_str(),
+                    _ => "?",
+                };
+                tracing::info!(
+                    target: "sy::knowledge::daemon",
+                    kind = %kind,
+                    pid = h.pid,
+                    backend = %backend,
+                    "worker Ready"
                 );
             }
             Err(e) => {
@@ -678,22 +816,27 @@ fn run_one_pass(
             last.error = None;
             if !quiet && report.scanned > 0 {
                 let cancelled = ctx.cancelled();
-                eprintln!(
-                    "sy knowledge daemon: scanned {} indexed {} skipped {} deleted {} ({}ms){}{}",
-                    report.scanned,
-                    report.indexed,
-                    report.skipped,
-                    report.deleted,
-                    report.elapsed_ms,
-                    if throttle { " [throttled]" } else { "" },
-                    if cancelled { " [cancelled]" } else { "" }
+                tracing::info!(
+                    target: "sy::knowledge::daemon",
+                    scanned = report.scanned,
+                    indexed = report.indexed,
+                    skipped = report.skipped,
+                    deleted = report.deleted,
+                    latency_ms = report.elapsed_ms as u64,
+                    throttled = throttle,
+                    cancelled = cancelled,
+                    "index pass complete"
                 );
             }
         }
         Err(e) => {
             last.error = Some(format!("{e}"));
             last.at_unix = state::now_secs();
-            eprintln!("sy knowledge daemon: index pass failed: {e}");
+            tracing::error!(
+                target: "sy::knowledge::daemon",
+                error = %e,
+                "index pass failed"
+            );
         }
     }
     cancel.store(false, Ordering::SeqCst);
@@ -731,7 +874,11 @@ fn run_full_resync(
     );
     if let Err(e) = qdrant::recreate_collection() {
         last.error = Some(format!("recreate_collection: {e}"));
-        eprintln!("sy knowledge daemon: full resync failed: {e}");
+        tracing::error!(
+            target: "sy::knowledge::daemon",
+            error = %e,
+            "full resync failed (recreate_collection)"
+        );
         save_snapshot(
             false,
             paused.load(Ordering::SeqCst),
@@ -756,15 +903,21 @@ fn run_full_resync(
             last.chunks = report.chunks;
             last.throughput = throughput(report.chunks, report.elapsed_ms);
             last.error = None;
-            eprintln!(
-                "sy knowledge daemon: full resync done — indexed {} chunks ({}ms)",
-                report.chunks, report.elapsed_ms
+            tracing::info!(
+                target: "sy::knowledge::daemon",
+                chunks = report.chunks,
+                latency_ms = report.elapsed_ms as u64,
+                "full resync done"
             );
         }
         Err(e) => {
             last.error = Some(format!("{e}"));
             last.at_unix = state::now_secs();
-            eprintln!("sy knowledge daemon: full resync failed: {e}");
+            tracing::error!(
+                target: "sy::knowledge::daemon",
+                error = %e,
+                "full resync failed"
+            );
         }
     }
     cancel.store(false, Ordering::SeqCst);
@@ -804,7 +957,12 @@ fn set_process_priority() {
     unsafe {
         let _ = libc::syscall(SYS_IOPRIO_SET, IOPRIO_WHO_PROCESS, 0, prio);
     }
-    eprintln!("sy knowledge daemon: nice = {nice}, ionice = idle");
+    tracing::info!(
+        target: "sy::knowledge::daemon",
+        nice,
+        ionice = "idle",
+        "process priority applied"
+    );
 }
 
 fn parse_schedule_or_default() -> Duration {
@@ -882,9 +1040,12 @@ fn build_watcher_set(
     for r in sources::discover_roots().unwrap_or_default() {
         if r.exists() {
             if let Err(e) = watcher.watch(&r, RecursiveMode::Recursive) {
-                eprintln!(
-                    "sy knowledge daemon: watch (discover) {} failed: {e}",
-                    r.display()
+                tracing::error!(
+                    target: "sy::knowledge::daemon",
+                    source = "discover",
+                    path = %r.display(),
+                    error = %e,
+                    "watch registration failed"
                 );
             }
         }
@@ -893,9 +1054,12 @@ fn build_watcher_set(
     for r in sources::enabled_paths().unwrap_or_default() {
         if r.exists() {
             if let Err(e) = watcher.watch(&r, RecursiveMode::Recursive) {
-                eprintln!(
-                    "sy knowledge daemon: watch (explicit) {} failed: {e}",
-                    r.display()
+                tracing::error!(
+                    target: "sy::knowledge::daemon",
+                    source = "explicit",
+                    path = %r.display(),
+                    error = %e,
+                    "watch registration failed"
                 );
             }
         }
@@ -904,9 +1068,12 @@ fn build_watcher_set(
     for m in manifests.iter().filter(|m| m.enabled) {
         if m.folder.exists() {
             if let Err(e) = watcher.watch(&m.folder, RecursiveMode::Recursive) {
-                eprintln!(
-                    "sy knowledge daemon: watch (manifest) {} failed: {e}",
-                    m.folder.display()
+                tracing::error!(
+                    target: "sy::knowledge::daemon",
+                    source = "manifest",
+                    path = %m.folder.display(),
+                    error = %e,
+                    "watch registration failed"
                 );
             }
         }
@@ -1004,22 +1171,14 @@ static SIGNAL_RECEIVED: AtomicBool = AtomicBool::new(false);
 /// time anyway (the underlying `Embedder` is a `Mutex<...>` in
 /// embed.rs), and we don't want a flood of search requests to head-of-line
 /// block the daemon's own indexing pass.
-fn spawn_req_worker(req_rx: mpsc::Receiver<(ipc::Req, std::os::unix::net::UnixStream)>) {
+fn spawn_req_worker(req_rx: mpsc::Receiver<(ipc::Req, tokio::sync::oneshot::Sender<ipc::Resp>)>) {
     thread::spawn(move || {
-        use std::io::Write;
-        while let Ok((req, mut stream)) = req_rx.recv() {
+        while let Ok((req, tx)) = req_rx.recv() {
             let resp = handle_req(req);
-            let line = match serde_json::to_string(&resp) {
-                Ok(s) => s,
-                Err(e) => {
-                    // We failed to serialise even our own response; nothing
-                    // safe to send back. Drop the connection.
-                    eprintln!("sy knowledge daemon: req serialise: {e}");
-                    continue;
-                }
-            };
-            let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-            let _ = writeln!(stream, "{line}");
+            // The receiving end is the IPC v1 bridge handler awaiting
+            // the oneshot. If the connection went away mid-call the
+            // send fails — that's expected, not an error worth logging.
+            let _ = tx.send(resp);
         }
     });
 }
@@ -1030,8 +1189,9 @@ fn handle_req(req: ipc::Req) -> ipc::Resp {
             query,
             limit,
             prefix,
+            priority,
         } => {
-            let vec = match embed::embed_one(&query) {
+            let vec = match embed::embed_one(&query, priority) {
                 Ok(v) => v,
                 Err(e) => {
                     return ipc::Resp::Error {
@@ -1062,7 +1222,8 @@ fn handle_req(req: ipc::Req) -> ipc::Resp {
             limit,
             prefix,
             candidates,
-        } => handle_search_rerank(query, limit, prefix.as_deref(), candidates),
+            priority,
+        } => handle_search_rerank(query, limit, prefix.as_deref(), candidates, priority),
         ipc::Req::Run { workload, input } => {
             // Every NPU workload runs in its own worker subprocess.
             // The supervisor was started at daemon boot with embed +
@@ -1098,6 +1259,7 @@ fn handle_search_rerank(
     limit: usize,
     prefix: Option<&str>,
     candidates: usize,
+    priority: sy_core::Priority,
 ) -> ipc::Resp {
     use crate::aiplane::registry::{WorkloadInput, WorkloadKind, WorkloadOutput};
     use std::time::Instant;
@@ -1107,7 +1269,7 @@ fn handle_search_rerank(
 
     // Stage 1: embed the query (knowledge::embed's hot singleton).
     let t = Instant::now();
-    let qvec = match embed::embed_one(&query) {
+    let qvec = match embed::embed_one(&query, priority) {
         Ok(v) => v,
         Err(e) => {
             return ipc::Resp::Error {
@@ -1184,13 +1346,35 @@ fn handle_search_rerank(
         .collect();
 
     let ms_total = t_total.elapsed().as_secs_f64() * 1000.0;
-    eprintln!(
-        "sy aiplane[search-rerank]: candidates={} limit={} \
-         embed_ms={:.0} qdrant_ms={:.0} rerank_ms={:.0} total_ms={:.0}",
-        n_candidates, take, ms_embed, ms_qdrant, ms_rerank, ms_total
-    );
+    log_search_rerank_complete(n_candidates, take, ms_embed, ms_qdrant, ms_rerank, ms_total);
 
     ipc::Resp::Search { hits }
+}
+
+/// Emit the SPEC §4.6 "workload completed" structured event for a
+/// finished search-rerank call. Extracted from
+/// [`handle_search_rerank`] so the arch-observability Step 2 test
+/// (`info_workload_completed_carries_latency`) can exercise the
+/// emission shape without standing up a full qdrant + NPU stack.
+fn log_search_rerank_complete(
+    candidates: usize,
+    limit: usize,
+    embed_ms: f64,
+    qdrant_ms: f64,
+    rerank_ms: f64,
+    latency_ms: f64,
+) {
+    tracing::info!(
+        target: "sy::knowledge::daemon",
+        workload = "search-rerank",
+        candidates,
+        limit,
+        embed_ms,
+        qdrant_ms,
+        rerank_ms,
+        latency_ms,
+        "workload completed"
+    );
 }
 
 mod parking_lot_like_mutex {
@@ -1203,5 +1387,50 @@ mod parking_lot_like_mutex {
         pub fn lock(&self) -> MutexGuard<'_, T> {
             self.0.lock().expect("poisoned")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// arch-observability Step 2: the knowledge daemon's per-workload
+    /// completion log must be a structured `tracing::info!` carrying
+    /// `latency_ms` as a typed field (per SPEC §4.6 "Metrics"), not an
+    /// `eprintln!` line with the ms baked into the message. Verifies
+    /// the conversion from
+    ///   `eprintln!("…total_ms={:.0}", ms_total)`
+    /// to
+    ///   `tracing::info!(latency_ms = ms_total, "workload completed")`.
+    #[test]
+    #[tracing_test::traced_test]
+    fn info_workload_completed_carries_latency() {
+        const CANDIDATES: usize = 32;
+        const LIMIT: usize = 8;
+        const EMBED_MS: f64 = 4.0;
+        const QDRANT_MS: f64 = 2.5;
+        const RERANK_MS: f64 = 17.0;
+        const LATENCY_MS: f64 = 24.0;
+
+        log_search_rerank_complete(
+            CANDIDATES, LIMIT, EMBED_MS, QDRANT_MS, RERANK_MS, LATENCY_MS,
+        );
+
+        assert!(
+            logs_contain("latency_ms=24"),
+            "expected `latency_ms` structured field in captured tracing logs"
+        );
+        assert!(
+            logs_contain("workload=\"search-rerank\""),
+            "expected `workload` structured field tagging the call site"
+        );
+        assert!(
+            logs_contain("sy::knowledge::daemon"),
+            "expected the knowledge::daemon tracing target"
+        );
+        assert!(
+            logs_contain("workload completed"),
+            "expected the static \"workload completed\" message body"
+        );
     }
 }

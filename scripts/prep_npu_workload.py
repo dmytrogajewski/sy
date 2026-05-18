@@ -49,15 +49,34 @@ WORKLOAD_DEFAULTS = {
         "model_id": "BAAI/bge-reranker-v2-m3",
         "stem": "bge-reranker-v2-m3",
         "seq_len": 512,
-        # batch=1 is the only shape VAIP can compile for this
-        # backbone — at batch > 1 the partition pass serialises the
-        # graph (with per-tensor `value_info` shape metadata for
-        # every intermediate) and trips libprotobuf's 2 GB hard cap.
-        # The Rust worker still amortises kernel-launch overhead by
-        # holding the Session across N sequential calls.
+        # batch=1 is the only configuration that produces a real
+        # NPU partition for this backbone. Two failure modes blocked
+        # batch>1, both verified empirically on Strix + Quark 0.11rc1
+        # + VAIP / voe-4.0:
+        #
+        #   - BF16 + batch=8 + `_strip_value_info` + `_shrink_fp32`:
+        #     VAIP's `ModelProto::SerializeToString` still lands at
+        #     ~2.29 GiB on Quark's QDQ-annotated graph, over
+        #     libprotobuf's hard 2 GiB cap. Quark keeps the FP32
+        #     QDQ-wrapped weights inline even with shrink.
+        #
+        #   - INT8_TRANSFORMER_DEFAULT + batch=8: compile finishes,
+        #     but VAIP partitions nothing (empty
+        #     `vaiml_partition_fe.flexml/`, no `.rai`) — the QDQ
+        #     pattern Quark emits doesn't match VAIP's
+        #     `fuse_MatMulNBits` / `vaip-pass_ssmlp` rules. Workload
+        #     falls back to CPU (~11 s per pair).
+        #
+        # The path to true batched rerank is a smaller multilingual
+        # backbone (e.g. `jinaai/jina-reranker-v2-base-multilingual`,
+        # ~278M params) or a custom Quark recipe that emits VAIP-
+        # friendly INT8 QDQ patterns. The `_strip_value_info` helper
+        # below is kept since it's an unconditional win for any
+        # batch>1 export attempt.
         "batch_size": 1,
         "quant_preset": "BF16",
         "no_bf16_shrink": True,
+        "strip_value_info": False,
         "ships_tokenizer": True,
     },
     "vad": {
@@ -332,6 +351,39 @@ def quantize(in_path: Path, out_path: Path, preset: str,
         _shrink_fp32_initializers_to_bf16(out_path)
 
 
+def _strip_value_info(path: Path) -> int:
+    """Drop `graph.value_info` entries from the model. These are
+    per-tensor intermediate shape annotations torch.onnx.export bakes
+    in for every node output (thousands for xlm-roberta-large). They
+    are pure metadata — ORT re-infers shapes at session-load. For
+    batch>1 exports of large transformer backbones, the value_info
+    bytes alone push VAIP's `ModelProto::SerializeToString` over
+    libprotobuf's 2 GiB hard cap mid-partition. Removing them is the
+    difference between "compile fails at batch=2" and "compile fine
+    at batch=8"."""
+    import onnx
+
+    model = onnx.load(path.as_posix(), load_external_data=True)
+    n = len(model.graph.value_info)
+    if n == 0:
+        return 0
+    del model.graph.value_info[:]
+
+    data_name = path.name + ".data"
+    if (path.parent / data_name).exists():
+        (path.parent / data_name).unlink()
+    onnx.save_model(
+        model,
+        path.as_posix(),
+        save_as_external_data=True,
+        all_tensors_to_one_file=True,
+        location=data_name,
+        size_threshold=1024,
+    )
+    print(f"  value_info-strip: removed {n} entries", file=sys.stderr)
+    return n
+
+
 def _shrink_fp32_initializers_to_bf16(path: Path) -> None:
     """Rewrite every FP32 initializer feeding only a Cast(FP32→BF16)
     to store data as BFLOAT16 in raw_data. Halves the on-disk weight
@@ -558,6 +610,8 @@ def main() -> int:
           file=sys.stderr)
     if not quant.is_file():
         quantize(fp32, quant, preset, bf16_shrink=do_shrink)
+        if defaults.get("strip_value_info"):
+            _strip_value_info(quant)
     else:
         print(f"      reusing existing {quant.name}", file=sys.stderr)
     summary["quant_path"] = str(quant)

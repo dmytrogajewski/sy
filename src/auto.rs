@@ -651,7 +651,7 @@ fn list_detectors(json_out: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&arr)?);
         return Ok(());
     }
-    println!("{:<22} {:<5} {}", "ID", "ON", "LABEL");
+    println!("{:<22} {:<5} LABEL", "ID", "ON");
     for d in &all {
         let on = if d.default_on { "yes" } else { "no" };
         println!("{:<22} {:<5} {}", d.id, on, d.label);

@@ -31,11 +31,9 @@ pub fn run(waybar: bool) -> Result<()> {
         s.util_pct,
         s.vram_used_mib as f64 / 1024.0,
         s.vram_total_mib as f64 / 1024.0,
-        if s.vram_total_mib > 0 {
-            (s.vram_used_mib * 100) / s.vram_total_mib
-        } else {
-            0
-        },
+        (s.vram_used_mib * 100)
+            .checked_div(s.vram_total_mib)
+            .unwrap_or(0),
     );
     Ok(())
 }

@@ -5,7 +5,11 @@
 //! always produces the same output — integration tests can assert
 //! exact equality.
 
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
@@ -15,10 +19,23 @@ use super::super::registry::{
 use super::super::session::SessionPool;
 use super::VECTOR_DIM;
 
+/// Polling granularity used by the cancellable sleep in
+/// [`FakeWorkload`]. Small enough that the cancel test reliably
+/// observes interruption within its 1 s deadline.
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
 pub struct FakeWorkload {
     /// We pretend to be whatever kind the test wants.
     kind: WorkloadKind,
     loaded: Mutex<bool>,
+    /// Per-call cooperative sleep (ms). Zero means "no sleep". Used by
+    /// the worker-cancel tests to keep a single inference inflight
+    /// long enough for a Cancel to arrive.
+    sleep_ms: u64,
+    /// Cooperative cancel flag. [`Workload::try_cancel`] sets it; the
+    /// `sleep_ms` polling loop in [`Workload::run`] observes it and
+    /// returns `Err(anyhow!("cancelled"))` early.
+    cancel: AtomicBool,
 }
 
 impl FakeWorkload {
@@ -26,6 +43,8 @@ impl FakeWorkload {
         Self {
             kind,
             loaded: Mutex::new(false),
+            sleep_ms: 0,
+            cancel: AtomicBool::new(false),
         }
     }
 
@@ -34,6 +53,17 @@ impl FakeWorkload {
     /// `Embed` workload registered in tests.
     pub fn embed() -> Self {
         Self::new(WorkloadKind::Embed)
+    }
+
+    /// Build a cancellable fake whose `run` sleeps for `sleep_ms`
+    /// before returning. Used by worker / supervisor cancel tests.
+    pub fn with_sleep_ms(kind: WorkloadKind, sleep_ms: u64) -> Self {
+        Self {
+            kind,
+            loaded: Mutex::new(false),
+            sleep_ms,
+            cancel: AtomicBool::new(false),
+        }
     }
 }
 
@@ -52,6 +82,17 @@ impl Workload for FakeWorkload {
     }
 
     fn run(&self, input: WorkloadInput) -> Result<WorkloadOutput> {
+        if self.sleep_ms > 0 {
+            let deadline = Instant::now() + Duration::from_millis(self.sleep_ms);
+            while Instant::now() < deadline {
+                if self.cancel.load(Ordering::SeqCst) {
+                    self.cancel.store(false, Ordering::SeqCst);
+                    anyhow::bail!("cancelled");
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                std::thread::sleep(remaining.min(CANCEL_POLL_INTERVAL));
+            }
+        }
         let bytes: Vec<u8> = match &input {
             WorkloadInput::Text { text } => text.as_bytes().to_vec(),
             WorkloadInput::TextPair { a, b } => {
@@ -83,6 +124,11 @@ impl Workload for FakeWorkload {
 
     fn unload(&self) {
         *self.loaded.lock().expect("fake loaded poisoned") = false;
+    }
+
+    fn try_cancel(&self) -> bool {
+        self.cancel.store(true, Ordering::SeqCst);
+        true
     }
 
     fn health(&self) -> WorkloadHealth {
@@ -169,6 +215,41 @@ mod tests {
             }
             _ => panic!("expected Vector"),
         }
+    }
+
+    #[test]
+    fn cancellable_sleep_returns_early_when_try_cancel_fires() {
+        // SPEC §4.3 "Cancellation pattern" / ROADMAP Step 4: a
+        // `with_sleep_ms` fake hits `try_cancel` from another thread
+        // and surfaces the inflight `run` with an "cancelled" error
+        // well before the sleep deadline. Without the cooperative
+        // hook, this test would block for the full SLEEP_MS.
+        use std::sync::Arc;
+        use std::thread;
+        const SLEEP_MS: u64 = 5_000;
+        const CANCEL_AFTER_MS: u64 = 50;
+        const DEADLINE_MS: u64 = 1_000;
+        let w = Arc::new(FakeWorkload::with_sleep_ms(WorkloadKind::Embed, SLEEP_MS));
+        w.load(&SessionPool::new()).unwrap();
+        let w_cancel = Arc::clone(&w);
+        let canceller = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(CANCEL_AFTER_MS));
+            assert!(w_cancel.try_cancel(), "cancellable fake claims cancel");
+        });
+        let t0 = Instant::now();
+        let err = w
+            .run(WorkloadInput::Text { text: "hi".into() })
+            .expect_err("inflight run cancels");
+        canceller.join().expect("canceller joins");
+        let elapsed = t0.elapsed();
+        assert!(
+            err.to_string().contains("cancelled"),
+            "error message should advertise the cancel: {err}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(DEADLINE_MS),
+            "cancel must beat the {DEADLINE_MS}ms deadline; took {elapsed:?}"
+        );
     }
 
     #[test]

@@ -142,7 +142,7 @@ fn apply(p: &mut Palette, tf: &ThemeFile) {
 fn hex(s: &str) -> Color {
     let s = s.trim().trim_start_matches('#');
     let parse = |i: usize| -> f32 {
-        u8::from_str_radix(&s.get(i..i + 2).unwrap_or("00"), 16).unwrap_or(0) as f32 / 255.0
+        u8::from_str_radix(s.get(i..i + 2).unwrap_or("00"), 16).unwrap_or(0) as f32 / 255.0
     };
     if s.len() < 6 {
         return Color::BLACK;

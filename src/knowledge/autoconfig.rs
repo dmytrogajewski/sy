@@ -388,7 +388,7 @@ fn probe_obsidian(env: &ProbeEnv) -> Vec<Suggestion> {
             };
             let p = dent.path();
             if p.file_name().and_then(|n| n.to_str()) == Some(".obsidian")
-                && dent.file_type().map_or(false, |t| t.is_dir())
+                && dent.file_type().is_some_and(|t| t.is_dir())
             {
                 if let Some(parent) = p.parent() {
                     let folder = parent.to_path_buf();
@@ -427,7 +427,7 @@ fn probe_logseq(env: &ProbeEnv) -> Vec<Suggestion> {
             };
             let p = dent.path();
             if p.file_name().and_then(|n| n.to_str()) == Some("logseq")
-                && dent.file_type().map_or(false, |t| t.is_dir())
+                && dent.file_type().is_some_and(|t| t.is_dir())
             {
                 let parent = match p.parent() {
                     Some(p) => p.to_path_buf(),

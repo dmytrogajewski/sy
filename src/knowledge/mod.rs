@@ -84,7 +84,7 @@ pub enum KnowledgeCmd {
     /// Semantic search over indexed content. Two-stage by default:
     /// embed → qdrant top-`--candidates` → bge-reranker cross-encoder
     /// → top-`--limit`. Pass `--no-rerank` for the embed-only path
-    /// (~150 ms warm vs ~1 s with rerank).
+    /// (~250 ms warm vs ~2.8 s with rerank @ 8 candidates on AMD NPU).
     Search {
         query: String,
         #[arg(short = 'k', long, default_value = "8")]
@@ -99,9 +99,22 @@ pub enum KnowledgeCmd {
         #[arg(long)]
         no_rerank: bool,
         /// Candidates pulled from qdrant before reranking. Ignored
-        /// with `--no-rerank`.
-        #[arg(long, default_value_t = 30)]
+        /// with `--no-rerank`. Each candidate adds ~350 ms of NPU
+        /// rerank time (bge-reranker-v2-m3 at batch=1) — bump higher
+        /// only when recall outranks latency.
+        #[arg(long, default_value_t = 8)]
         candidates: usize,
+        /// QoS class for the embed step's scheduler admission
+        /// (SPEC §4.7). Case-sensitive PascalCase: `Realtime |
+        /// Interactive | Background | Batch`. CLI defaults to
+        /// `Interactive`.
+        #[arg(
+            long,
+            value_name = "CLASS",
+            env = "SY_PRIORITY",
+            default_value = "Interactive"
+        )]
+        priority: sy_core::Priority,
     },
 
     /// List active `qdr.toml` manifests (auto-discovered + under explicit
@@ -178,17 +191,6 @@ pub enum KnowledgeCmd {
         #[arg(long)]
         json: bool,
     },
-
-    /// Install the system-level systemd unit that supervises the
-    /// knowledge daemon with the AMD Ryzen AI NPU capabilities
-    /// (CAP_IPC_LOCK + LimitMEMLOCK=infinity) it needs. One-time setup;
-    /// auto-starts the daemon on every boot afterwards. Requires sudo.
-    InstallService {
-        /// Print the rendered unit + the commands that would be run;
-        /// don't touch /etc.
-        #[arg(long)]
-        dry_run: bool,
-    },
 }
 
 pub fn dispatch(cmd: KnowledgeCmd) -> Result<()> {
@@ -211,6 +213,7 @@ pub fn dispatch(cmd: KnowledgeCmd) -> Result<()> {
             source,
             no_rerank,
             candidates,
+            priority,
         } => cli::search(
             &query,
             limit,
@@ -218,6 +221,7 @@ pub fn dispatch(cmd: KnowledgeCmd) -> Result<()> {
             source.as_deref(),
             !no_rerank,
             candidates,
+            priority,
         ),
         KnowledgeCmd::Manifests { json } => cli::manifests(json),
         KnowledgeCmd::Waybar => cli::waybar(),
@@ -232,7 +236,6 @@ pub fn dispatch(cmd: KnowledgeCmd) -> Result<()> {
         KnowledgeCmd::McpEnable { apply, json } => cli::mcp_enable(apply, json),
         KnowledgeCmd::McpDisable { apply, json } => cli::mcp_disable(apply, json),
         KnowledgeCmd::McpStatus { json } => cli::mcp_status_cmd(json),
-        KnowledgeCmd::InstallService { dry_run } => cli::install_service(dry_run),
     }
 }
 

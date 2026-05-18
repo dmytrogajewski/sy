@@ -72,12 +72,10 @@ spawn-at-startup "mako"
 spawn-at-startup "{{ home }}/.local/bin/sy" "notif" "watch"
 spawn-at-startup "wlsunset" "-t" "3800" "-T" "6500" "-l" "50.45" "-S" "06:00" "-s" "20:30"
 spawn-at-startup "waybar"
-// sy stack bar: must register AFTER waybar has its top exclusive
-// zone advertised, so niri deducts waybar's 24-px zone from the
-// bar's top edge. Otherwise the bar would overlap waybar in the
-// top-right corner. The `until pgrep` loop plus a short settle
-// delay closes the spawn-order race window niri-startup leaves.
-spawn-at-startup "sh" "-c" "until pgrep -x waybar >/dev/null; do sleep 0.05; done; sleep 0.3; exec {{ home }}/.local/bin/sy stack bar"
+// sy stack bar is owned by `sy-stack-bar.service`
+// (WantedBy=graphical-session.target). The waybar wait-loop that
+// used to live here now lives in the unit's ExecStartPre so there
+// is exactly one owner with Restart=on-failure supervision.
 // Wallpaper daemon: re-applies whatever `sy wallpaper <path>` last saved.
 spawn-at-startup "{{ home }}/.local/bin/sy" "wallpaper" "--start"
 // sy-agentd: long-lived daemon owning ACP child sessions.

@@ -1,0 +1,50 @@
+# sy agentd — long-lived daemon owning ACP child processes (see
+# `src/agt/daemon.rs`). No NPU caps; the agent plane shells out
+# to language-model CLI tools (codex, claude-code, …) and
+# never opens `/dev/accel/accel0` directly.
+#
+# `Type=notify`: `agt::daemon::run` calls `sy_core::notify::ready()`
+# after the IPC socket binds and emits `STOPPING=1 STATUS="draining"`
+# on SIGTERM/SIGINT before draining sessions. `WatchdogSec=30s`
+# arms the watchdog timer; `sy_core::notify::spawn_watchdog` pings
+# `WATCHDOG=1` at half-interval. `NotifyAccess=main` restricts the
+# notify socket to the daemon pid — sandboxed ACP children can't
+# spoof readiness through their inherited environment.
+#
+# Today's CLI invocation is `sy agt daemon` (no `--foreground`
+# flag — `agt::daemon::run_blocking` always runs in the
+# foreground). The unit will continue to work after Step 4's
+# notify flip without an ExecStart change.
+#
+# Source: specs/research/architecture-refactor/SPEC.md §4.5.
+
+[Unit]
+Description=sy agent daemon (ACP supervisor)
+After=graphical-session.target
+PartOf=sy.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=300s
+TimeoutStartSec=300s
+# ACP children inherit the daemon's environment. Without these the
+# agent has to rediscover the user session bus on every spawn —
+# notify-send / wl-copy / playerctl fail with "Cannot autolaunch
+# D-Bus without X11 $DISPLAY" until the agent points at
+# /run/user/$UID/bus by hand. `%t` is the per-user runtime dir
+# (`/run/user/$UID`), set by user@.service. `WAYLAND_DISPLAY=wayland-1`
+# matches niri's default output socket — niri sets the same value in
+# the parent session.
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
+Environment=XDG_RUNTIME_DIR=%t
+Environment=WAYLAND_DISPLAY=wayland-1
+ExecStart=%h/.local/bin/sy agt daemon
+Restart=on-failure
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sy-agentd
+
+[Install]
+WantedBy=sy.target

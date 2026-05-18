@@ -1,30 +1,48 @@
 //! sy-agentd: long-lived daemon owning all ACP child processes and serving
-//! a Unix-socket protocol used by `sy agt …` clients.
+//! a Unix-socket protocol used by `sy agt …` clients. Wire format is IPC
+//! v1 (SPEC §4.2) via `sy-ipc`; `agt.tail` opens a streaming response per
+//! ROADMAP arch-ipc-v1 Step 6.
 
-use std::{collections::HashMap, path::PathBuf, process::Stdio, sync::Arc, time::Duration};
+use std::{collections::HashMap, process::Stdio, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
+use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
+use sy_core::ErrorCode;
+use sy_ipc::{
+    BuildInfo, Capabilities, ErrorBody, Event, EventCodec, HealthFn, HealthSnapshot, HealthState,
+    RequestCodec, Response, ResponseCodec, SystemMethods, SCHEMA_VERSION,
+};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
     sync::{mpsc, Mutex},
     time::sleep,
 };
+use tokio_util::codec::{FramedRead, FramedWrite};
+use ulid::Ulid;
 
 use crate::agt::{
     acp::{AcpChild, AcpInbound},
-    permission::{ask, Decision},
+    audit::{self, AuditDecision, AuditRecord},
+    permission::{ask, ask_with_policy, Decision},
+    policy::{ConsentDecision, ConsentError, ConsentStore, Resolver},
     protocol::{ClientReply, ClientReq, DaemonEvent, SessionInfo, SessionStatus, TranscriptEntry},
     registry,
     session::{entry_from_update, state_dir, Completion, Session},
-    socket_path,
+    socket_path, wire,
 };
 
 type SharedSession = Arc<Mutex<Session>>;
 type Sessions = Arc<Mutex<HashMap<String, SharedSession>>>;
 
 pub fn run_blocking() -> Result<()> {
+    // SPEC §4.6 / arch-observability Step 1: install the daemon's
+    // tracing subscriber before the tokio runtime spawns threads
+    // so every worker inherits it. `_obs_guard` lives for the
+    // daemon's full lifetime; dropping it could lose buffered
+    // log lines.
+    let _obs_guard = sy_core::obs::init(sy_core::obs::Mode::Daemon { name: "sy-agentd" })?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -47,8 +65,18 @@ async fn run() -> Result<()> {
     }
     eprintln!("sy-agentd: listening on {}", sock.display());
 
+    // SPEC §4.5 / arch-supervision Step 4: announce `READY=1` after
+    // the listener is bound so `systemctl --user status sy-agentd`
+    // flips from `activating` to `active (running)`. On non-systemd
+    // hosts this is a no-op (no `NOTIFY_SOCKET`). The watchdog ping
+    // task is spawned unconditionally — it returns `None` when
+    // `WATCHDOG_USEC` isn't set, so dev runs don't burn a task.
+    sy_core::notify::ready();
+    let _watchdog = sy_core::notify::spawn_watchdog();
+
     let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
     rehydrate_persisted(&sessions).await;
+    let bridge = Arc::new(AgtBridge::new(sessions.clone()));
 
     // Graceful shutdown on SIGTERM / SIGINT.
     let shutdown_sessions = sessions.clone();
@@ -61,6 +89,10 @@ async fn run() -> Result<()> {
             _ = term.recv() => {},
             _ = intr.recv() => {},
         }
+        // SPEC §4.5 Step 4: emit `STOPPING=1 STATUS="draining"` before
+        // the cleanup pass so siblings depending on us via `BindsTo=`
+        // see a clean shutdown rather than a `Result=signal` failure.
+        sy_core::notify::stopping();
         eprintln!("sy-agentd: shutting down");
         // Best-effort cancel of all sessions.
         let map = shutdown_sessions.lock().await;
@@ -82,6 +114,7 @@ async fn run() -> Result<()> {
         std::process::exit(0);
     });
 
+    let euid = rustix::process::geteuid().as_raw();
     loop {
         let (stream, _) = match listener.accept().await {
             Ok(p) => p,
@@ -91,105 +124,139 @@ async fn run() -> Result<()> {
                 continue;
             }
         };
-        let sessions = sessions.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, sessions).await {
-                eprintln!("sy-agentd: client error: {e}");
+        match stream.peer_cred() {
+            Ok(cred) if cred.uid() == euid => {}
+            _ => {
+                drop(stream);
+                continue;
             }
+        }
+        let bridge = Arc::clone(&bridge);
+        tokio::spawn(async move {
+            handle_client(stream, bridge).await;
         });
     }
 }
 
-async fn handle_client(stream: UnixStream, sessions: Sessions) -> Result<()> {
-    let (rd, mut wr) = stream.into_split();
-    let mut lines = BufReader::new(rd).lines();
-    while let Some(line) = lines.next_line().await? {
-        let req: ClientReq = match serde_json::from_str(&line) {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = write_line(
-                    &mut wr,
-                    &ClientReply::Error {
-                        message: format!("bad request: {e}"),
-                        code: 3,
-                    },
-                )
-                .await;
-                continue;
-            }
+/// Bridge between the v1 IPC envelope and the in-process session
+/// state. Composes `SystemMethods` for the reserved `system.*` surface
+/// and dispatches `agt.*` methods into the existing handlers.
+struct AgtBridge {
+    sessions: Sessions,
+    system: SystemMethods,
+    /// arch-agent-sandbox Step 6: tokens parked here by
+    /// `Decision::ConsentRequired` and resolved by the `agt.approve`
+    /// IPC handler. Shared between every incoming connection so a
+    /// `sy approve` from one connection wakes the original tool call
+    /// blocked on another.
+    consent: Arc<ConsentStore>,
+}
+
+impl AgtBridge {
+    fn new(sessions: Sessions) -> Self {
+        let cancel_registry = Arc::new(sy_ipc::CancelRegistry::new());
+        let health_fn: HealthFn = Arc::new(|| HealthSnapshot {
+            state: HealthState::Ready,
+            status_line: "agentd ready".into(),
+            queue_depth: 0,
+            warm_models: Vec::new(),
+        });
+        let mut capabilities = Capabilities::baseline();
+        capabilities.streaming = true; // `agt.tail` streams events.
+        let build_info = BuildInfo {
+            name: "sy-agentd".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            git_sha: option_env!("SY_GIT_SHA").unwrap_or("dev").into(),
         };
+        let system = SystemMethods::new(
+            build_info,
+            health_fn,
+            cancel_registry,
+            capabilities,
+            wire::ALL_METHODS.iter().map(|s| (*s).to_string()).collect(),
+        );
+        Self {
+            sessions,
+            system,
+            consent: Arc::new(ConsentStore::new()),
+        }
+    }
+
+    /// SPEC §4.4 step 2 (a): resolve a pending consent token. The
+    /// approver's pid/uid come from the IPC connection's `SO_PEERCRED`
+    /// — passed in so the audit record carries them alongside the
+    /// original tool call's metadata.
+    fn handle_approve(
+        &self,
+        token_str: &str,
+        approver_pid: Option<u32>,
+        approver_uid: Option<u32>,
+        request_id: Option<Ulid>,
+    ) -> std::result::Result<Value, (ErrorCode, String)> {
+        let token = uuid::Uuid::parse_str(token_str).map_err(|e| {
+            (
+                ErrorCode::BadRequest,
+                format!("invalid token {token_str:?}: {e}"),
+            )
+        })?;
+        let snapshot = self.consent.snapshot(token);
+        match self.consent.decide(token, ConsentDecision::Allow) {
+            Ok(()) => {
+                if let Some(snap) = snapshot {
+                    emit_approve_audit(
+                        snap,
+                        approver_pid,
+                        approver_uid,
+                        request_id,
+                        &audit::default_audit_dir(),
+                    );
+                }
+                Ok(json!({ "approved": token.to_string() }))
+            }
+            Err(ConsentError::NotFound) => {
+                Err((ErrorCode::BadRequest, format!("token {token} not found")))
+            }
+            Err(ConsentError::Expired) => {
+                Err((ErrorCode::ConsentRequired, format!("token {token} expired")))
+            }
+        }
+    }
+
+    async fn handle_unary(&self, req: ClientReq, request_id: Option<Ulid>) -> Result<ClientReply> {
         match req {
             ClientReq::Run { agent, cwd, prompt } => {
-                match start_session(&sessions, &agent, &cwd, &prompt).await {
-                    Ok(id) => {
-                        write_line(&mut wr, &ClientReply::RunReply { session_id: id }).await?
-                    }
-                    Err(e) => {
-                        write_line(
-                            &mut wr,
-                            &ClientReply::Error {
-                                message: e.to_string(),
-                                code: 4,
-                            },
-                        )
-                        .await?
-                    }
-                }
+                let id = start_session(
+                    &self.sessions,
+                    &agent,
+                    &cwd,
+                    &prompt,
+                    Arc::clone(&self.consent),
+                    request_id,
+                )
+                .await?;
                 signal_waybar();
+                Ok(ClientReply::RunReply { session_id: id })
             }
             ClientReq::List => {
-                let map = sessions.lock().await;
+                let map = self.sessions.lock().await;
                 let mut infos = Vec::with_capacity(map.len());
                 for s in map.values() {
                     infos.push(s.lock().await.info.clone());
                 }
                 drop(map);
                 infos.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-                write_line(&mut wr, &ClientReply::ListReply { sessions: infos }).await?;
+                Ok(ClientReply::ListReply { sessions: infos })
             }
             ClientReq::Prompt { session_id, text } => {
-                match send_prompt(&sessions, &session_id, &text).await {
-                    Ok(()) => write_line(&mut wr, &ClientReply::Ack).await?,
-                    Err(e) => {
-                        write_line(
-                            &mut wr,
-                            &ClientReply::Error {
-                                message: e.to_string(),
-                                code: 4,
-                            },
-                        )
-                        .await?
-                    }
-                }
+                send_prompt(&self.sessions, &session_id, &text).await?;
+                Ok(ClientReply::Ack)
             }
             ClientReq::Stop { session_id } => {
-                match stop_session(&sessions, &session_id).await {
-                    Ok(()) => write_line(&mut wr, &ClientReply::Ack).await?,
-                    Err(e) => {
-                        write_line(
-                            &mut wr,
-                            &ClientReply::Error {
-                                message: e.to_string(),
-                                code: 4,
-                            },
-                        )
-                        .await?
-                    }
-                }
+                stop_session(&self.sessions, &session_id).await?;
                 signal_waybar();
+                Ok(ClientReply::Ack)
             }
-            ClientReq::Tail {
-                session_id,
-                follow,
-                replay,
-            } => {
-                stream_tail(&sessions, &session_id, follow, replay, &mut wr).await?;
-                return Ok(()); // tail consumes the connection
-            }
-            ClientReq::PermissionDecision { .. } => {
-                // v1: not wired (notify-send is the canonical decision channel).
-                write_line(&mut wr, &ClientReply::Ack).await?;
-            }
+            ClientReq::PermissionDecision { .. } => Ok(ClientReply::Ack),
             ClientReq::Diag => {
                 let agents = registry::load().unwrap_or_default();
                 let mut entries = Vec::new();
@@ -209,30 +276,176 @@ async fn handle_client(stream: UnixStream, sessions: Sessions) -> Result<()> {
                             .unwrap_or_default(),
                     });
                 }
-                write_line(&mut wr, &ClientReply::DiagReply { agents: entries }).await?;
+                Ok(ClientReply::DiagReply { agents: entries })
             }
-            ClientReq::Shutdown => {
-                write_line(&mut wr, &ClientReply::Ack).await?;
-                std::process::exit(0);
-            }
+            ClientReq::Shutdown => Ok(ClientReply::Ack),
+            ClientReq::Tail { .. } => unreachable!("tail flows through the streaming branch"),
         }
     }
-    Ok(())
 }
 
-async fn write_line(wr: &mut tokio::net::unix::OwnedWriteHalf, reply: &ClientReply) -> Result<()> {
-    let mut buf = serde_json::to_vec(reply)?;
-    buf.push(b'\n');
-    wr.write_all(&buf).await?;
-    wr.flush().await?;
-    Ok(())
+async fn handle_client(stream: UnixStream, bridge: Arc<AgtBridge>) {
+    let peer = stream
+        .peer_cred()
+        .ok()
+        .map(|c| (c.pid().map(|p| p as u32), Some(c.uid())));
+    let (reader, writer) = stream.into_split();
+    let mut buf_reader = BufReader::new(reader);
+    let initial = match buf_reader.fill_buf().await {
+        Ok(b) if !b.is_empty() => b[0],
+        _ => return,
+    };
+    if initial == b'{' || initial == b'[' || initial.is_ascii_whitespace() {
+        reject_legacy_envelope(buf_reader, writer).await;
+        return;
+    }
+    let mut req_stream = FramedRead::new(buf_reader, RequestCodec::default());
+    let mut resp_sink = FramedWrite::new(writer, ResponseCodec::default());
+    let req = match req_stream.next().await {
+        Some(Ok(r)) => r,
+        _ => return,
+    };
+    if let Some(resp) = bridge.system.try_handle(&req) {
+        let _ = resp_sink.send(resp).await;
+        return;
+    }
+    if req.method == wire::METHOD_APPROVE {
+        let token = req
+            .params
+            .get("token")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let (pid, uid) = peer.unwrap_or((None, None));
+        let resp = match bridge.handle_approve(token, pid, uid, Some(req.request_id)) {
+            Ok(result) => ok_response(req.request_id, result),
+            Err((code, msg)) => err_response(req.request_id, code, msg),
+        };
+        let _ = resp_sink.send(resp).await;
+        return;
+    }
+    let parsed = match wire::from_request(&req.method, &req.params) {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = resp_sink
+                .send(err_response(
+                    req.request_id,
+                    ErrorCode::BadRequest,
+                    e.to_string(),
+                ))
+                .await;
+            return;
+        }
+    };
+    match parsed {
+        ClientReq::Tail {
+            session_id,
+            follow,
+            replay,
+        } => {
+            if resp_sink
+                .send(ok_response(
+                    req.request_id,
+                    serde_json::json!({ "streaming": true }),
+                ))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let writer = resp_sink.into_inner();
+            let mut event_sink = FramedWrite::new(writer, EventCodec::default());
+            stream_tail_v1(
+                &bridge.sessions,
+                &session_id,
+                follow,
+                replay,
+                &mut event_sink,
+                req.request_id,
+            )
+            .await;
+            let _ = event_sink.send(Event::closed(req.request_id)).await;
+        }
+        ClientReq::Shutdown => {
+            let resp = match bridge
+                .handle_unary(ClientReq::Shutdown, Some(req.request_id))
+                .await
+            {
+                Ok(reply) => match wire::reply_to_result(&reply) {
+                    Ok(result) => ok_response(req.request_id, result),
+                    Err(e) => err_response(req.request_id, ErrorCode::Internal, e.to_string()),
+                },
+                Err(e) => err_response(req.request_id, ErrorCode::Internal, e.to_string()),
+            };
+            let _ = resp_sink.send(resp).await;
+            let _ = resp_sink.flush().await;
+            std::process::exit(0);
+        }
+        other => {
+            let resp = match bridge.handle_unary(other, Some(req.request_id)).await {
+                Ok(reply) => match wire::reply_to_result(&reply) {
+                    Ok(result) => ok_response(req.request_id, result),
+                    Err(e) => err_response(req.request_id, ErrorCode::Internal, e.to_string()),
+                },
+                Err(e) => err_response(req.request_id, ErrorCode::Internal, e.to_string()),
+            };
+            let _ = resp_sink.send(resp).await;
+        }
+    }
+}
+
+fn ok_response(request_id: Ulid, result: Value) -> Response {
+    Response::Ok {
+        schema_version: SCHEMA_VERSION,
+        request_id,
+        result,
+        blob: None,
+    }
+}
+
+fn err_response(request_id: Ulid, code: ErrorCode, message: String) -> Response {
+    Response::Err {
+        schema_version: SCHEMA_VERSION,
+        request_id,
+        error: ErrorBody {
+            code,
+            message,
+            retry_after_ms: None,
+            details: Value::Null,
+        },
+    }
+}
+
+async fn reject_legacy_envelope(
+    mut reader: tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
+    mut writer: tokio::net::unix::OwnedWriteHalf,
+) {
+    let mut sink = [0u8; 4096];
+    let _ = reader.read(&mut sink).await;
+    let err = Response::Err {
+        schema_version: SCHEMA_VERSION,
+        request_id: Ulid::new(),
+        error: ErrorBody {
+            code: ErrorCode::IncompatibleSchema,
+            message: "legacy line-JSON IPC is no longer accepted; speak sy-ipc v1".into(),
+            retry_after_ms: None,
+            details: Value::Null,
+        },
+    };
+    if let Ok(line) = serde_json::to_string(&err) {
+        let _ = writer.write_all(line.as_bytes()).await;
+        let _ = writer.write_all(b"\n").await;
+        let _ = writer.flush().await;
+    }
+    let _ = writer.shutdown().await;
 }
 
 async fn start_session(
     sessions: &Sessions,
     agent: &str,
-    cwd: &PathBuf,
+    cwd: &std::path::Path,
     prompt: &str,
+    consent: Arc<ConsentStore>,
+    request_id: Option<Ulid>,
 ) -> Result<String> {
     let spec = registry::find(agent)?;
     let child = AcpChild::spawn(&spec, cwd).await?;
@@ -273,11 +486,12 @@ async fn start_session(
     let mut session = Session::new(
         id.clone(),
         agent.to_string(),
-        cwd.clone(),
+        cwd.to_path_buf(),
         summary,
         child,
         acp_session_id.clone(),
     )?;
+    session.originating_request_id = request_id;
     session.append(TranscriptEntry::UserText {
         text: prompt.to_string(),
     });
@@ -297,8 +511,9 @@ async fn start_session(
     // Per-session inbound dispatch task.
     let task_session = shared.clone();
     let task_acp_id = acp_session_id.clone();
+    let task_consent = Arc::clone(&consent);
     tokio::spawn(async move {
-        run_inbound_loop(task_session, task_acp_id, inbound).await;
+        run_inbound_loop(task_session, task_acp_id, inbound, task_consent).await;
     });
 
     // Fire the initial prompt.
@@ -344,6 +559,7 @@ async fn run_inbound_loop(
     session: SharedSession,
     acp_session_id: String,
     mut inbound: mpsc::Receiver<AcpInbound>,
+    consent: Arc<ConsentStore>,
 ) {
     while let Some(msg) = inbound.recv().await {
         match msg {
@@ -358,7 +574,7 @@ async fn run_inbound_loop(
             AcpInbound::Request { id, method, params }
                 if method == "session/request_permission" =>
             {
-                handle_permission(session.clone(), id, params).await;
+                handle_permission(session.clone(), id, params, Arc::clone(&consent)).await;
             }
             AcpInbound::Request { id, .. } => {
                 let child = { session.lock().await.child.clone() };
@@ -387,7 +603,12 @@ async fn run_inbound_loop(
     let _ = acp_session_id;
 }
 
-async fn handle_permission(session: SharedSession, req_id: Value, params: Value) {
+async fn handle_permission(
+    session: SharedSession,
+    req_id: Value,
+    params: Value,
+    consent: Arc<ConsentStore>,
+) {
     let summary = params
         .get("toolCall")
         .and_then(|t| t.get("title"))
@@ -401,7 +622,7 @@ async fn handle_permission(session: SharedSession, req_id: Value, params: Value)
         .unwrap_or_else(|| "approve tool call?".into());
 
     let req_uuid = uuid::Uuid::new_v4().simple().to_string();
-    {
+    let (session_cwd, originating_request_id) = {
         let mut s = session.lock().await;
         let _ = s.set_status(SessionStatus::Awaiting);
         let session_id = s.info.id.clone();
@@ -411,10 +632,29 @@ async fn handle_permission(session: SharedSession, req_id: Value, params: Value)
             summary: summary.clone(),
             body: body.clone(),
         });
-    }
+        (s.info.cwd.clone(), s.originating_request_id)
+    };
     signal_waybar();
 
-    let decision = ask(&summary, &body, Duration::from_secs(8)).await;
+    // Step 1 of arch-agent-sandbox: consult the policy resolver before
+    // notify-send. Policy is loaded from `<cwd>/configs/policy/`
+    // (the daemon's session-level cwd doubles as the `$REPO` root).
+    // If the policy tree isn't present, behaviour stays identical to
+    // the pre-resolver flow — a bare `ask()`. Step 6 routes `EveryCall`
+    // consent through the in-daemon `ConsentStore` (TTY-driven
+    // `sy approve <token>`); `OncePerSession` keeps the notify-send
+    // fallback inside `ask_with_policy`.
+    let (tool, argv) = extract_tool_and_argv(&params);
+    let decision = resolve_permission(
+        &session_cwd,
+        &tool,
+        &argv,
+        &summary,
+        &body,
+        consent.as_ref(),
+        originating_request_id,
+    )
+    .await;
 
     // Pick optionId based on decision and the options the agent offered.
     let options = params
@@ -465,6 +705,192 @@ async fn handle_permission(session: SharedSession, req_id: Value, params: Value)
         });
     }
     signal_waybar();
+}
+
+/// SPEC §4.4 step 2: the operator's wall-clock budget for approving a
+/// strict-profile consent token. Long enough to switch terminals,
+/// short enough that a forgotten request doesn't pin the agent for
+/// hours.
+const CONSENT_TOKEN_TTL: Duration = Duration::from_secs(5 * 60);
+const NOTIFY_SEND_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Emit the consent-approval audit record for `agt.approve`. Extracted
+/// from [`AgtBridge::handle_approve`] so the unit test can target a
+/// tempdir without env-mutation; production calls pass
+/// [`audit::default_audit_dir`]. `request_id` is the IPC v1 envelope
+/// of the `agt.approve` call itself, threaded through so journald
+/// (`SY_REQUEST_ID`) and JSONL correlate the consent decision back to
+/// the approving call.
+fn emit_approve_audit(
+    snap: crate::agt::policy::consent::PendingSnapshot,
+    approver_pid: Option<u32>,
+    approver_uid: Option<u32>,
+    request_id: Option<Ulid>,
+    audit_dir: &std::path::Path,
+) {
+    let trace_id = sy_core::obs::current_trace_ctx().map(|c| c.trace_id.0);
+    let remaining_ms = snap
+        .expires_at
+        .saturating_duration_since(std::time::Instant::now())
+        .as_millis();
+    let reason = Some(format!(
+        "approver pid={} uid={} ttl_remaining_ms={}",
+        approver_pid.unwrap_or(0),
+        approver_uid.unwrap_or(0),
+        remaining_ms,
+    ));
+    audit::emit(
+        &AuditRecord::now(
+            snap.tool,
+            snap.policy_diff,
+            AuditDecision::Consent,
+            snap.argv,
+        )
+        .with_reason(reason)
+        .with_trace_id(trace_id)
+        .with_request_id(request_id),
+        audit_dir,
+    );
+}
+
+/// Three-way orchestration for a permission verdict — SPEC §4.4 step 2.
+///
+/// 1. No resolver → bare `notify-send` (legacy fallback).
+/// 2. Resolver returns `Allow`/`Deny` → audit + short-circuit.
+/// 3. Resolver returns `ConsentRequired`:
+///    * `EveryCall` → mint a token in the consent store and await
+///      the operator's `sy approve <token>` (TTY-driven).
+///    * `OncePerSession` / `Never` → existing `notify-send` flow via
+///      [`ask_with_policy`].
+async fn resolve_permission(
+    cwd: &std::path::Path,
+    tool: &str,
+    argv: &[String],
+    summary: &str,
+    body: &str,
+    consent: &ConsentStore,
+    request_id: Option<Ulid>,
+) -> Decision {
+    let Some(resolver) = load_session_resolver(cwd, tool) else {
+        return ask(summary, body, NOTIFY_SEND_TIMEOUT).await;
+    };
+    let profile = resolver.effective(tool);
+    let every_call = matches!(
+        profile.require_consent,
+        crate::agt::policy::schema::ConsentMode::EveryCall
+    );
+    if !every_call {
+        return ask_with_policy(
+            &resolver,
+            tool,
+            argv,
+            summary,
+            body,
+            NOTIFY_SEND_TIMEOUT,
+            request_id,
+        )
+        .await;
+    }
+    // EveryCall (strict default): bypass notify-send and require a
+    // TTY-driven `sy approve <token>`. Audit the consent request
+    // before parking so a crash mid-wait still records that the call
+    // paused.
+    let verdict = resolver.decide(tool, argv);
+    if !matches!(
+        verdict,
+        crate::agt::policy::Decision::ConsentRequired { .. }
+    ) {
+        return ask_with_policy(
+            &resolver,
+            tool,
+            argv,
+            summary,
+            body,
+            NOTIFY_SEND_TIMEOUT,
+            request_id,
+        )
+        .await;
+    }
+    let policy_diff = resolver.fingerprint();
+    let trace_id = sy_core::obs::current_trace_ctx().map(|c| c.trace_id.0);
+    let audit_dir = audit::default_audit_dir();
+    audit::emit(
+        &AuditRecord::now(tool, &policy_diff, AuditDecision::Consent, argv.to_vec())
+            .with_reason(Some(
+                "EveryCall consent: awaiting sy approve <token>".into(),
+            ))
+            .with_trace_id(trace_id)
+            .with_request_id(request_id),
+        &audit_dir,
+    );
+    let (token, rx) = consent.issue(tool, argv, policy_diff, CONSENT_TOKEN_TTL);
+    tracing::info!(
+        target: "sy::agt::consent",
+        token = %token,
+        tool = tool,
+        "consent token issued; run `sy approve {}`",
+        token
+    );
+    match rx.await {
+        Ok(ConsentDecision::Allow) => Decision::Allow,
+        // Receiver error → sender dropped (token expired and was
+        // swept by `cleanup_expired`, or the daemon shut down).
+        // Treat as deny so the agent doesn't proceed.
+        Err(_) => Decision::Deny,
+    }
+}
+
+/// Pull the tool name + argv out of the ACP `session/request_permission`
+/// params for policy resolution. ACP passes the tool kind/name in
+/// `toolCall.kind` (e.g. `"execute"`) and the structured arguments in
+/// `toolCall.rawInput` — we serialise the rawInput JSON into a single
+/// argv slot so glob patterns like `"*"` match the way the SPEC
+/// examples expect. Best-effort: missing fields fall back to empty.
+fn extract_tool_and_argv(params: &Value) -> (String, Vec<String>) {
+    let tool_call = params.get("toolCall");
+    let tool = tool_call
+        .and_then(|t| t.get("kind").or_else(|| t.get("title")))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let raw_input = tool_call.and_then(|t| t.get("rawInput"));
+    let argv = match raw_input {
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| v.to_string())
+            })
+            .collect(),
+        Some(other) => vec![other.to_string()],
+        None => Vec::new(),
+    };
+    (tool, argv)
+}
+
+/// Try to load the `normal` profile for this session. Returns `None`
+/// if the policy tree isn't present alongside the session's cwd —
+/// keeping Step 1 a strictly additive change (no behaviour drift for
+/// users without `configs/policy/`).
+fn load_session_resolver(cwd: &std::path::Path, tool: &str) -> Option<Resolver> {
+    let policy_root = cwd.join("configs").join("policy");
+    if !policy_root.join("profiles").join("normal.toml").is_file() {
+        return None;
+    }
+    let tool_key = std::path::Path::new(tool)
+        .file_stem()
+        .and_then(|s| s.to_str());
+    let resolver = Resolver::load(&policy_root, "normal", tool_key, cwd).ok()?;
+    // SPEC §4.4 step 2: log the resolved policy fingerprint so audit
+    // consumers can correlate a decision with the exact policy bytes
+    // in effect. Step 5 lifts this onto the journald audit record.
+    tracing::debug!(
+        policy_sha = resolver.fingerprint().as_str(),
+        tool = tool,
+        "policy resolver loaded"
+    );
+    Some(resolver)
 }
 
 async fn send_prompt(sessions: &Sessions, session_id: &str, text: &str) -> Result<()> {
@@ -547,24 +973,33 @@ async fn stop_session(sessions: &Sessions, session_id: &str) -> Result<()> {
     Ok(())
 }
 
-async fn stream_tail(
+async fn stream_tail_v1(
     sessions: &Sessions,
     session_id: &str,
     follow: bool,
     replay: bool,
-    wr: &mut tokio::net::unix::OwnedWriteHalf,
-) -> Result<()> {
+    sink: &mut FramedWrite<tokio::net::unix::OwnedWriteHalf, EventCodec>,
+    request_id: Ulid,
+) {
     let shared = match sessions.lock().await.get(session_id).cloned() {
         Some(s) => s,
         None => {
-            return write_line(
-                wr,
-                &ClientReply::Error {
-                    message: format!("no such session: {session_id}"),
-                    code: 2,
-                },
-            )
-            .await
+            // The initial `Response::Ok` ack already went out, so we
+            // can't downgrade to a `Response::Err`. Surface the lookup
+            // failure as a `kind: error` event the caller decodes
+            // before the `closed` sentinel.
+            let _ = sink
+                .send(Event {
+                    schema_version: SCHEMA_VERSION,
+                    request_id,
+                    kind: "error".into(),
+                    params: serde_json::json!({
+                        "code": "NotFound",
+                        "message": format!("no such session: {session_id}"),
+                    }),
+                })
+                .await;
+            return;
         }
     };
     let (events, mut rx) = if replay {
@@ -578,19 +1013,27 @@ async fn stream_tail(
         (Vec::new(), rx)
     };
     for e in events {
-        write_line(wr, &ClientReply::Event { event: e }).await?;
+        if sink.send(event_to_stream(&e, request_id)).await.is_err() {
+            return;
+        }
     }
     if let Some(ref mut rx) = rx {
         while let Some(e) = rx.recv().await {
-            if write_line(wr, &ClientReply::Event { event: e })
-                .await
-                .is_err()
-            {
-                break;
+            if sink.send(event_to_stream(&e, request_id)).await.is_err() {
+                return;
             }
         }
     }
-    Ok(())
+}
+
+fn event_to_stream(event: &DaemonEvent, request_id: Ulid) -> Event {
+    let (kind, params) = wire::event_to_stream_payload(event);
+    Event {
+        schema_version: SCHEMA_VERSION,
+        request_id,
+        kind: kind.to_string(),
+        params,
+    }
 }
 
 fn signal_waybar() {
@@ -635,4 +1078,246 @@ async fn rehydrate_persisted(_sessions: &Sessions) {
     // Intentional no-op for v1: persisted transcripts remain on disk but
     // don't appear in `List` — keeping the live view clean. Future work
     // wires `session/load` and exposes them.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use futures_util::StreamExt;
+    use std::path::PathBuf;
+    use sy_ipc::{CallOpts, Client as IpcClient, PROTOCOL_VERSION};
+
+    /// Synthetic session that satisfies `stream_tail_v1` without
+    /// involving a real ACP child. We spawn a tiny stdin-reading
+    /// `cat` process so `AcpChild::spawn` (which captures stdio) has
+    /// something to bind to; the daemon never sends ACP traffic
+    /// because the test only exercises `agt.tail` / `agt.list` /
+    /// `system.describe`.
+    async fn fake_session(id: &str, dir: PathBuf, entries: Vec<TranscriptEntry>) -> SharedSession {
+        use crate::agt::registry::AgentSpec;
+        let spec = AgentSpec {
+            name: "test".into(),
+            command: "/bin/cat".into(),
+            args: Vec::new(),
+            env: Default::default(),
+            version_args: Vec::new(),
+            // Synthetic test setup: `cat` stands in for an ACP stdio
+            // stream. Skipping the sandbox avoids needing a real
+            // systemd-run + policy tree under the tempdir.
+            sandbox_profile: None,
+        };
+        let child = AcpChild::spawn(&spec, &dir).await.expect("spawn cat");
+        let now = Utc::now().to_rfc3339();
+        let info = SessionInfo {
+            id: id.into(),
+            agent: "test".into(),
+            cwd: dir.clone(),
+            status: SessionStatus::Running,
+            created_at: now.clone(),
+            last_activity: now.clone(),
+            summary: "fake".into(),
+        };
+        let transcript: Vec<(String, TranscriptEntry)> = entries
+            .into_iter()
+            .enumerate()
+            .map(|(i, e)| (format!("t{i}"), e))
+            .collect();
+        Arc::new(Mutex::new(Session {
+            info,
+            child: Arc::new(Mutex::new(child)),
+            acp_session_id: "acp-test".into(),
+            transcript,
+            subscribers: Vec::new(),
+            jsonl: None,
+            dir,
+            originating_request_id: None,
+        }))
+    }
+
+    async fn spawn_test_listener(
+        sock: std::path::PathBuf,
+        sessions: Sessions,
+    ) -> tokio::task::JoinHandle<()> {
+        let std_listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind");
+        std_listener.set_nonblocking(true).expect("nonblock");
+        let listener = UnixListener::from_std(std_listener).expect("from_std");
+        let bridge = Arc::new(AgtBridge::new(sessions));
+        tokio::spawn(async move {
+            let euid = rustix::process::geteuid().as_raw();
+            loop {
+                let (stream, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                match stream.peer_cred() {
+                    Ok(cred) if cred.uid() == euid => {}
+                    _ => continue,
+                }
+                let bridge = Arc::clone(&bridge);
+                tokio::spawn(async move {
+                    handle_client(stream, bridge).await;
+                });
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn agt_ipc_v1_run_session() {
+        // ROADMAP arch-ipc-v1 Step 6 DoD: streaming `agt.tail`
+        // returns three `Event` frames followed by the `closed`
+        // sentinel. We pre-populate a synthetic session with three
+        // transcript entries so `replay()` emits exactly three
+        // events; `follow=false` ensures the daemon writes the
+        // sentinel as soon as the replay completes.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sock = tmp.path().join("agentd.sock");
+        let session_dir = tmp.path().join("session");
+        std::fs::create_dir_all(&session_dir).expect("session dir");
+        let entries = vec![
+            TranscriptEntry::AgentText { text: "1".into() },
+            TranscriptEntry::AgentText { text: "2".into() },
+            TranscriptEntry::AgentText { text: "3".into() },
+        ];
+        let shared = fake_session("abc", session_dir, entries).await;
+        let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
+        sessions.lock().await.insert("abc".into(), shared);
+        let server = spawn_test_listener(sock.clone(), sessions.clone()).await;
+
+        let mut client = IpcClient::connect(&sock).await.expect("connect");
+        let (method, params) = wire::to_request(&ClientReq::Tail {
+            session_id: "abc".into(),
+            follow: false,
+            replay: true,
+        });
+        let ack = client
+            .call(method, params, CallOpts::default())
+            .await
+            .expect("tail ack");
+        assert!(
+            matches!(ack, Response::Ok { .. }),
+            "tail must ack with Ok, got {ack:?}"
+        );
+
+        let mut events = client.into_event_stream();
+        let mut transcript_count = 0;
+        let mut closed = false;
+        let result = tokio::time::timeout(Duration::from_secs(2), async {
+            while let Some(decoded) = events.next().await {
+                let evt = decoded.expect("event frame");
+                if evt.is_closed() {
+                    closed = true;
+                    return;
+                }
+                if evt.kind == wire::EVENT_TRANSCRIPT {
+                    transcript_count += 1;
+                }
+            }
+        })
+        .await;
+        result.expect("events arrived within 2s");
+        assert_eq!(transcript_count, 3, "three transcript events");
+        assert!(closed, "stream ended with closed sentinel");
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn agt_ipc_v1_describe_streaming_capability() {
+        // ROADMAP Step 6 DoD slice: `system.describe` against the agt
+        // daemon advertises schema_version=1, a non-empty methods
+        // array, and the streaming capability that distinguishes
+        // it from the unary daemons. The cross-daemon
+        // `all_daemons_describe` lives in `src/stack/ipc.rs`.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sock = tmp.path().join("agentd.sock");
+        let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
+        let server = spawn_test_listener(sock.clone(), sessions).await;
+
+        let mut client = IpcClient::connect(&sock).await.expect("connect");
+        let resp = client
+            .call("system.describe", json!({}), CallOpts::default())
+            .await
+            .expect("system.describe call");
+        match resp {
+            Response::Ok { result, .. } => {
+                assert_eq!(
+                    result["protocol_version"].as_u64(),
+                    Some(u64::from(PROTOCOL_VERSION))
+                );
+                let methods: Vec<&str> = result["methods"]
+                    .as_array()
+                    .expect("methods array")
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect();
+                assert!(methods.contains(&"agt.run"));
+                assert!(methods.contains(&"agt.tail"));
+                assert!(methods.contains(&"system.describe"));
+                assert_eq!(
+                    result["capabilities"]["streaming"],
+                    json!(true),
+                    "agt advertises streaming capability"
+                );
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn agt_list_round_trip_via_v1_envelope() {
+        // Sanity: a unary `agt.list` call round-trips with an empty
+        // sessions map, returning `ListReply { sessions: [] }`.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sock = tmp.path().join("agentd.sock");
+        let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
+        let server = spawn_test_listener(sock.clone(), sessions).await;
+
+        let mut client = IpcClient::connect(&sock).await.expect("connect");
+        let (method, params) = wire::to_request(&ClientReq::List);
+        let resp = client
+            .call(method, params, CallOpts::default())
+            .await
+            .expect("list call");
+        match resp {
+            Response::Ok { result, .. } => {
+                assert_eq!(
+                    result["sessions"],
+                    json!([]),
+                    "empty sessions map returns empty array"
+                );
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
+        server.abort();
+    }
+
+    /// arch-ipc-v1 Step 6 / arch-agent-sandbox follow-up: the
+    /// `agt.approve` audit record must carry the approving call's
+    /// IPC envelope `request_id` so journald (`SY_REQUEST_ID`) and
+    /// JSONL queries correlate the consent decision back to the
+    /// originating call. Targets [`emit_approve_audit`] with a
+    /// tempdir so the unit test stays hermetic.
+    #[test]
+    fn consent_decision_audit_carries_request_id() {
+        use crate::agt::policy::consent::PendingSnapshot;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let request_id = Ulid::new();
+        let snap = PendingSnapshot {
+            tool: "/usr/bin/cat".into(),
+            argv: vec!["/etc/shadow".into()],
+            policy_diff: "deadbeef".into(),
+            expires_at: std::time::Instant::now() + Duration::from_secs(60),
+        };
+        emit_approve_audit(snap, Some(4321), Some(1000), Some(request_id), tmp.path());
+        let body = std::fs::read_to_string(tmp.path().join("audit.jsonl")).expect("audit jsonl");
+        let line = body.lines().next().expect("one line");
+        let v: serde_json::Value = serde_json::from_str(line).expect("parse line");
+        assert_eq!(
+            v["request_id"].as_str(),
+            Some(request_id.to_string().as_str()),
+            "approve audit JSONL must include the approving call's request_id; line={line}"
+        );
+    }
 }

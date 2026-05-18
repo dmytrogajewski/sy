@@ -255,6 +255,29 @@ fn trace_hover(msg: &str) {
 }
 
 pub fn run() -> anyhow::Result<()> {
+    // SPEC §4.6 / arch-observability Step 1: bar runs as a daemon-
+    // shaped foreground process under niri's spawn-at-startup. Wire
+    // the tracing subscriber here so `trace_hover` traces (and any
+    // future structured events from the bar) land in journald +
+    // rolling JSONL like every other daemon. The guard is held for
+    // the bar's lifetime.
+    let _obs_guard = sy_core::obs::init(sy_core::obs::Mode::Daemon {
+        name: "sy-stack-bar",
+    })?;
+    // SPEC §4.5 / arch-supervision Step 4: spawn the WATCHDOG=1
+    // pinger before iced takes over the thread. `ready()` itself
+    // lands on the first `Msg::WindowOpened` (the layer-shell
+    // surface attaching is the bar's analogue of an IPC bind). On
+    // dev hosts both calls are quiet no-ops.
+    //
+    // `stopping()` is intentionally not wired here: iced+layer-shell
+    // owns the event loop after `daemon(...).run()` and exits the
+    // process directly on close, so there is no idiomatic shutdown
+    // hook inside iced's `update` we could place it in without
+    // crossing the API boundary. Stack-bar is restart-on-failure;
+    // a missed `STOPPING=1` only costs us a `Result=signal` label
+    // in `journalctl`, not correctness.
+    let _watchdog = sy_core::notify::spawn_watchdog();
     // Spawn IPC listener; ops land on a channel we drain inside `update`.
     let (tx, rx) = mpsc::channel();
     let _ = ipc::serve(tx);
@@ -419,6 +442,14 @@ fn update(bar: &mut Bar, msg: Msg) -> Task<Msg> {
             // pre-registered as a popup.
             if !in_popups && bar.bar_id.is_none() {
                 bar.bar_id = Some(id);
+                // SPEC §4.5 / arch-supervision Step 4: the iced
+                // layer-shell surface has attached — this is the
+                // bar's "ready to serve" moment, the analogue of a
+                // daemon binding its IPC socket. Announce `READY=1`
+                // so `systemctl --user status sy-stack-bar.service`
+                // flips to `active (running)`. No-op when launched
+                // outside a notify-supervised unit (dev runs).
+                sy_core::notify::ready();
             }
             trace_hover(&format!("WindowOpened id={id:?} in_popups={in_popups}"));
             Task::none()
@@ -490,7 +521,9 @@ fn update(bar: &mut Bar, msg: Msg) -> Task<Msg> {
             // Clear so the next debounce can open a fresh popup.
             if let Some(pid) = bar.hover_popup {
                 if !bar.popups.contains_key(&pid) {
-                    trace_hover(&format!("TICK self-heal: clearing stale hover_popup={pid:?}"));
+                    trace_hover(&format!(
+                        "TICK self-heal: clearing stale hover_popup={pid:?}"
+                    ));
                     bar.hover_popup = None;
                 }
             }
@@ -503,9 +536,7 @@ fn update(bar: &mut Bar, msg: Msg) -> Task<Msg> {
                 return Task::none();
             };
             let popup_id = Id::unique();
-            trace_hover(&format!(
-                "TICK open popup_id={popup_id:?} for arm={arm:?}"
-            ));
+            trace_hover(&format!("TICK open popup_id={popup_id:?} for arm={arm:?}"));
             bar.popups.insert(
                 popup_id,
                 PopupCtx {
@@ -999,7 +1030,11 @@ fn hover_preview_view<'a>(
 fn hover_clip_body<'a>(bar: &'a Bar, id: &'a str) -> Element<'a, Msg> {
     let c = match bar.clips.iter().find(|c| c.id == id) {
         Some(c) => c,
-        None => return text("(clip entry vanished)").color(bar.palette.fg_dim).into(),
+        None => {
+            return text("(clip entry vanished)")
+                .color(bar.palette.fg_dim)
+                .into()
+        }
     };
     if let Some(ext) = c.image_ext {
         if let Ok(thumb) = clip::decode_to_thumb(&c.id, ext, HOVER_THUMB_PX as u32) {
@@ -1019,7 +1054,11 @@ fn hover_clip_body<'a>(bar: &'a Bar, id: &'a str) -> Element<'a, Msg> {
 fn hover_stack_body<'a>(bar: &'a Bar, id: &'a str) -> Element<'a, Msg> {
     let it = match bar.items.items.iter().find(|i| i.id == id) {
         Some(it) => it,
-        None => return text("(stack item vanished)").color(bar.palette.fg_dim).into(),
+        None => {
+            return text("(stack item vanished)")
+                .color(bar.palette.fg_dim)
+                .into()
+        }
     };
     let (_, key) = glyph_for_item(it);
     if matches!(key, ColorKey::Image) {

@@ -402,11 +402,7 @@ pub fn thumbnail_path(item: &Item, size: u32) -> Result<Option<PathBuf>> {
 pub fn text_preview(bytes: &[u8], max_lines: usize) -> String {
     let s = String::from_utf8_lossy(bytes);
     let total = s.lines().count();
-    let mut out: String = s
-        .lines()
-        .take(max_lines)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut out: String = s.lines().take(max_lines).collect::<Vec<_>>().join("\n");
     if total > max_lines {
         out.push_str("\n…");
     }

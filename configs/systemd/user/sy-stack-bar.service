@@ -1,0 +1,55 @@
+# sy stack bar — iced+layer-shell tile rail under waybar (see
+# `src/stack/bar/app.rs`). Follows the niri graphical session, so
+# its `WantedBy=` is `graphical-session.target` rather than
+# `sy.target` — that way the bar surface is attached during the
+# session even if `sy.target` itself is masked.
+#
+# `PartOf=sy.target` is still declared so `systemctl --user stop
+# sy.target` brings the bar down with the rest of the AI plane.
+# This double-binding (`PartOf` one target, `WantedBy` another) is
+# a standard systemd idiom — `PartOf` only propagates stop /
+# restart cascades, not start triggers.
+#
+# `Type=notify`: `src/stack/bar/app.rs` calls
+# `sy_core::notify::ready()` on the first `Msg::WindowOpened` —
+# the moment the iced layer-shell surface attaches, which is the
+# bar's "ready to serve" analogue of a daemon IPC bind.
+# `sy_core::notify::spawn_watchdog` pings `WATCHDOG=1` at
+# half-interval. `STOPPING=1` is intentionally not emitted: iced
+# owns the event loop after `run()` and exits the process directly,
+# so there is no idiomatic shutdown hook to attach it to — the
+# `Restart=on-failure` policy compensates.
+#
+# Source: specs/research/architecture-refactor/SPEC.md §4.5.
+
+[Unit]
+Description=sy stack bar (iced layer-shell tile rail)
+After=graphical-session.target
+PartOf=sy.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=300s
+TimeoutStartSec=300s
+# Wait for waybar (also a niri spawn-at-startup, not a systemd unit)
+# to register its top exclusive zone before our wlr-layer-shell
+# surface attaches. Otherwise niri hasn't deducted waybar's 24-px
+# strip yet, and the bar's `Right | Top | Bottom` anchor straddles
+# the top edge — producing the "right panel disappeared" symptom
+# (the bar is actually drawn beneath waybar). The pgrep loop
+# mirrors what the legacy niri spawn-at-startup did before the bar
+# was promoted to a unit; folding it into the unit lets us drop
+# the niri-side spawn so there is exactly one owner with
+# `Restart=on-failure` supervision.
+ExecStartPre=/usr/bin/bash -c 'until pgrep -x waybar >/dev/null; do sleep 0.05; done; sleep 0.3'
+ExecStart=%h/.local/bin/sy stack bar
+Restart=on-failure
+RestartSec=2s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sy-stack-bar
+
+[Install]
+WantedBy=graphical-session.target

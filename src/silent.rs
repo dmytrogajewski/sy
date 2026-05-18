@@ -407,7 +407,7 @@ fn watch() -> Result<()> {
         .ok_or_else(|| anyhow!("pactl: no stdout"))?;
     thread::spawn(move || {
         let rdr = BufReader::new(stdout);
-        for line in rdr.lines().flatten() {
+        for line in rdr.lines().map_while(Result::ok) {
             let l = line.trim();
             if l.contains("on server") || l.contains("on sink") {
                 let _ = tx_pactl.send(());

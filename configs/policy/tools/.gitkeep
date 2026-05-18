@@ -1,0 +1,3 @@
+# Per-tool policy overlays live here. See
+# specs/research/architecture-refactor/SPEC.md §4.4 ("Per-tool overlay")
+# and src/agt/policy/resolver.rs. File naming: `<tool-basename>.toml`.

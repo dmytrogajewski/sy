@@ -5,7 +5,8 @@
 //!
 //! silero-vad is small enough that the NPU dispatch overhead exceeds
 //! the inference cost — this Workload declares CPU as its preferred
-//! EP (skips the NPU mutex acquisition in `SessionPool::with_npu`).
+//! EP. Per-process worker isolation means no intra-process NPU
+//! contention either.
 //!
 //! Status: scaffolded. See `/workload` skill for the registration
 //! checklist + `/npu-prep` for the artifact prep.

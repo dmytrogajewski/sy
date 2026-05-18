@@ -270,11 +270,11 @@ fn write(section: &KnowledgeSection) -> Result<()> {
         .context("[knowledge] is not a table")?;
 
     // Scalar fields: set if Some, remove if None.
-    set_or_remove(k, "schedule", section.schedule.as_deref().map(|s| value(s)));
+    set_or_remove(k, "schedule", section.schedule.as_deref().map(value));
     set_or_remove(
         k,
         "embedding_model",
-        section.embedding_model.as_deref().map(|s| value(s)),
+        section.embedding_model.as_deref().map(value),
     );
     set_or_remove(
         k,
@@ -285,7 +285,7 @@ fn write(section: &KnowledgeSection) -> Result<()> {
     // [[knowledge.sources]] — rebuild the array of tables. Preserves the
     // KEY's decoration (the comment block above `[[knowledge.sources]]`),
     // only the entries themselves get rewritten.
-    set_or_remove(k, "discover_home", section.discover_home.map(|b| value(b)));
+    set_or_remove(k, "discover_home", section.discover_home.map(value));
     set_or_remove(
         k,
         "cpu_throttle_ms",

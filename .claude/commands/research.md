@@ -152,10 +152,14 @@ After gathering research, ask:
 - **What fits sy?** Filter ideas that don't match sy's architecture
   (single Rust binary, declarative configs/, NPU-first, CLIG + agent-
   friendly CLI, "no snowflakes" rule).
-- **What is ML (Minimum Loveable)?** Not MVP — the smallest version a
-  real user would enjoy using on their rice today.
-- **What is the 80/20?** Which 20% of features deliver 80% of value?
-- **What should we explicitly NOT do?** Anti-goals matter.
+- **What is the complete scope?** Enumerate every piece the feature
+  needs to be correct and useful. Do not pre-cut the scope to make it
+  look "shippable" — that decision is the user's, not yours.
+- **What should we explicitly NOT do?** Anti-goals are substantive
+  decisions (we won't support X because Y), not scope reductions (we
+  won't ship X for now). Only mark something an anti-goal if there is
+  a concrete reason; if unsure, include it in scope and surface the
+  tradeoff.
 
 ### 2.5 Prepare implementation proposition
 
@@ -277,11 +281,11 @@ Cite repos, commits, RFCs.>
 | <d1> | <choice> | <why> | <what else> |
 | <d2> | <choice> | <why> | <what else> |
 
-### ML (Minimum Loveable)
-<Smallest version a sy user would actually enjoy. Be specific: what is IN, what is OUT.>
+### Scope
+<Enumerate every piece of the feature, in scope as one cohesive change set. Do not split into "ship now" vs "later" tiers — if something is deferred, it must appear under Anti-Goals with a concrete reason. If you find yourself wanting to defer something, ask first whether the reason is substantive or reflexive scope-cutting.>
 
 ### Anti-Goals
-<What we explicitly will NOT do, and why.>
+<What we explicitly will NOT do, and the substantive reason for each (architectural mismatch, wrong primitive, security boundary, vendor lock-in, etc.). "Too big for now" is not a substantive reason — those items belong in Scope.>
 
 ## 4. Technical Design
 
@@ -342,8 +346,9 @@ Before writing the spec, verify the research:
 
 - At least 3 comparable products/approaches covered?
 - At least 3 key decisions identified, each with alternatives?
-- Anti-goals explicitly stated?
-- ML scope concrete — specific about what is IN and OUT?
+- Anti-goals explicitly stated, each with a substantive reason (not "too big for now")?
+- Scope complete — every piece needed for the feature to be correct and useful, with no reflexive "ship the smallest version" cuts?
+- Spec contains zero estimation language (hours, days, weeks, story points, t-shirt sizes, ETAs, "v1", "MVP", "phase 1") used to defer work?
 - Friction map has at least 3 entries with opportunities?
 - "No snowflakes" check passed — nothing requires manual host edits?
 - CLIG + agent-friendly requirements addressed (flags, `--json`,
@@ -411,19 +416,27 @@ Full spec at `specs/research/aiplane-rerank/SPEC.md`. Next:
    worse than not researching.
 3. **Cite sources.** Every "Market Context", "Technical Context", and
    "Deep Dives" claim links a URL, repo, commit, or paper.
-4. **ML, not MVP.** The minimum version should be loveable on the rice
-   today, not just viable.
-5. **Anti-goals are goals.** Explicitly stating what we will NOT do
-   prevents scope creep and snowflakes.
-6. **No snowflakes.** Anything the spec proposes must be expressible
+4. **Do not pre-cut scope.** Specify the complete feature. Scope
+   reduction is the user's call, not the researcher's. If you find
+   yourself reaching for "v1 / MVP / phase 1 / later", stop — either
+   the item belongs in Scope, or it belongs in Anti-Goals with a
+   substantive reason.
+5. **Anti-goals require substance.** "Too big for now" is not a
+   substantive reason. Architectural mismatch, wrong primitive,
+   security boundary, snowflake hazard, or vendor lock-in are.
+6. **No estimation language.** No hours, days, weeks, story points,
+   t-shirt sizes, ETAs, or version-tier framing used to defer work.
+   Performance gates measured by a test ("p99 < 50 ms") are allowed
+   because they are pass/fail, not forecasts.
+7. **No snowflakes.** Anything the spec proposes must be expressible
    in `configs/` or in `sy`. Manual host edits are out of bounds.
-7. **CLIG + agent-friendly is non-negotiable.** Every user-facing
+8. **CLIG + agent-friendly is non-negotiable.** Every user-facing
    surface in the spec satisfies the CLI rules in `CLAUDE.md`.
-8. **Compact final answer.** The spec is the artifact; the chat
+9. **Compact final answer.** The spec is the artifact; the chat
    message is the summary.
-9. **Do not implement.** The skill ends at the spec. Hand off to
-   `/journey → /roadmap → /implement` (and `/workload` or `/npu-prep`
-   when applicable).
-10. **No git or commits** unless the user explicitly asks.
+10. **Do not implement.** The skill ends at the spec. Hand off to
+    `/journey → /roadmap → /implement` (and `/workload` or `/npu-prep`
+    when applicable).
+11. **No git or commits** unless the user explicitly asks.
 
 </rules>

@@ -56,8 +56,10 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use metrics::gauge;
 
 use super::registry::{WorkloadInput, WorkloadKind, WorkloadOutput, WorkloadState};
+use super::warm_pool::WarmPool;
 use super::worker_ipc::{self, WorkerHealth, WorkerIpcError, WorkerReq, WorkerResp};
 
 use child::{Child, ChildSpawn, RealSpawn};
@@ -71,10 +73,27 @@ const SOCKET_BIND_DEADLINE: Duration = Duration::from_secs(5);
 /// first-call VAIP compile (sub-minute on warm cache, several min
 /// cold) fits.
 const RUN_BATCH_TIMEOUT: Duration = Duration::from_secs(900);
+/// SPEC §4.3 "Cancellation pattern" step 5: the supervisor gives a
+/// worker this long to yield after a `WorkerReq::Cancel` before
+/// SIGKILLing the child and respawning from the VitisAI compile
+/// cache. The roadmap pegs the budget at 500 ms; the constant lives
+/// in code so the test asserting "guard fires ≥ 500 ms" can reference
+/// it.
+pub const CANCEL_YIELD_DEADLINE: Duration = Duration::from_millis(500);
+/// Polling interval inside [`Supervisor::cancel`] while watching the
+/// worker's `inflight_request_id` to clear. Fine-grained so the guard
+/// fires within a few tens of milliseconds of the worker yielding,
+/// without burning CPU.
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 pub struct Supervisor {
     spawn: Arc<dyn ChildSpawn>,
     inner: Arc<Mutex<Inner>>,
+    /// Per-workload warm-pool bookkeeping (SPEC §4.3). Touched on
+    /// every `ensure` + `run_batch` so the status snapshot can
+    /// surface the warm set. Step 4 wires actual eviction (child
+    /// shutdown + `Workload::unload`) onto the eviction signal.
+    warm_pool: Arc<Mutex<WarmPool>>,
 }
 
 struct Inner {
@@ -88,7 +107,6 @@ struct ManagedChild {
     last_health_at: Option<Instant>,
     restart_attempts: u32,
     backoff_until: Option<Instant>,
-    last_spawn_at: Instant,
 }
 
 impl Supervisor {
@@ -106,16 +124,55 @@ impl Supervisor {
             inner: Arc::new(Mutex::new(Inner {
                 children: HashMap::new(),
             })),
+            warm_pool: Arc::new(Mutex::new(WarmPool::new())),
         }
+    }
+
+    /// Names of every workload currently in the warm pool (SPEC
+    /// §4.3). Surfaced via `Status.warm_models` so `sy aiplane
+    /// status` and the doctor recipe can see which models the device
+    /// is holding ready.
+    pub fn warm_models(&self) -> Vec<String> {
+        self.warm_pool
+            .lock()
+            .expect("warm_pool poisoned")
+            .warm_model_names()
     }
 
     /// Spawn the child for `kind` (idempotent) and block until either
     /// it reports `Ready` or the deadline expires. Returns the
     /// worker's `WorkerHealth` so the daemon's status writer can use
-    /// it immediately.
+    /// it immediately. The warm pool tracks the touch so eviction
+    /// bookkeeping stays accurate even when callers preload kinds
+    /// without an immediate inference call.
     pub fn ensure(&self, kind: WorkloadKind, ready_deadline: Duration) -> Result<WorkerHealth> {
         self.ensure_spawned(kind)?;
+        let _evicted = self
+            .warm_pool
+            .lock()
+            .expect("warm_pool poisoned")
+            .touch(kind);
+        self.publish_warm_gauge();
         self.wait_for_ready(kind, ready_deadline)
+    }
+
+    /// SPEC §4.6 `sy_models_warm{kind}`. Emits one gauge sample per
+    /// [`WorkloadKind`] with value 1 if the kind is currently in the
+    /// warm pool, 0 otherwise. Called on every `ensure` and on
+    /// shutdown so dashboards see the latest warm set without
+    /// polling.
+    fn publish_warm_gauge(&self) {
+        let warm: std::collections::HashSet<WorkloadKind> = self
+            .warm_pool
+            .lock()
+            .expect("warm_pool poisoned")
+            .warm_kinds()
+            .into_iter()
+            .collect();
+        for kind in WorkloadKind::ALL {
+            let value = if warm.contains(&kind) { 1.0 } else { 0.0 };
+            gauge!("sy_models_warm", "kind" => kind.as_str()).set(value);
+        }
     }
 
     fn ensure_spawned(&self, kind: WorkloadKind) -> Result<()> {
@@ -127,9 +184,11 @@ impl Supervisor {
                 if mc.handle.is_alive() {
                     return Ok(());
                 }
-                eprintln!(
-                    "sy aiplane[supervisor]: child {kind} died (pid={:?}); respawning",
-                    mc.handle.pid()
+                tracing::warn!(
+                    target: "sy::aiplane::supervisor",
+                    kind = %kind,
+                    pid = ?mc.handle.pid(),
+                    "child died; respawning"
                 );
                 true
             }
@@ -156,7 +215,6 @@ impl Supervisor {
                 last_health_at: None,
                 restart_attempts: 0,
                 backoff_until: None,
-                last_spawn_at: Instant::now(),
             },
         );
         Ok(())
@@ -234,11 +292,101 @@ impl Supervisor {
         inputs: Vec<WorkloadInput>,
     ) -> Result<Vec<WorkloadOutput>> {
         let socket = self.socket_for(kind)?;
-        match worker_ipc::request(&socket, &WorkerReq::RunBatch { inputs }, RUN_BATCH_TIMEOUT) {
+        let req = WorkerReq::RunBatch {
+            request_id: ulid::Ulid::nil(),
+            inputs,
+        };
+        match worker_ipc::request(&socket, &req, RUN_BATCH_TIMEOUT) {
             Ok(WorkerResp::RunBatch { outputs }) => Ok(outputs),
             Ok(WorkerResp::Error { msg }) => anyhow::bail!("worker {kind}: {msg}"),
             Ok(other) => anyhow::bail!("worker {kind}: unexpected resp {other:?}"),
             Err(e) => Err(anyhow::anyhow!("worker {kind}: {e}")),
+        }
+    }
+
+    /// Current pid of the managed child for `kind`, if any. Used by
+    /// the SIGKILL-fallback test to assert that [`Supervisor::cancel`]
+    /// respawned the worker rather than leaving the original child
+    /// stuck. Test-only: production code that wants this should
+    /// consume `all_health()` (which returns the worker's
+    /// self-reported pid via `WorkerHealth.pid`).
+    #[cfg(test)]
+    pub fn pid(&self, kind: WorkloadKind) -> Option<u32> {
+        let inner = self.inner.lock().expect("supervisor poisoned");
+        inner.children.get(&kind).and_then(|mc| mc.handle.pid())
+    }
+
+    /// Cooperative cancel of an inflight `RunBatch` on `kind`. Sends
+    /// [`WorkerReq::Cancel { request_id }`], then polls the worker's
+    /// `WorkerHealth.inflight_request_id` for up to
+    /// [`CANCEL_YIELD_DEADLINE`] (SPEC §4.3 step 5: the 500 ms guard).
+    ///
+    /// On success (the worker yielded — `inflight_request_id` no
+    /// longer matches `request_id`), returns `Ok(())`. On timeout,
+    /// terminates the child (SIGKILL via [`Child::terminate`]),
+    /// respawns it via [`Supervisor::ensure_spawned`], and returns
+    /// `Err(anyhow!("worker did not yield in 500 ms; child restarted"))`.
+    ///
+    /// `request_id == Ulid::nil()` is treated as "best-effort":
+    /// supervisor still fires the Cancel + waits the deadline, but
+    /// since the worker can't match a nil id against its inflight
+    /// tracker the SIGKILL path is the only way out for a stuck
+    /// worker.
+    pub fn cancel(&self, kind: WorkloadKind, request_id: ulid::Ulid) -> Result<()> {
+        let socket = self.socket_for(kind)?;
+        match worker_ipc::request(
+            &socket,
+            &WorkerReq::Cancel { request_id },
+            HEALTH_PROBE_TIMEOUT,
+        ) {
+            Ok(WorkerResp::CancelAck) => {}
+            Ok(other) => anyhow::bail!("worker {kind}: unexpected resp to cancel: {other:?}"),
+            Err(e) => anyhow::bail!("worker {kind}: cancel send failed: {e}"),
+        }
+        let start = Instant::now();
+        while start.elapsed() < CANCEL_YIELD_DEADLINE {
+            match worker_ipc::request(&socket, &WorkerReq::Health, HEALTH_PROBE_TIMEOUT) {
+                Ok(WorkerResp::Health(h)) => {
+                    if h.inflight_request_id != Some(request_id) {
+                        self.record_health(kind, h);
+                        return Ok(());
+                    }
+                }
+                Ok(_) | Err(_) => {
+                    // Worker is unresponsive — escalate immediately.
+                    break;
+                }
+            }
+            std::thread::sleep(CANCEL_POLL_INTERVAL);
+        }
+        self.escalate_to_kill(kind);
+        anyhow::bail!("worker {kind} did not yield in {CANCEL_YIELD_DEADLINE:?}; child restarted")
+    }
+
+    /// SIGKILL the worker for `kind` and respawn it. Used by
+    /// [`Supervisor::cancel`] when the cooperative cancel guard
+    /// expires. Idempotent — if the child is already dead, the
+    /// respawn path runs anyway.
+    fn escalate_to_kill(&self, kind: WorkloadKind) {
+        {
+            let mut inner = self.inner.lock().expect("supervisor poisoned");
+            if let Some(mc) = inner.children.get_mut(&kind) {
+                tracing::warn!(
+                    target: "sy::aiplane::supervisor",
+                    kind = %kind,
+                    pid = ?mc.handle.pid(),
+                    "cancel guard expired; SIGKILL + respawn"
+                );
+                mc.handle.terminate();
+            }
+        }
+        if let Err(e) = self.ensure_spawned(kind) {
+            tracing::error!(
+                target: "sy::aiplane::supervisor",
+                kind = %kind,
+                error = %format!("{e:#}"),
+                "respawn after cancel failed"
+            );
         }
     }
 
@@ -304,9 +452,18 @@ impl Supervisor {
             // replaces the entry atomically when it decides to act.
         }
         for kind in to_respawn {
-            eprintln!("sy aiplane[supervisor]: respawning {kind} worker");
+            tracing::info!(
+                target: "sy::aiplane::supervisor",
+                kind = %kind,
+                "respawning worker"
+            );
             if let Err(e) = self.ensure_spawned(kind) {
-                eprintln!("sy aiplane[supervisor]: respawn {kind} failed: {e:#}");
+                tracing::error!(
+                    target: "sy::aiplane::supervisor",
+                    kind = %kind,
+                    error = %format!("{e:#}"),
+                    "respawn failed"
+                );
             }
         }
     }
@@ -318,6 +475,14 @@ impl Supervisor {
             let inner = self.inner.lock().expect("supervisor poisoned");
             inner.children.keys().copied().collect()
         };
+        // SPEC §4.6 `sy_models_warm{kind}`: zero every gauge on
+        // shutdown so a restarted daemon's metrics don't carry the
+        // previous process's warm set into its first emission
+        // window. The warm-pool roster itself doesn't need to clear
+        // — the supervisor is going away.
+        for k in WorkloadKind::ALL {
+            gauge!("sy_models_warm", "kind" => k.as_str()).set(0.0);
+        }
         for kind in &kinds {
             let socket = match self.socket_for(*kind) {
                 Ok(s) => s,
@@ -339,9 +504,10 @@ impl Supervisor {
         let mut inner = self.inner.lock().expect("supervisor poisoned");
         for mc in inner.children.values_mut() {
             if mc.handle.is_alive() {
-                eprintln!(
-                    "sy aiplane[supervisor]: child pid={:?} did not exit, escalating",
-                    mc.handle.pid()
+                tracing::warn!(
+                    target: "sy::aiplane::supervisor",
+                    pid = ?mc.handle.pid(),
+                    "child did not exit, escalating"
                 );
                 mc.handle.terminate();
             }
@@ -385,8 +551,6 @@ mod tests {
     /// the supervisor expects, answers Health with a configurable
     /// state, exits when told.
     struct FakeWorker {
-        kind: WorkloadKind,
-        state: Arc<Mutex<WorkloadState>>,
         shutdown: Arc<std::sync::atomic::AtomicBool>,
         thread: Option<thread::JoinHandle<()>>,
         pid: u32,
@@ -406,19 +570,38 @@ mod tests {
                 let _ = t.join();
             }
         }
-        fn handle_kind(&self) -> Option<WorkloadKind> {
-            Some(self.kind)
-        }
     }
 
     struct FakeSpawn {
         next_pid: Mutex<u32>,
+        /// When `Some(id)`, every spawned worker reports
+        /// `inflight_request_id = Some(id)` in its Health responses
+        /// — used by the SPEC §4.3 SIGKILL-fallback test to keep the
+        /// supervisor convinced the worker is stuck.
+        inflight_seed: Option<ulid::Ulid>,
+        /// When true, a [`WorkerReq::Cancel`] is ACK'd without
+        /// clearing the inflight tracker. Pairs with `inflight_seed`
+        /// to simulate "RunOptions::SetTerminate not yielding" per
+        /// SPEC §7 Open Q2.
+        ignore_cancel: bool,
     }
 
     impl FakeSpawn {
         fn new() -> Self {
             Self {
                 next_pid: Mutex::new(10_000),
+                inflight_seed: None,
+                ignore_cancel: false,
+            }
+        }
+
+        /// Build a [`FakeSpawn`] whose workers permanently report the
+        /// given `request_id` as inflight and ignore Cancel signals.
+        fn with_stuck_inflight(seed: ulid::Ulid) -> Self {
+            Self {
+                next_pid: Mutex::new(10_000),
+                inflight_seed: Some(seed),
+                ignore_cancel: true,
             }
         }
     }
@@ -435,8 +618,11 @@ mod tests {
                 backend: "fake".into(),
             }));
             let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let inflight = Arc::new(Mutex::new(self.inflight_seed));
             let state_for_thread = state.clone();
             let shutdown_for_thread = shutdown.clone();
+            let inflight_for_thread = inflight.clone();
+            let ignore_cancel = self.ignore_cancel;
             let kind_copy = kind;
             let thread = thread::spawn(move || {
                 while !shutdown_for_thread.load(std::sync::atomic::Ordering::SeqCst) {
@@ -452,6 +638,7 @@ mod tests {
                                     ema_ms: 0.0,
                                     calls: 0,
                                     errors: 0,
+                                    inflight_request_id: *inflight_for_thread.lock().unwrap(),
                                 }),
                                 WorkerReq::Shutdown => {
                                     shutdown_for_thread
@@ -461,6 +648,12 @@ mod tests {
                                 WorkerReq::RunBatch { .. } => WorkerResp::Error {
                                     msg: "fake worker: RunBatch not implemented".into(),
                                 },
+                                WorkerReq::Cancel { .. } => {
+                                    if !ignore_cancel {
+                                        *inflight_for_thread.lock().unwrap() = None;
+                                    }
+                                    WorkerResp::CancelAck
+                                }
                             };
                             let _ = write_resp(stream, &resp);
                         }
@@ -472,9 +665,12 @@ mod tests {
             let mut next = self.next_pid.lock().unwrap();
             let pid = *next;
             *next += 1;
+            // `kind` and `state` are deliberately *not* stored on
+            // the FakeWorker — the spawned thread already owns its
+            // own clones, which keep the underlying Arcs alive for
+            // the lifetime of the worker.
+            let _ = (kind, state);
             Ok(Box::new(FakeWorker {
-                kind,
-                state,
                 shutdown,
                 thread: Some(thread),
                 pid,
@@ -514,10 +710,144 @@ mod tests {
 
         // all_health surfaces it.
         let all = sup.all_health();
-        assert!(all.get(&WorkloadKind::Embed).is_some());
+        assert!(all.contains_key(&WorkloadKind::Embed));
+
+        // SPEC §4.3 warm pool: a fresh `ensure(Embed)` must register
+        // the kind in the supervisor's warm-pool roster alongside
+        // the always-warm tier (VAD + EyeTrack).
+        let warm = sup.warm_models();
+        for required in ["embed", "vad", "eye-track"] {
+            assert!(
+                warm.iter().any(|m| m == required),
+                "expected `{required}` in warm_models: {warm:?}"
+            );
+        }
 
         sup.shutdown(Duration::from_secs(2));
 
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(v) = prev {
+            std::env::set_var("XDG_RUNTIME_DIR", v);
+        } else {
+            std::env::remove_var("XDG_RUNTIME_DIR");
+        }
+    }
+
+    #[test]
+    fn sigkill_after_500ms_no_yield() {
+        // SPEC §4.3 step 5 / ROADMAP Step 4: a worker that
+        // ACKnowledges Cancel but refuses to clear its inflight
+        // tracker (the production analogue: `RunOptions::SetTerminate`
+        // fails to unblock — SPEC §7 Open Q2) must be SIGKILLed by
+        // the supervisor and respawned within ~500 ms.
+        const ESCALATION_FLOOR: Duration = Duration::from_millis(500);
+        const ESCALATION_CEILING: Duration = Duration::from_millis(1_500);
+
+        let _guard = crate::aiplane::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!(
+            "sy-supervisor-cancel-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let prev = std::env::var("XDG_RUNTIME_DIR").ok();
+        std::env::set_var("XDG_RUNTIME_DIR", &tmp);
+
+        let seed = ulid::Ulid::new();
+        let sup = Supervisor::with_spawn(Arc::new(FakeSpawn::with_stuck_inflight(seed)));
+        sup.ensure(WorkloadKind::Embed, Duration::from_secs(3))
+            .expect("ensure");
+        let pid_before = sup.pid(WorkloadKind::Embed).expect("pid");
+
+        let t0 = Instant::now();
+        let cancel_err = sup
+            .cancel(WorkloadKind::Embed, seed)
+            .expect_err("stuck worker forces SIGKILL fallback");
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed >= ESCALATION_FLOOR,
+            "guard fired before 500 ms: {elapsed:?}"
+        );
+        assert!(
+            elapsed < ESCALATION_CEILING,
+            "guard took unreasonably long: {elapsed:?}"
+        );
+        assert!(
+            cancel_err.to_string().contains("did not yield"),
+            "error should explain the escalation: {cancel_err}"
+        );
+
+        let pid_after = sup.pid(WorkloadKind::Embed).expect("pid after respawn");
+        assert_ne!(
+            pid_before, pid_after,
+            "supervisor must respawn the worker after SIGKILL"
+        );
+
+        sup.shutdown(Duration::from_secs(2));
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(v) = prev {
+            std::env::set_var("XDG_RUNTIME_DIR", v);
+        } else {
+            std::env::remove_var("XDG_RUNTIME_DIR");
+        }
+    }
+
+    /// arch-observability Step 2: the supervisor's warnings must be
+    /// emitted as `tracing::warn!` events with structured fields, not
+    /// as `eprintln!("…")` lines. The cancel-guard escalation path
+    /// (analogous to the SPEC §4.3 NPU-EAGAIN "worker stuck" branch)
+    /// must carry the workload `kind` as a typed field so journald /
+    /// the OTel formatter can index on it.
+    #[test]
+    #[tracing_test::traced_test]
+    fn warn_on_npu_eagain_emits_structured_field() {
+        let _guard = crate::aiplane::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!(
+            "sy-supervisor-warn-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let prev = std::env::var("XDG_RUNTIME_DIR").ok();
+        std::env::set_var("XDG_RUNTIME_DIR", &tmp);
+
+        let seed = ulid::Ulid::new();
+        let sup = Supervisor::with_spawn(Arc::new(FakeSpawn::with_stuck_inflight(seed)));
+        sup.ensure(WorkloadKind::Embed, Duration::from_secs(3))
+            .expect("ensure");
+        let _ = sup
+            .cancel(WorkloadKind::Embed, seed)
+            .expect_err("stuck worker forces SIGKILL fallback");
+
+        // The cancel-guard expired warning must (a) be a tracing event
+        // — not a raw stderr write — and (b) carry the workload kind
+        // as a structured field, not just interpolated into the body.
+        // `tracing-test`'s capture uses the `compact` formatter, which
+        // renders Display-valued fields as `kind=embed` (no quotes).
+        assert!(
+            logs_contain("kind=embed"),
+            "expected `kind=embed` structured field in captured tracing logs"
+        );
+        assert!(
+            logs_contain("cancel guard expired"),
+            "expected the cancel-guard warning body in captured logs"
+        );
+        assert!(
+            logs_contain("sy::aiplane::supervisor"),
+            "expected the supervisor tracing target in captured logs"
+        );
+
+        sup.shutdown(Duration::from_secs(2));
         let _ = std::fs::remove_dir_all(&tmp);
         if let Some(v) = prev {
             std::env::set_var("XDG_RUNTIME_DIR", v);

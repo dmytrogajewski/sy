@@ -88,11 +88,9 @@ fn is_denied(key: &str) -> bool {
 
 fn walk(v: &Value, out: &mut String) {
     match v {
-        Value::String(s) => {
-            if !s.is_empty() {
-                out.push_str(s);
-                out.push('\n');
-            }
+        Value::String(s) if !s.is_empty() => {
+            out.push_str(s);
+            out.push('\n');
         }
         Value::Array(arr) => {
             for x in arr {

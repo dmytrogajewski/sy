@@ -17,13 +17,13 @@
 //! produced once by `scripts/prep_npu_workload.py --workload rerank`.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use ort::{
     ep::Vitis,
     inputs,
-    session::{builder::GraphOptimizationLevel, Session},
+    session::{builder::GraphOptimizationLevel, RunOptions, Session},
     value::Tensor,
 };
 use tokenizers::Tokenizer;
@@ -38,17 +38,27 @@ use super::detect_npu_label;
 const MODEL_STEM: &str = "bge-reranker-v2-m3";
 const SEQ_LEN: usize = 512;
 /// Static batch dim baked into the prep-time ONNX export + the VAIP
-/// partition cache. Held at 1 because VAIP's partition pass
-/// internally calls `SerializeToString` on the model graph, and at
-/// batch > 1 the xlm-roberta-large graph (with extra activation
-/// `value_info` metadata) overflows libprotobuf's 2 GB hard cap.
-/// Session-level batching is parked until a smaller backbone or a
-/// patched VAIP load path lands.
+/// partition cache. Pinned at 1 for `bge-reranker-v2-m3`
+/// (xlm-roberta-large) — every attempt to lift it hits one of:
 ///
-/// The worker's `run_batch` still receives N pairs at once and
-/// dispatches them sequentially through one Session — each call is
-/// ~40 ms on NPU vs ~2 s on CPU, so the IPC batching wins still hold
-/// even without graph-level batching.
+/// 1. **BF16 + batch>1**: VAIP's `ModelProto::SerializeToString`
+///    inlines the Quark QDQ-annotated graph; even after
+///    `_strip_value_info` + `_shrink_fp32_initializers_to_bf16` the
+///    serialized proto lands at ~2.29 GiB, over libprotobuf's hard
+///    2 GiB cap.
+///
+/// 2. **INT8 + batch=8**: Quark's `INT8_TRANSFORMER_DEFAULT`
+///    produces a graph whose QDQ patterns do not match VAIP's
+///    `fuse_MatMulNBits` / `vaip-pass_ssmlp` fusion rules — VAIP
+///    emits an empty `vaiml_partition_fe.flexml/`, no `.rai`
+///    artifact, and the worker falls back to CPU (~11 s per
+///    dispatch).
+///
+/// The path to true batched rerank is therefore a smaller
+/// multilingual backbone (e.g. `jinaai/jina-reranker-v2-base-
+/// multilingual` at ~278M params) or a custom Quark recipe that
+/// emits VAIP-friendly INT8 QDQ patterns. Until then, `run_batch`
+/// chunks pairs into singletons.
 const BATCH_SIZE: usize = 1;
 
 struct LoadedReranker {
@@ -71,12 +81,19 @@ unsafe impl Send for LoadedReranker {}
 
 pub struct RerankWorkload {
     state: Mutex<Option<LoadedReranker>>,
+    /// `RunOptions` clone reachable from outside the state lock so
+    /// [`Workload::try_cancel`] can call `terminate()` while
+    /// `Workload::run_batch` is mid-session. See `EmbedWorkload` for
+    /// the same pattern + rationale (SPEC §4.2 cancel is best-effort
+    /// and idempotent).
+    run_options: Mutex<Option<Arc<RunOptions>>>,
 }
 
 impl RerankWorkload {
     pub fn new() -> Self {
         Self {
             state: Mutex::new(None),
+            run_options: Mutex::new(None),
         }
     }
 
@@ -134,13 +151,25 @@ impl Workload for RerankWorkload {
             "rerank worker requires NPU — re-run prep_npu_workload.py and check XRT setup"
         })?;
         let hw = detect_npu_label();
-        eprintln!("sy aiplane[rerank]: NPU via VitisAI on {hw} ({MODEL_STEM}, batch={BATCH_SIZE})");
+        tracing::info!(
+            target: "sy::aiplane::workloads::rerank",
+            hardware = %hw,
+            model = MODEL_STEM,
+            batch_size = BATCH_SIZE,
+            backend = "vitisai",
+            "NPU active"
+        );
         *guard = Some(LoadedReranker {
             session,
             tokenizer,
             backend: "vitisai",
             batch_size: BATCH_SIZE,
         });
+        let opts = RunOptions::new().map_err(|e| anyhow::anyhow!("create run_options: {e}"))?;
+        *self
+            .run_options
+            .lock()
+            .expect("rerank run_options poisoned") = Some(Arc::new(opts));
         Ok(())
     }
 
@@ -170,11 +199,17 @@ impl Workload for RerankWorkload {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        let run_options = self
+            .run_options
+            .lock()
+            .expect("rerank run_options poisoned")
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("rerank: load() not called"))?;
         let mut guard = self.state.lock().expect("rerank state poisoned");
         let r = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("rerank: load() not called"))?;
-        let scores = run_pairs(r, &pairs)?;
+        let scores = run_pairs(r, &run_options, &pairs)?;
         Ok(scores
             .into_iter()
             .map(|s| WorkloadOutput::Score { score: s })
@@ -183,6 +218,22 @@ impl Workload for RerankWorkload {
 
     fn unload(&self) {
         *self.state.lock().expect("rerank state poisoned") = None;
+        *self
+            .run_options
+            .lock()
+            .expect("rerank run_options poisoned") = None;
+    }
+
+    fn try_cancel(&self) -> bool {
+        let Some(opts) = self
+            .run_options
+            .lock()
+            .expect("rerank run_options poisoned")
+            .clone()
+        else {
+            return false;
+        };
+        opts.terminate().is_ok()
     }
 
     fn health(&self) -> WorkloadHealth {
@@ -214,6 +265,9 @@ fn try_vitisai(model: &Path, cache_dir: &Path) -> Result<Session> {
         anyhow::bail!("vaip_config.json missing at {}", vaip_config.display());
     }
 
+    // Cache key follows the prep script's `compiled_<stem>_<suffix>_seq<N>_b<B>`
+    // convention. BF16 + batch=1 is the only stable configuration; see
+    // the BATCH_SIZE doc comment above for why batch>1 isn't viable yet.
     let cache_key = format!("compiled_{MODEL_STEM}_bf16_seq{SEQ_LEN}_b{BATCH_SIZE}");
     let vitis = Vitis::default()
         .with_config_file(vaip_config.to_string_lossy())
@@ -222,6 +276,14 @@ fn try_vitisai(model: &Path, cache_dir: &Path) -> Result<Session> {
 
     Session::builder()
         .map_err(|e| anyhow::anyhow!("session builder: {e}"))?
+        // Level1 produces a larger serialized graph (post-fusion
+        // attribute bloat). For the xlm-roberta-large backbone that
+        // already sits at ~2.27 GB on disk, ORT's pre-pass pushes
+        // VAIP's `ModelProto::SerializeToString` over libprotobuf's
+        // 2 GB hard cap and the partition pass aborts mid-compile.
+        // Keep this on Disable until either (a) a smaller reranker
+        // backbone, or (b) the same value_info-strip we'd need for
+        // batched export lands.
         .with_optimization_level(GraphOptimizationLevel::Disable)
         .map_err(|e| anyhow::anyhow!("optimisation level: {e}"))?
         .with_execution_providers([vitis.build()])
@@ -259,9 +321,14 @@ fn encode_pair(tokenizer: &Tokenizer, q: &str, d: &str) -> Result<(Vec<i64>, Vec
 /// (matching the prep-time static export shape), pads the trailing
 /// chunk with empty rows so every Session::run sees the same shape,
 /// and stitches the scores back together in input order. One
-/// Session::run per chunk; for the common path (30 candidates,
-/// compiled batch=32) this is one inference per query.
-fn run_pairs(r: &mut LoadedReranker, pairs: &[(String, String)]) -> Result<Vec<f32>> {
+/// Session::run per chunk; with the current `batch_size = 1` cap
+/// (libprotobuf 2 GB block) each pair is its own NPU dispatch at
+/// ~350 ms.
+fn run_pairs(
+    r: &mut LoadedReranker,
+    run_options: &RunOptions,
+    pairs: &[(String, String)],
+) -> Result<Vec<f32>> {
     if pairs.is_empty() {
         return Ok(Vec::new());
     }
@@ -285,20 +352,26 @@ fn run_pairs(r: &mut LoadedReranker, pairs: &[(String, String)]) -> Result<Vec<f
             mask_flat.extend(mask);
         }
         for _ in real_n..batch {
-            ids_flat.extend(std::iter::repeat(pad_id).take(SEQ_LEN));
-            mask_flat.extend(std::iter::repeat(0i64).take(SEQ_LEN));
+            ids_flat.extend(std::iter::repeat_n(pad_id, SEQ_LEN));
+            mask_flat.extend(std::iter::repeat_n(0i64, SEQ_LEN));
         }
         let shape: [i64; 2] = [batch as i64, SEQ_LEN as i64];
         let ids_t = Tensor::from_array((shape, ids_flat))
             .map_err(|e| anyhow::anyhow!("tensor ids: {e}"))?;
         let mask_t = Tensor::from_array((shape, mask_flat))
             .map_err(|e| anyhow::anyhow!("tensor mask: {e}"))?;
+        run_options
+            .unterminate()
+            .map_err(|e| anyhow::anyhow!("unterminate: {e}"))?;
         let outputs = r
             .session
-            .run(inputs![
-                "input_ids" => ids_t,
-                "attention_mask" => mask_t,
-            ])
+            .run_with_options(
+                inputs![
+                    "input_ids" => ids_t,
+                    "attention_mask" => mask_t,
+                ],
+                run_options,
+            )
             .map_err(|e| anyhow::anyhow!("session run: {e}"))?;
         let view = outputs[0]
             .try_extract_array::<f32>()
@@ -324,6 +397,15 @@ mod tests {
         let w = RerankWorkload::new();
         assert_eq!(w.kind(), WorkloadKind::Rerank);
         assert_eq!(w.model_stem(), MODEL_STEM);
+    }
+
+    #[test]
+    fn try_cancel_before_load_returns_false_without_panicking() {
+        // SPEC §4.2 cancel is best-effort. Mirror of the EmbedWorkload
+        // test — pre-load cancel must safely no-op so the supervisor's
+        // 500 ms SIGKILL guard takes over.
+        let w = RerankWorkload::new();
+        assert!(!w.try_cancel());
     }
 
     #[test]

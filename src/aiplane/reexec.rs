@@ -90,7 +90,11 @@ pub fn maybe_reexec_with_amd_env() {
         .exec();
     // exec() only returns on failure. Fall through to the in-process
     // path so the user at least gets a chance via CPU fallback.
-    eprintln!("sy aiplane: re-exec for VitisAI env failed: {err}; staying in-process");
+    tracing::error!(
+        target: "sy::aiplane::reexec",
+        error = %err,
+        "re-exec for VitisAI env failed; staying in-process"
+    );
 }
 
 /// True iff the re-exec already fired in an ancestor. Workloads use

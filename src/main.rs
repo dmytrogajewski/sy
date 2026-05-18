@@ -17,9 +17,12 @@ mod bat;
 mod bright;
 mod bt;
 mod cal;
+mod crash;
 mod disk;
+mod doctor;
 mod fido;
 mod gpu;
+mod ipc_cli;
 mod knowledge;
 mod net;
 mod notif;
@@ -29,6 +32,8 @@ mod pwr;
 mod silent;
 mod sound;
 mod stack;
+mod supervision;
+mod syauth;
 mod vol;
 mod wallpaper;
 mod wifi;
@@ -51,14 +56,32 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Render all templates under configs/ and write them to the target
+    /// Render all templates under configs/ and write them to the target,
+    /// then symlink `configs/systemd/user/` units into `~/.config/systemd/user/`
+    /// and run `systemctl --user daemon-reload`.
+    ///
+    /// Examples:
+    ///   sy apply --dry-run            # preview every change
+    ///   sy apply --diff --json        # machine-readable preview
+    ///   sy apply --yes                # confirm destructive ops
+    ///   sy apply                      # apply everything
     Apply {
         /// Theme name (resolved as themes/<name>.toml)
         #[arg(short, long)]
         theme: Option<String>,
-        /// Don't write anything — print what would change
+        /// Don't write anything — print what would change.
         #[arg(long)]
         dry_run: bool,
+        /// Alias for `--dry-run --json`; preview pending unit changes.
+        #[arg(long)]
+        diff: bool,
+        /// Emit the unit diff as JSON on stdout (stable schema).
+        #[arg(long)]
+        json: bool,
+        /// Confirm destructive ops (overwriting regular files at
+        /// target paths; removing the legacy system-level unit).
+        #[arg(long)]
+        yes: bool,
     },
     /// List available themes under themes/
     Themes,
@@ -74,6 +97,30 @@ enum Cmd {
     Agt {
         #[command(subcommand)]
         sub: agt::AgtCmd,
+    },
+    /// Agent policy: show / lint / explain / trust / grant (SPEC §4.4 step 2).
+    Policy {
+        #[command(subcommand)]
+        cmd: agt::policy::cli::PolicyCmd,
+    },
+    /// Approve a pending consent token (SPEC §4.4 step 2). Refuses
+    /// without a TTY unless `--token-from-stdin --yes` is paired and
+    /// the UUID is piped on stdin.
+    ///
+    /// Example: sy approve 4f1d2c5b-...
+    Approve {
+        /// Consent token UUID issued by the daemon's `ConsentRequired`
+        /// reply. Omit when piping via `--token-from-stdin --yes`.
+        token: Option<String>,
+        /// Acknowledge the non-TTY bypass (paired with `--token-from-stdin`).
+        #[arg(long)]
+        yes: bool,
+        /// Read the token from stdin instead of argv (for scripts).
+        #[arg(long)]
+        token_from_stdin: bool,
+        /// Machine-readable response.
+        #[arg(long)]
+        json: bool,
     },
     /// Toggle a named popup window (e.g. `sy popup agents`, `sy popup cal`, `sy popup nmtui`)
     Popup {
@@ -161,6 +208,14 @@ enum Cmd {
         #[arg(long)]
         waybar: bool,
     },
+    /// syauth pair-confirm applet (accept|reject|status; --waybar for bar JSON)
+    Syauth {
+        /// accept | reject | status (default: status)
+        action: Option<String>,
+        /// Emit waybar-compatible JSON for the bar slot.
+        #[arg(long, conflicts_with = "action")]
+        waybar: bool,
+    },
     /// Power menu: tuned profile + lock/suspend/reboot/shutdown/logout
     Pwr {
         /// Emit waybar-compatible JSON
@@ -208,6 +263,46 @@ enum Cmd {
         #[command(subcommand)]
         sub: auto::AutoCmd,
     },
+    /// IPC v1 round-trip checks (SPEC §4.7): `ping <endpoint>` / `describe <endpoint>`.
+    Ipc {
+        #[command(subcommand)]
+        sub: ipc_cli::IpcCmd,
+    },
+    /// Run the linear health checks (SPEC §4.6, §4.7).
+    ///
+    /// Examples:
+    ///   sy doctor --json                # machine-readable schema
+    ///   sy doctor --only=ipc.           # only checks under `ipc.*`
+    ///   sy doctor --only=kernel.        # only kernel.* checks
+    ///
+    /// Exit codes: 0 all-pass, 1 any-fail, 2 usage error, 3 warn-only.
+    Doctor {
+        /// Emit the SPEC §4.6 JSON schema on stdout (pretty-printed).
+        #[arg(long)]
+        json: bool,
+        /// Filter checks by dot-prefix (e.g. `ipc.` runs only ipc.* checks).
+        #[arg(long, value_name = "PREFIX")]
+        only: Option<String>,
+    },
+    /// List and inspect crash records (panics + coredumps).
+    /// SPEC §4.6 "Crash records"; see `sy crash list --help`.
+    Crash {
+        #[command(subcommand)]
+        cmd: crash::CrashCmd,
+    },
+    /// `systemctl --user` / `journalctl --user` wrapper per SPEC §4.7
+    /// (arch-supervision Step 3). Subcommands: start|stop|restart|
+    /// status|enable|disable|logs. See `sy service --help`.
+    ///
+    /// Examples:
+    ///   sy service start aiplane
+    ///   sy service status knowledge --json
+    ///   sy service logs aiplane -f -n 200
+    ///   sy service logs agentd --trace <uuid>
+    Service {
+        #[command(subcommand)]
+        cmd: supervision::service::ServiceCmd,
+    },
 }
 
 #[derive(Deserialize, Default)]
@@ -218,32 +313,34 @@ struct SyFile {
 const DEFAULT_THEME: &str = "gruvbox-material";
 
 fn main() -> Result<()> {
-    // Must run before any threads spawn: probes for /opt/AMD/ryzenai
-    // and re-execs with LD_LIBRARY_PATH + ORT_DYLIB_PATH + the Ryzen AI
-    // activate env vars baked in. No-op when the AMD venv isn't present
-    // or when we've already re-execed.
+    // Must run before any threads spawn: re-exec with the AMD venv's
+    // LD_LIBRARY_PATH + ORT_DYLIB_PATH baked in (no-op when absent).
     aiplane::reexec::maybe_reexec_with_amd_env();
+    // SPEC §4.6 / arch-observability Step 1: install the CLI's
+    // tracing subscriber. `_obs_guard` lives until `main` returns.
+    let _obs_guard = sy_core::obs::init(sy_core::obs::Mode::Cli)?;
 
-    let result = run();
-    match &result {
-        Err(e) => {
-            // Map AgtError / StackError to their declared exit codes
-            // (CLIG: stable exit codes). For other errors fall through to
-            // anyhow's default formatting.
-            if let Some(ae) = e.downcast_ref::<agt::AgtError>() {
-                eprintln!("error: {}", ae.msg);
-                std::process::exit(ae.code);
-            }
-            if let Some(se) = e.downcast_ref::<stack::StackError>() {
-                eprintln!("error: {}", se.msg);
-                std::process::exit(se.code);
-            }
-            if let Some(ke) = e.downcast_ref::<knowledge::KnowledgeError>() {
-                eprintln!("error: {}", ke.msg);
-                std::process::exit(ke.code);
-            }
+    // SPEC §4.6 / arch-observability Step 4: seed a root trace_id
+    // so CLI- and daemon-side logs share an id (see sy_core::obs).
+    let result = sy_core::obs::with_trace_id(sy_core::TraceId::new(), None, run);
+    if let Err(e) = &result {
+        // Map domain errors to their declared CLIG exit codes.
+        if let Some(ae) = e.downcast_ref::<agt::AgtError>() {
+            eprintln!("error: {}", ae.msg);
+            std::process::exit(ae.code);
         }
-        Ok(()) => {}
+        if let Some(se) = e.downcast_ref::<stack::StackError>() {
+            eprintln!("error: {}", se.msg);
+            std::process::exit(se.code);
+        }
+        if let Some(ke) = e.downcast_ref::<knowledge::KnowledgeError>() {
+            eprintln!("error: {}", ke.msg);
+            std::process::exit(ke.code);
+        }
+        if let Some(se) = e.downcast_ref::<supervision::service::ServiceError>() {
+            eprintln!("error: {}", se.msg);
+            std::process::exit(se.code);
+        }
     }
     result
 }
@@ -268,13 +365,22 @@ fn run() -> Result<()> {
     };
 
     match cli.command {
-        Cmd::Apply { theme, dry_run } => {
+        Cmd::Apply {
+            theme,
+            dry_run,
+            diff,
+            json,
+            yes,
+        } => {
             let (root, syf, target) = resolve_repo()?;
             let name = theme
                 .or(syf.theme.clone())
                 .unwrap_or_else(|| DEFAULT_THEME.to_string());
             let ctx = load_theme(&root, &name)?;
-            apply(&root, &target, &ctx, &name, dry_run)
+            // `--diff` is a documented alias for `--dry-run --json`.
+            let dry = dry_run || diff;
+            apply(&root, &target, &ctx, &name, dry)?;
+            apply_units(&root, dry, json || diff, yes)
         }
         Cmd::Themes => {
             let (root, _, _) = resolve_repo()?;
@@ -297,6 +403,13 @@ fn run() -> Result<()> {
             Ok(())
         }
         Cmd::Agt { sub } => agt::dispatch(sub),
+        Cmd::Policy { cmd } => agt::policy::cli::dispatch(cmd),
+        Cmd::Approve {
+            token,
+            yes,
+            token_from_stdin,
+            json,
+        } => agt::policy::cli::approve(token, yes, token_from_stdin, json),
         Cmd::Popup { key } => popup::toggle(&key),
         Cmd::Cal => cal::run(),
         Cmd::Wifi => wifi::pick(),
@@ -322,6 +435,7 @@ fn run() -> Result<()> {
             notif::run(act, &rest)
         }
         Cmd::Bt { waybar } => bt::run(waybar),
+        Cmd::Syauth { action, waybar } => syauth::run(action.as_deref(), waybar),
         Cmd::Pwr { waybar } => pwr::run(waybar),
         Cmd::Fido { action } => fido::run(action.as_deref()),
         Cmd::Silent { action, waybar } => silent::run(action.as_deref(), waybar),
@@ -335,6 +449,10 @@ fn run() -> Result<()> {
         Cmd::Knowledge { sub } => knowledge::dispatch(sub),
         Cmd::Aiplane { sub } => aiplane::cli::dispatch(sub),
         Cmd::Auto { sub } => auto::dispatch(sub),
+        Cmd::Ipc { sub } => ipc_cli::dispatch(sub),
+        Cmd::Doctor { json, only } => doctor::dispatch(doctor::DoctorOpts { json, only }),
+        Cmd::Crash { cmd } => crash::dispatch(cmd),
+        Cmd::Service { cmd } => supervision::service::dispatch(cmd),
     }
 }
 
@@ -465,6 +583,12 @@ fn apply(root: &Path, target: &Path, ctx: &toml::Table, theme: &str, dry: bool) 
     let verb = if dry { "would change" } else { "changed" };
     println!("{verb} {changed}, unchanged {unchanged}");
     Ok(())
+}
+
+/// arch-supervision Step 2: sync `configs/systemd/user/` into the
+/// user-mode systemd directory. Runs after the template apply.
+fn apply_units(root: &Path, dry: bool, json: bool, yes: bool) -> Result<()> {
+    supervision::apply::run_cli(root, &default_target()?, dry, json, yes)
 }
 
 const QDRANT_VERSION: &str = "1.12.4";

@@ -1,0 +1,57 @@
+# sy NPU power-mode primer.
+#
+# The AMD XDNA NPU (Strix Point and friends) defaults to PCIe
+# `Default` power mode at boot. AMD's `xrt-smi` ships `turbo` as the
+# top tier — anecdotally and per AMD's docs, turbo locks the AIE
+# tile clocks at peak and disables aggressive D3 entries during
+# active workloads. Without this, every cold call eats a D3→D0
+# wake-up of ~10–50 ms and the AIE clocks stay at idle ratios.
+#
+# pmode changes go through `DRM_IOCTL_AMDXDNA_SET_STATE`, which
+# requires `CAP_SYS_ADMIN`. There is no sysfs alternative. A user-
+# level systemd unit cannot do this; hence this system-level oneshot
+# unit that runs at boot.
+#
+# Install (one-time):
+#   sudo cp configs/systemd/system/sy-npu-perf.service \
+#          /etc/systemd/system/sy-npu-perf.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now sy-npu-perf.service
+#
+# Verify:
+#   xrt-smi examine -r platform
+#   # Power Mode should read `Turbo` (or whatever was set).
+#
+# `sy apply` does NOT install this unit automatically — system-level
+# files need sudo and `sy apply` is deliberately user-scope only.
+
+[Unit]
+Description=sy: AMD XDNA NPU power mode primer
+Documentation=https://github.com/dmytrogajewski/sy
+# Run as soon as the kernel has the amdxdna driver bound. The driver
+# is in-tree in mainline 6.10+; here it bound at boot via the PCI
+# subsystem, so `multi-user.target` is reached well after `accel0`
+# is up. Keeping the dependency loose keeps install simple.
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Discover the NPU's BDF dynamically so this works across machines
+# without hard-coding `0000:66:00.1` (different chassis, different
+# bus topologies). The `awk` picks the first amdxdna-driven PCI
+# device's BDF; on every Ryzen AI host there is exactly one.
+ExecStart=/usr/bin/bash -c ' \
+  set -e; \
+  bdf=$(lspci -D -d 1022: -k 2>/dev/null \
+        | awk "/^[0-9a-f:.]+ / { last=\$1 } /Kernel driver in use: amdxdna/ { print last; exit }"); \
+  if [ -z "$bdf" ]; then \
+    echo "sy-npu-perf: no amdxdna NPU found, skipping" >&2; exit 0; \
+  fi; \
+  /opt/xilinx/xrt/bin/xrt-smi configure -d "$bdf" --pmode turbo \
+'
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -29,6 +29,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use ulid::Ulid;
 
 use super::registry::{WorkloadInput, WorkloadKind, WorkloadOutput, WorkloadState};
 
@@ -45,7 +46,23 @@ pub enum WorkerReq {
     /// values whose variant must match the worker's kind (validated
     /// by the worker). Returned in order; partial-batch errors fail
     /// the whole call rather than dropping individual rows.
-    RunBatch { inputs: Vec<WorkloadInput> },
+    /// `request_id` lets a subsequent [`WorkerReq::Cancel`] target this
+    /// exact inflight call (SPEC §4.2 Cancellation pattern). Older
+    /// callers that don't care about cancel can omit the field; the
+    /// zero ULID is the "untracked" sentinel.
+    RunBatch {
+        #[serde(default)]
+        request_id: Ulid,
+        inputs: Vec<WorkloadInput>,
+    },
+    /// Cooperatively abort the inflight `RunBatch` whose
+    /// `request_id` matches. The worker calls
+    /// [`super::registry::Workload::try_cancel`] and replies
+    /// [`WorkerResp::CancelAck`]; if no inflight request matches, the
+    /// worker still replies `CancelAck` (cancel is idempotent — the
+    /// caller learns the outcome from the RunBatch response). Added
+    /// in arch-aiplane-scheduler Step 4.
+    Cancel { request_id: Ulid },
     /// Cooperative shutdown. The worker flushes any in-flight call,
     /// drops its ORT session, replies `ShutdownAck`, and exits 0.
     Shutdown,
@@ -66,6 +83,11 @@ pub enum WorkerResp {
     Error {
         msg: String,
     },
+    /// Cancel was received. Idempotent — sent whether or not an
+    /// inflight request matched the targeted `request_id`. The
+    /// in-flight `RunBatch` (if any) surfaces the actual abort in its
+    /// own `Error` reply when it unwinds.
+    CancelAck,
     ShutdownAck,
 }
 
@@ -86,6 +108,13 @@ pub struct WorkerHealth {
     pub ema_ms: f64,
     pub calls: u64,
     pub errors: u64,
+    /// `Some(id)` while the worker is processing a [`WorkerReq::RunBatch`]
+    /// with that `request_id`; `None` between requests. The supervisor's
+    /// [`Supervisor::cancel`] polls this field after sending a Cancel
+    /// to decide whether the worker yielded within the SPEC §4.3
+    /// 500 ms guard. Older snapshots default to `None`.
+    #[serde(default)]
+    pub inflight_request_id: Option<Ulid>,
 }
 
 /// Worker-socket path for a given workload kind. Deterministic so
@@ -242,7 +271,9 @@ mod tests {
 
     #[test]
     fn worker_req_run_batch_roundtrip() {
+        let id = Ulid::new();
         let r = WorkerReq::RunBatch {
+            request_id: id,
             inputs: vec![WorkloadInput::TextPair {
                 a: "q".into(),
                 b: "d".into(),
@@ -251,7 +282,8 @@ mod tests {
         let s = serde_json::to_string(&r).unwrap();
         let back: WorkerReq = serde_json::from_str(&s).unwrap();
         match back {
-            WorkerReq::RunBatch { inputs } => {
+            WorkerReq::RunBatch { request_id, inputs } => {
+                assert_eq!(request_id, id);
                 assert_eq!(inputs.len(), 1);
                 match &inputs[0] {
                     WorkloadInput::TextPair { a, b } => {
@@ -263,6 +295,46 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn worker_req_run_batch_request_id_defaults_to_nil_when_absent() {
+        // Forward-compat: older callers (the legacy daemon →
+        // supervisor.run_batch path) don't yet supply a request_id.
+        // The wire shape must still deserialise — the worker treats
+        // a `Ulid::nil()` as "this request can't be cancelled
+        // by id" and any future Cancel falls back to SIGKILL.
+        let s = r#"{"req":"run-batch","inputs":[]}"#;
+        let back: WorkerReq = serde_json::from_str(s).unwrap();
+        match back {
+            WorkerReq::RunBatch { request_id, inputs } => {
+                assert_eq!(request_id, Ulid::nil());
+                assert!(inputs.is_empty());
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn worker_req_cancel_roundtrip() {
+        let id = Ulid::new();
+        let r = WorkerReq::Cancel { request_id: id };
+        let s = serde_json::to_string(&r).unwrap();
+        assert!(s.contains("\"req\":\"cancel\""));
+        let back: WorkerReq = serde_json::from_str(&s).unwrap();
+        match back {
+            WorkerReq::Cancel { request_id } => assert_eq!(request_id, id),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn worker_resp_cancel_ack_roundtrip() {
+        let r = WorkerResp::CancelAck;
+        let s = serde_json::to_string(&r).unwrap();
+        assert_eq!(s, r#"{"resp":"cancel-ack"}"#);
+        let back: WorkerResp = serde_json::from_str(&s).unwrap();
+        assert!(matches!(back, WorkerResp::CancelAck));
     }
 
     #[test]
@@ -278,6 +350,7 @@ mod tests {
             ema_ms: 32.7,
             calls: 17,
             errors: 0,
+            inflight_request_id: None,
         };
         let s = serde_json::to_string(&h).unwrap();
         assert!(s.contains("\"state\":\"ready\""));
@@ -355,6 +428,7 @@ mod tests {
                         ema_ms: 0.0,
                         calls: 0,
                         errors: 0,
+                        inflight_request_id: None,
                     }),
                     _ => WorkerResp::Error {
                         msg: "unexpected".into(),

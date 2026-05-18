@@ -11,6 +11,11 @@ use super::registry::Registry;
 use super::session::SessionPool;
 
 pub mod embed;
+/// Deterministic Workload impl used by aiplane / ipc / worker tests
+/// only. Gated out of non-test builds so the scaffolded helpers it
+/// exposes (`fake_vector`, `fake_score`, alternate constructors)
+/// do not register as dead code in release / clippy.
+#[cfg(test)]
 pub mod fake;
 pub mod ocr;
 pub mod rerank;

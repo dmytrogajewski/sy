@@ -242,7 +242,7 @@ fn format_one(r: &Record) -> String {
     let mut s = String::new();
     s.push_str(&format!("{}\n", r.summary));
     s.push_str(&format!("{}  ·  {}  ·  {}\n", r.app, when, read));
-    s.push_str("\n");
+    s.push('\n');
     if r.body.is_empty() {
         s.push_str("(no body)\n");
     } else {

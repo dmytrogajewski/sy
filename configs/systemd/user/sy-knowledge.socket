@@ -1,0 +1,27 @@
+# Socket-activation entry point for the knowledge facade.
+#
+# UNUSED in arch-supervision Step 1. The file is committed so its
+# shape is reviewable, but `sy apply` (Step 2) deliberately does
+# NOT symlink it into `~/.config/systemd/user/sockets.target.wants/`.
+# Socket activation for the knowledge facade is Zone 5 OUT in
+# SPEC §3.3 — landing it before measuring cold-start latency on the
+# rice (SPEC §7 Open Q7) would optimise prematurely.
+#
+# Shape verbatim from SPEC §4.5: `%t` resolves to `$XDG_RUNTIME_DIR`
+# (`/run/user/$UID`), giving us a per-user socket with the
+# user's umask. `SocketMode=0600` and `DirectoryMode=0700` keep
+# other local users out without relying on PAM/seccomp.
+#
+# Source: specs/research/architecture-refactor/SPEC.md §4.5.
+
+[Unit]
+Description=sy knowledge socket
+PartOf=sy.target
+
+[Socket]
+ListenStream=%t/sy-knowledge.sock
+DirectoryMode=0700
+SocketMode=0600
+
+[Install]
+WantedBy=sockets.target

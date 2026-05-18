@@ -21,9 +21,12 @@ use std::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use sy_core::Priority;
+
 use super::registry::WorkloadHealth;
 #[cfg(test)]
 use super::registry::WorkloadState;
+use super::scheduler::queue_cap;
 
 /// Waybar refresh signal used by `custom/sy-knowledge` (matches the
 /// `"signal": 11` field in `configs/waybar/config.jsonc`). Sent as
@@ -92,6 +95,53 @@ pub struct Status {
     /// this field default to empty.
     #[serde(default)]
     pub workloads: HashMap<String, WorkloadHealth>,
+    /// Per-priority-class queue caps from SPEC §4.3 (admission
+    /// budget the dispatcher will enforce in Step 2). Keyed by
+    /// `Priority::as_str()`. Added with arch-aiplane-scheduler Step 1
+    /// — older snapshots default to empty.
+    #[serde(default = "default_queue_caps")]
+    pub queue_caps: HashMap<String, usize>,
+    /// Names of every workload currently held warm by the supervisor
+    /// (SPEC §4.3 / arch-aiplane-scheduler Step 3). Sorted ascending
+    /// for stable output. Older snapshots default to empty.
+    #[serde(default)]
+    pub warm_models: Vec<String>,
+    /// Live per-class queue depths from the scheduler's bounded
+    /// channels (SPEC §4.3 / arch-aiplane-scheduler Step 6). Keyed
+    /// by `Priority::as_str()`. Older snapshots default to all-zero
+    /// so consumers see a clean shape on a daemon that didn't yet
+    /// surface depths.
+    #[serde(default = "default_queue_depths")]
+    pub queue_depths: HashMap<String, usize>,
+    /// Count of workers currently processing a `RunBatch`
+    /// (SPEC §4.3 NPU `inflight`). Derived from
+    /// `Supervisor::all_health()` by counting children whose
+    /// `WorkerHealth.inflight_request_id` is `Some`. 0 when the
+    /// supervisor isn't running. Older snapshots default to 0.
+    #[serde(default)]
+    pub inflight: usize,
+}
+
+/// Default `queue_caps` map for new snapshots: the SPEC §4.3 caps for
+/// each `Priority` class. Older on-disk snapshots without the field
+/// get this populated on parse so consumers don't have to special-
+/// case an empty map.
+pub fn default_queue_caps() -> HashMap<String, usize> {
+    Priority::ALL
+        .iter()
+        .map(|p| (p.as_str().to_string(), queue_cap(*p)))
+        .collect()
+}
+
+/// Default `queue_depths` map for snapshots written without a
+/// running scheduler: every class at 0. Lets the
+/// `sy aiplane status --json` shape stay stable when the daemon
+/// hasn't admitted anything yet (cold boot, empty queues).
+pub fn default_queue_depths() -> HashMap<String, usize> {
+    Priority::ALL
+        .iter()
+        .map(|p| (p.as_str().to_string(), 0))
+        .collect()
 }
 
 fn default_backend() -> String {
@@ -192,10 +242,11 @@ pub fn migrate_state_dir() -> Result<()> {
     if old.is_dir() && !new.exists() {
         std::fs::rename(&old, &new)
             .with_context(|| format!("migrate {} → {}", old.display(), new.display()))?;
-        eprintln!(
-            "sy aiplane: migrated state dir {} → {}",
-            old.display(),
-            new.display()
+        tracing::info!(
+            target: "sy::aiplane::status",
+            from = %old.display(),
+            to = %new.display(),
+            "migrated state dir"
         );
     }
     Ok(())
@@ -248,11 +299,37 @@ mod tests {
             last_index_chunks: 0,
             last_error: None,
             workloads,
+            queue_caps: default_queue_caps(),
+            warm_models: Vec::new(),
+            queue_depths: default_queue_depths(),
+            inflight: 0,
         };
         let json = serde_json::to_string(&s).unwrap();
         let s2: Status = serde_json::from_str(&json).unwrap();
         assert_eq!(s2.workloads.get("embed").unwrap().calls, 42);
         assert_eq!(s2.embed_hardware, "AMD NPU on 9 HX 370");
+        // Step 6: every priority class has a depth entry, default 0.
+        assert_eq!(s2.queue_depths.get("Realtime").copied(), Some(0));
+        assert_eq!(s2.inflight, 0);
+    }
+
+    #[test]
+    fn old_snapshot_without_queue_depths_or_inflight_still_parses() {
+        // Pre-Step-6 snapshots (Step 5 and earlier) won't carry the
+        // new fields. They must still parse — `queue_depths` defaults
+        // to the all-zero map and `inflight` to 0 so consumers see a
+        // clean shape rather than a missing-field error.
+        let legacy = r#"{
+            "ts_unix": 1, "daemon_running": false, "qdrant_ready": false,
+            "schedule_secs": 1800, "next_run_unix": 0,
+            "sources_explicit": 0, "sources_discover": 0,
+            "manifests_active": 0, "manifests_disabled": 0,
+            "points": 0, "indexing": false
+        }"#;
+        let s: Status = serde_json::from_str(legacy).expect("legacy snapshot");
+        assert_eq!(s.inflight, 0);
+        assert_eq!(s.queue_depths.get("Background").copied(), Some(0));
+        assert_eq!(s.queue_depths.len(), Priority::ALL.len());
     }
 
     #[test]
@@ -313,6 +390,10 @@ mod tests {
             last_index_chunks: 0,
             last_error: None,
             workloads: HashMap::new(),
+            queue_caps: default_queue_caps(),
+            warm_models: Vec::new(),
+            queue_depths: default_queue_depths(),
+            inflight: 0,
         }
     }
 }

@@ -1,0 +1,91 @@
+# sy knowledge daemon (qdrant supervisor + NPU embedder).
+#
+# This file is the sole supervisor for the knowledge daemon. The legacy
+# system-level unit at `configs/systemd/system/sy-knowledge.service`
+# was removed in arch-supervision Step 6 (SPEC §4.9 migration row).
+# The rationale block below preserves the CAP_IPC_LOCK / amdxdna mmap
+# notes that originally lived in that legacy unit so future readers
+# understand why the user-level shape looks the way it does.
+#
+# Trimmed for user mode versus the deleted system unit:
+#
+# - DROPPED: `User=`/`Group=` — user-mode systemd already runs as
+#   the invoking user; the directives are silently ignored here and
+#   would mask account-switch bugs.
+# - DROPPED: `AmbientCapabilities=CAP_IPC_LOCK` — `--user` scopes
+#   forbid ambient caps (SPEC §3.2 K5 alternative (b): "many
+#   namespacing options unavailable in --user scopes"). The
+#   amdxdna driver mmap's a 64 MiB DRM heap; the legacy unit
+#   leaned on CAP_IPC_LOCK so the daemon could lock that range.
+#   Mitigation: `LimitMEMLOCK=infinity` (preserved below) raises
+#   RLIMIT_MEMLOCK to "no cap", and on Linux 5.16+ mmap'd device
+#   memory no longer counts against MEMLOCK in most paths — see
+#   the amdxdna driver's `__GFP_ACCOUNT` flag handling. If NPU
+#   attach EAGAINs on Fedora 43, the fallback is a separate
+#   system-level `sy-aiplane.service` (Zone 5 follow-up,
+#   intentionally out of scope here).
+#
+# - PRESERVED: `LimitMEMLOCK=infinity`, `LimitNOFILE=524288` (the
+#   qdrant fd-exhaustion guard documented in the legacy unit's
+#   head comment), `MemoryHigh=12G`, `Nice=10`,
+#   `IOSchedulingClass=idle`, `Restart=on-failure` + backoff.
+# - ADDED: `BindsTo=sy-qdrant.service` + `After=sy-qdrant.service`
+#   so killing qdrant tears knowledge down with it (SPEC §4.5
+#   "BindsTo qdrant"). Restart of qdrant brings knowledge back up
+#   automatically.
+#
+# `Type=notify`: the daemon emits `READY=1` after qdrant comes up,
+# the IPC socket binds, and the aiplane workers load (per
+# `src/knowledge/daemon.rs::run`). `WatchdogSec=30s` arms the
+# systemd watchdog once `READY=1` lands; `sy_core::notify::spawn_watchdog`
+# pings `WATCHDOG=1` at half-interval. `NotifyAccess=main` restricts
+# the notify socket to the daemon's own pid — child qdrant cannot
+# spoof readiness on our behalf.
+#
+# Source: specs/research/architecture-refactor/SPEC.md §4.5.
+
+[Unit]
+Description=sy knowledge daemon (qdrant supervisor + NPU embedder)
+Documentation=https://github.com/dmytrogajewski/sy
+After=sy-qdrant.service
+BindsTo=sy-qdrant.service
+PartOf=sy.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=300s
+TimeoutStartSec=300s
+ExecStart=%h/.local/bin/sy knowledge daemon
+
+# NPU access: the amdxdna driver mmap's a 64 MiB DRM heap. With
+# CAP_IPC_LOCK unavailable in user mode, we lean on RLIMIT_MEMLOCK
+# being uncapped instead. See the head comment for the rationale.
+LimitMEMLOCK=infinity
+
+# Embedded qdrant fd accounting. The legacy system-level unit found
+# that 1024 (default) tripped EMFILE once collections split past
+# ~64 HNSW segments. Preserved verbatim.
+LimitNOFILE=524288
+
+# Soft memory cap: aiplane warm-pool + qdrant working set + the
+# fastembed BPE vocab all together fit comfortably under 12 GiB.
+# This is `MemoryHigh`, not `MemoryMax`, so the kernel throttles
+# allocations instead of OOM-killing on burst.
+MemoryHigh=12G
+
+# Background-priority — the bar / niri / focused agent come first.
+Nice=10
+IOSchedulingClass=idle
+
+Restart=on-failure
+RestartSec=5s
+StartLimitInterval=60s
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sy-knowledge
+
+[Install]
+WantedBy=sy.target

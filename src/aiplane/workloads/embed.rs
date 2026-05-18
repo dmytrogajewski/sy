@@ -16,13 +16,13 @@
 //! Produced once by `scripts/prep_npu_workload.py --workload embed`.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use ort::{
     ep::Vitis,
     inputs,
-    session::{builder::GraphOptimizationLevel, Session},
+    session::{builder::GraphOptimizationLevel, RunOptions, Session},
     value::Tensor,
 };
 use tokenizers::Tokenizer;
@@ -43,7 +43,6 @@ struct LoadedEmbedder {
     session: Session,
     tokenizer: Tokenizer,
     backend: &'static str,
-    hardware: String,
 }
 
 // `Session` is `Send + Sync` in ort 2.0, but the bound isn't propagated
@@ -53,12 +52,20 @@ unsafe impl Send for LoadedEmbedder {}
 
 pub struct EmbedWorkload {
     state: Mutex<Option<LoadedEmbedder>>,
+    /// `RunOptions` clone reachable from outside the state lock so
+    /// [`Workload::try_cancel`] can call `terminate()` while
+    /// `Workload::run` is still holding `state` mid-session. Per
+    /// SPEC §4.2 the cancel must be best-effort and idempotent;
+    /// `terminate()` returns immediately and the in-flight
+    /// `session.run_with_options` unwinds with an ORT error.
+    run_options: Mutex<Option<Arc<RunOptions>>>,
 }
 
 impl EmbedWorkload {
     pub fn new() -> Self {
         Self {
             state: Mutex::new(None),
+            run_options: Mutex::new(None),
         }
     }
 
@@ -112,28 +119,46 @@ impl Workload for EmbedWorkload {
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("load tokenizer.json: {e}"))?;
 
-        let (session, backend, hardware) = match try_vitisai(&model_path, &dir) {
+        let (session, backend) = match try_vitisai(&model_path, &dir) {
             Ok(s) => {
                 let hw = detect_npu_label();
-                eprintln!("sy aiplane[embed]: NPU via VitisAI on {hw} ({MODEL_STEM})");
-                (s, "vitisai", hw)
+                tracing::info!(
+                    target: "sy::aiplane::workloads::embed",
+                    hardware = %hw,
+                    model = MODEL_STEM,
+                    backend = "vitisai",
+                    "NPU active"
+                );
+                (s, "vitisai")
             }
             Err(vitis_err) => {
-                eprintln!(
-                    "sy aiplane[embed]: VitisAI unavailable ({vitis_err:#}); falling back to CPU"
+                tracing::warn!(
+                    target: "sy::aiplane::workloads::embed",
+                    error = %format!("{vitis_err:#}"),
+                    "VitisAI unavailable; falling back to CPU"
                 );
                 let s = try_cpu(&model_path)?;
                 let hw = format!("{} (CPU)", detect_cpu_model());
-                eprintln!("sy aiplane[embed]: CPU EP active on {hw}");
-                (s, "cpu", hw)
+                tracing::info!(
+                    target: "sy::aiplane::workloads::embed",
+                    hardware = %hw,
+                    backend = "cpu",
+                    "CPU EP active"
+                );
+                (s, "cpu")
             }
         };
         *guard = Some(LoadedEmbedder {
             session,
             tokenizer,
             backend,
-            hardware,
         });
+        // Build the per-workload `RunOptions` once the ORT runtime is
+        // live (Session::builder above initialises it). Shared across
+        // every `run()` call so `try_cancel` from another thread can
+        // call `terminate()` on the same handle.
+        let opts = RunOptions::new().map_err(|e| anyhow::anyhow!("create run_options: {e}"))?;
+        *self.run_options.lock().expect("embed run_options poisoned") = Some(Arc::new(opts));
         Ok(())
     }
 
@@ -156,16 +181,39 @@ impl Workload for EmbedWorkload {
         } else {
             format!("{QUERY_PREFIX}{text}")
         };
+        // Snapshot `run_options` first so we don't hold the state
+        // lock across the brief run_options lock; this ordering keeps
+        // `try_cancel` (which only touches run_options) deadlock-free
+        // against a concurrent `run()` that is mid-session.
+        let run_options = self
+            .run_options
+            .lock()
+            .expect("embed run_options poisoned")
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("embed: load() not called"))?;
         let mut guard = self.state.lock().expect("embed state poisoned");
         let emb = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("embed: load() not called"))?;
-        let v = run_one(emb, &prefixed)?;
+        let v = run_one(emb, &run_options, &prefixed)?;
         Ok(WorkloadOutput::Vector { vector: v })
     }
 
     fn unload(&self) {
         *self.state.lock().expect("embed state poisoned") = None;
+        *self.run_options.lock().expect("embed run_options poisoned") = None;
+    }
+
+    fn try_cancel(&self) -> bool {
+        let Some(opts) = self
+            .run_options
+            .lock()
+            .expect("embed run_options poisoned")
+            .clone()
+        else {
+            return false;
+        };
+        opts.terminate().is_ok()
     }
 
     fn health(&self) -> WorkloadHealth {
@@ -184,27 +232,6 @@ impl Workload for EmbedWorkload {
     }
 }
 
-/// Embed a batch of indexed passages. Each output vector is
-/// `VECTOR_DIM`-long and L2-normalised. Adds the E5 `passage: ` prefix.
-/// Used by the knowledge indexer; not part of the public Workload
-/// trait because the batched API is hot-path-specific.
-pub fn embed_passages(workload: &EmbedWorkload, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-    if texts.is_empty() {
-        return Ok(Vec::new());
-    }
-    workload.load(&SessionPool::new())?; // pool unused in CPU/VitisAI today
-    let mut guard = workload.state.lock().expect("embed state poisoned");
-    let emb = guard
-        .as_mut()
-        .ok_or_else(|| anyhow::anyhow!("embed: load() not called"))?;
-    let mut out = Vec::with_capacity(texts.len());
-    for t in texts {
-        let prefixed = format!("{PASSAGE_PREFIX}{t}");
-        out.push(run_one(emb, &prefixed)?);
-    }
-    Ok(out)
-}
-
 /// Probe AMD Ryzen AI's venv, register the VitisAI EP with the cached
 /// NPU partition artifact.
 fn try_vitisai(model: &Path, cache_dir: &Path) -> Result<Session> {
@@ -220,7 +247,14 @@ fn try_vitisai(model: &Path, cache_dir: &Path) -> Result<Session> {
         anyhow::bail!("vaip_config.json missing at {}", vaip_config.display());
     }
 
-    let cache_key = format!("compiled_{MODEL_STEM}_bf16_seq{SEQ_LEN}");
+    // Versioned with `_o1` because the cached .rai is tied to the
+    // exact node names VAIP saw at compile time. Switching ORT's
+    // pre-pass optimization level changes node names (DQ/Cast
+    // elimination, fusion). Loading the old .rai with a new graph
+    // crashes inside libvaip-core (`check failure: node != nullptr,
+    // cannot find producer`). Bump the suffix any time the
+    // optimization level or pre-pass shape changes.
+    let cache_key = format!("compiled_{MODEL_STEM}_bf16_seq{SEQ_LEN}_o1");
     let vitis = Vitis::default()
         .with_config_file(vaip_config.to_string_lossy())
         .with_cache_dir(cache_dir.to_string_lossy())
@@ -228,10 +262,13 @@ fn try_vitisai(model: &Path, cache_dir: &Path) -> Result<Session> {
 
     Session::builder()
         .map_err(|e| anyhow::anyhow!("session builder: {e}"))?
-        // The VitisAI EP runs the partition decisions; disable ORT's
-        // own graph optimisations so the partitioner sees the model
-        // exactly as it was prepped by quark.
-        .with_optimization_level(GraphOptimizationLevel::Disable)
+        // BASIC runs ORT's safe, partition-friendly transforms
+        // (constant folding, redundant Cast elimination, trivial
+        // fusions) before VAIP sees the graph. Measured on Strix:
+        // BASIC = 63 ms / inference vs DISABLE = 208 ms (3.3×). The
+        // earlier "let quark's output through verbatim" comment was
+        // wrong — VAIP partitions a cleaner graph more aggressively.
+        .with_optimization_level(GraphOptimizationLevel::Level1)
         .map_err(|e| anyhow::anyhow!("optimisation level: {e}"))?
         .with_execution_providers([vitis.build()])
         .map_err(|e| anyhow::anyhow!("register vitisai ep: {e}"))?
@@ -267,18 +304,27 @@ fn encode(tokenizer: &Tokenizer, text: &str) -> Result<(Vec<i64>, Vec<i64>)> {
     Ok((ids, mask))
 }
 
-fn run_one(emb: &mut LoadedEmbedder, prefixed: &str) -> Result<Vec<f32>> {
+fn run_one(emb: &mut LoadedEmbedder, run_options: &RunOptions, prefixed: &str) -> Result<Vec<f32>> {
     let (ids, mask) = encode(&emb.tokenizer, prefixed)?;
     let shape: [i64; 2] = [1, SEQ_LEN as i64];
     let ids_t = Tensor::from_array((shape, ids)).map_err(|e| anyhow::anyhow!("tensor ids: {e}"))?;
     let mask_t =
         Tensor::from_array((shape, mask)).map_err(|e| anyhow::anyhow!("tensor mask: {e}"))?;
+    // Reset a leftover `terminate()` flag from a previous cancelled
+    // call so this fresh request isn't pre-poisoned (SPEC §4.2:
+    // cancel is per-request, the RunOptions handle is per-workload).
+    run_options
+        .unterminate()
+        .map_err(|e| anyhow::anyhow!("unterminate: {e}"))?;
     let outputs = emb
         .session
-        .run(inputs![
-            "input_ids" => ids_t,
-            "attention_mask" => mask_t,
-        ])
+        .run_with_options(
+            inputs![
+                "input_ids" => ids_t,
+                "attention_mask" => mask_t,
+            ],
+            run_options,
+        )
         .map_err(|e| anyhow::anyhow!("session run: {e}"))?;
     let view = outputs[0]
         .try_extract_array::<f32>()
@@ -290,26 +336,6 @@ fn run_one(emb: &mut LoadedEmbedder, prefixed: &str) -> Result<Vec<f32>> {
     Ok(v)
 }
 
-/// Public accessor for `current_hardware` — surfaced via
-/// `sy aiplane status` and `sy knowledge status`.
-pub fn current_hardware(workload: &EmbedWorkload) -> String {
-    workload
-        .state
-        .lock()
-        .ok()
-        .and_then(|g| g.as_ref().map(|e| e.hardware.clone()))
-        .unwrap_or_default()
-}
-
-pub fn current_backend(workload: &EmbedWorkload) -> &'static str {
-    workload
-        .state
-        .lock()
-        .ok()
-        .and_then(|g| g.as_ref().map(|e| e.backend))
-        .unwrap_or("unloaded")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,6 +345,18 @@ mod tests {
         let w = EmbedWorkload::new();
         assert_eq!(w.kind(), WorkloadKind::Embed);
         assert_eq!(w.model_stem(), MODEL_STEM);
+    }
+
+    #[test]
+    fn try_cancel_before_load_returns_false_without_panicking() {
+        // SPEC §4.2 cancel is best-effort. Before `load()` builds the
+        // RunOptions, there's nothing to terminate; the trait
+        // contract is "return `false` so the supervisor escalates to
+        // SIGKILL". The pre-load path must NOT panic — a worker that
+        // crashes on a cancel of an un-ready workload would lose
+        // every other queued request to the same kind.
+        let w = EmbedWorkload::new();
+        assert!(!w.try_cancel());
     }
 
     #[test]

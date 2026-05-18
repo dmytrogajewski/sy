@@ -12,19 +12,20 @@
 .PHONY: build release test test-npu lint fmt fmt-check audit bench install help
 
 build:
-	cargo build
+	cargo build --workspace
 
 release:
-	cargo build --release
+	cargo build --workspace --release
 
 test:
-	cargo test --all-targets
+	cargo test --workspace --all-targets
 
 test-npu:
-	cargo test --all-targets --features test-npu
+	cargo test --workspace --all-targets --features test-npu
 
 lint:
-	cargo clippy --all-targets -- -D warnings
+	./scripts/check_main_rs_loc.sh 1025
+	cargo clippy --workspace --all-targets -- -D warnings
 
 fmt:
 	cargo fmt --all

@@ -150,11 +150,11 @@ pub fn list(json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<10} {:<5} {:<8} {:<12} {}",
-        "ID", "KIND", "TYPE", "SIZE", "NAME"
+        "{:<10} {:<5} {:<8} {:<12} NAME",
+        "ID", "KIND", "TYPE", "SIZE"
     );
     let mut sorted = items.items.clone();
-    sorted.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    sorted.sort_by_key(|i| std::cmp::Reverse(i.created_at));
     for i in sorted {
         println!(
             "{:<10} {:<5} {:<8} {:<12} {}",

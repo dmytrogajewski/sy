@@ -55,7 +55,7 @@ pub fn scan() -> Vec<UnmanagedAgent> {
 
         let Some(provider) = PROVIDERS
             .iter()
-            .find_map(|(name, pats)| pats.iter().any(|p| base == *p).then_some(*name))
+            .find_map(|(name, pats)| pats.contains(&base).then_some(*name))
         else {
             continue;
         };

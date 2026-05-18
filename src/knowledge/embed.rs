@@ -98,15 +98,40 @@ pub fn embed_batch(texts: &[String]) -> Result<Vec<Vec<f32>>> {
 /// Embed a single search query (used by `sy knowledge search` and
 /// the MCP server). The worker applies the E5 `query: ` prefix when
 /// none is present in the caller's input.
-pub fn embed_one(text: &str) -> Result<Vec<f32>> {
+///
+/// `priority` controls scheduler admission (SPEC §4.3): foreground
+/// search defaults to `Interactive`; the daemon's own background
+/// passes pass `Background`. When the bridge's scheduler isn't yet
+/// running (CLI fallback path, bench, fresh boot), falls back to a
+/// direct `Supervisor::run_batch` — the priority is ignored in that
+/// path because there's nothing to schedule against.
+pub fn embed_one(text: &str, priority: sy_core::Priority) -> Result<Vec<f32>> {
+    let input = WorkloadInput::Text {
+        text: text.to_string(),
+    };
+    match crate::aiplane::ipc::admit_blocking(WorkloadKind::Embed, input.clone(), priority) {
+        Ok(WorkloadOutput::Vector { vector }) => return Ok(vector),
+        Ok(other) => {
+            return Err(KnowledgeError {
+                code: exit::EMBEDDING_FAILED,
+                msg: format!("embed: unexpected output variant {other:?}"),
+            }
+            .into());
+        }
+        Err(crate::aiplane::error::AiplaneError::WorkloadFailed(e))
+            if e.to_string().contains("scheduler not running") => {}
+        Err(e) => {
+            return Err(KnowledgeError {
+                code: exit::EMBEDDING_FAILED,
+                msg: format!("embed worker: {e}"),
+            }
+            .into());
+        }
+    }
+    // Scheduler not installed — direct supervisor call as fallback.
     let sup = require_supervisor("embed")?;
     let outputs = sup
-        .run_batch(
-            WorkloadKind::Embed,
-            vec![WorkloadInput::Text {
-                text: text.to_string(),
-            }],
-        )
+        .run_batch(WorkloadKind::Embed, vec![input])
         .map_err(|e| KnowledgeError {
             code: exit::EMBEDDING_FAILED,
             msg: format!("embed worker: {e:#}"),

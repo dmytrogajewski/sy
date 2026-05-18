@@ -1,22 +1,21 @@
-[package]
-name = "sy"
+[workspace]
+# Virtual workspace shell. Root `sy` binary plus `crates/sy-core`
+# (shared vocabulary). See specs/research/architecture-refactor/SPEC.md
+# §3.2 K1 for the workspace shape rationale: thin binary + small
+# vocabulary crate, lockstep-versioned, `publish = false`, with
+# `sy-core` kept deliberately minimal so it never becomes a hub-
+# rebuild bottleneck.
+members = [".", "crates/sy-core", "crates/sy-ipc", "crates/sy-testutils"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "Apply niri rice configs with themes and templating"
 
-[[bin]]
-name = "sy"
-path = "src/main.rs"
-
-[features]
-default = ["bar-iced"]
-# Enables the iced + iced_layershell GUI for `sy stack bar`. On by default
-# so a plain `cargo build --release` produces a working stack bar — niri
-# spawn-at-startup is fire-and-forget and silently swallows a missing-feature
-# stub. Disable with `--no-default-features` if you need a CLI/MCP-only build.
-bar-iced = ["dep:iced", "dep:iced_layershell"]
-
-[dependencies]
+[workspace.dependencies]
+# Versions + feature sets live here so future workspace members
+# (sy-ipc, sy-aiplane, …) can pick them up via `<name>.workspace =
+# true`. Long-form comments stay attached to the line they document.
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 clap = { version = "4", features = ["derive", "env"] }
@@ -27,8 +26,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "ne
 toml = "0.8"
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
-iced = { version = "0.14", optional = true, features = ["tokio", "wgpu", "image"] }
-iced_layershell = { version = "0.17", optional = true }
+iced = { version = "0.14", features = ["tokio", "wgpu", "image"] }
+iced_layershell = "0.17"
 # Stack-bar thumbnail pipeline. Decoders pinned to the formats
 # cliphist surfaces in its binary-data preview (`parse_image_ext` in
 # src/stack/clip.rs); cache always re-encodes as PNG so the bar reads
@@ -36,8 +35,7 @@ iced_layershell = { version = "0.17", optional = true }
 # / pnm / tiff / qoi off the build path — none of them appear in the
 # clipboard or stack pools.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
-
-# Knowledge plane
+# Knowledge plane.
 #
 # `load-dynamic` lets us re-point ORT at AMD's bundled onnxruntime
 # (which has VitisAI EP built in) at runtime — see embed.rs. The
@@ -63,18 +61,192 @@ which = "7"
 serde_yml = "0.0.12"
 html2text = "0.16"
 blake3 = "1"
+# SHA-256 for the policy fingerprint stamped on every audit-log record
+# (SPEC §4.4 step 2 + step "Audit log" `SY_POLICY_SHA`). Lives in the
+# workspace deps so Step 5 (`src/agt/audit.rs`) can re-use the same
+# digest without re-hashing.
+sha2 = "0.10"
 libc = "0.2"
 # Format-preserving TOML editor used by `sy knowledge add/rm/schedule` so
 # comments and section ordering survive round-trips.
 toml_edit = "0.22"
-
-[dev-dependencies]
 # Already a transitive of iced_layershell + notify-debouncer-mini, so
 # pulling it as a dev-dep adds no compile-tree weight. Used by the
 # stack-bar thumbnail tests (`src/stack/state.rs`,
 # `src/stack/clip.rs`) to spin up isolated cache dirs without
 # touching the user's `XDG_CACHE_HOME`.
 tempfile = "3"
+# IPC v1 envelope + framing. `tokio-util/codec` for LengthDelimitedCodec
+# (SPEC §4.2 framing); `bytes` for BytesMut buffers exposed by the codec;
+# `ulid` for canonical Crockford-base32 request_id (SPEC §4.2 example).
+tokio-util = { version = "0.7", default-features = false, features = ["codec"] }
+bytes = "1"
+ulid = { version = "1", features = ["serde"] }
+# IPC v1 Step 2 (Server/Client). `rustix/process` for `geteuid()`
+# alongside tokio's `UnixStream::peer_cred()` — together they implement
+# the SPEC §4.2 `SO_PEERCRED` origin gate. `futures-util/sink` is the
+# minimal slice of `futures-rs` needed to call `.send()` / `.next()`
+# on the `tokio_util::codec::Framed` Stream+Sink halves.
+rustix = { version = "1", default-features = false, features = ["std", "process", "thread"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+# arch-agent-sandbox Step 3: in-process Landlock LSM ruleset
+# construction (SPEC §4.4 step 3 layer 2). 0.4.x exposes ABI v4 which
+# the Fedora 43 kernel (6.7+, currently 7.0) supports, including
+# `LANDLOCK_ACCESS_NET_CONNECT_TCP` for the per-port outbound gate.
+landlock = "0.4"
+# arch-agent-sandbox Step 3: seccomp-bpf filter compilation (SPEC §4.4
+# step 3 layer 3). Default action `Allow`; we explicitly `Errno(EPERM)`
+# the high-risk syscalls (ptrace, bpf, mount, …) listed in
+# `src/agt/sandbox/seccomp_layer.rs`.
+seccompiler = "0.5"
+# Aiplane scheduler queues (SPEC §4.3 / arch-aiplane-scheduler Step 2).
+# The dispatcher loop uses crossbeam's `select_biased!`-style polling
+# to prefer higher-priority classes — a single-threaded design that
+# doesn't need the await semantics of `tokio::sync::mpsc`.
+crossbeam-channel = "0.5"
+# Observability stack (SPEC §4.6 / arch-observability Step 1).
+# `tracing` is the structured-event API; `tracing-subscriber` composes
+# the layered Registry (EnvFilter + fmt to stderr + JSON appender);
+# `tracing-journald` lands daemon events in systemd-journal so
+# `journalctl --user -u sy-*` works; `tracing-appender` provides the
+# rolling JSONL sink under `$XDG_STATE_HOME/sy/logs/`. `tracing-error`
+# and `tracing-panic` are deferred to Steps 3/4 and Step 6 so we
+# don't ship unused deps now (AGENTS.md no-dead-code rule).
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "json", "registry", "std"] }
+tracing-journald = "0.3"
+tracing-appender = "0.2"
+# Metrics stack (SPEC §4.6 / arch-observability Step 7).
+# `metrics` is the call-site facade — `counter!`/`gauge!`/`histogram!`
+# emissions are no-ops until a recorder is installed; that lets Zone
+# 3's scheduler and Zone 4's sandbox declare their metrics now without
+# blocking on the Zone 6.2 UDS exporter. `metrics-util` is dev-only —
+# tests install a `DebuggingRecorder` to snapshot counter values
+# without leaking process-global state across the test binary.
+metrics = "0.24"
+metrics-util = "0.20"
+# arch-agent-sandbox Step 5 (SPEC §4.4 "Audit log"): structured
+# journald sink via `libsystemd::logging::journal_send` and zstd
+# compression of rotated `audit.jsonl` archives. Pure-Rust
+# `libsystemd` 0.7 talks the journal datagram protocol directly; no
+# external libsystemd .so required (matches the daemon's
+# `tracing-journald` layer used by `arch-observability`). `zstd`
+# 0.13 vendors libzstd if the system copy is missing.
+libsystemd = "0.7"
+zstd = "0.13"
+# arch-supervision Step 4 (SPEC §4.5 "Rust integration"): `sd_notify(READY=1)`
+# after listener bind, `STOPPING=1 STATUS="draining"` on SIGTERM, and the
+# WATCHDOG=1 ping at half the `WATCHDOG_USEC` interval. Pure-Rust shim
+# over the `NOTIFY_SOCKET` datagram protocol; no libsystemd .so needed
+# (matches `tracing-journald`/`libsystemd-0.7`'s stance — wire format
+# only). 0.5 drops the `unset_env` bool argument of 0.4, returns
+# `Option<Duration>` directly from `watchdog_enabled`.
+sd-notify = "0.5"
+
+[package]
+name = "sy"
+version.workspace = true
+edition.workspace = true
+description = "Apply niri rice configs with themes and templating"
+
+[[bin]]
+name = "sy"
+path = "src/main.rs"
+
+[features]
+default = ["bar-iced"]
+# Enables the iced + iced_layershell GUI for `sy stack bar`. On by default
+# so a plain `cargo build --release` produces a working stack bar — niri
+# spawn-at-startup is fire-and-forget and silently swallows a missing-feature
+# stub. Disable with `--no-default-features` if you need a CLI/MCP-only build.
+bar-iced = ["dep:iced", "dep:iced_layershell"]
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+minijinja.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+toml.workspace = true
+uuid.workspace = true
+walkdir.workspace = true
+iced = { workspace = true, optional = true }
+iced_layershell = { workspace = true, optional = true }
+image.workspace = true
+ort.workspace = true
+ort-sys.workspace = true
+tokenizers.workspace = true
+reqwest.workspace = true
+notify.workspace = true
+notify-debouncer-mini.workspace = true
+ignore.workspace = true
+globset.workspace = true
+which.workspace = true
+serde_yml.workspace = true
+html2text.workspace = true
+blake3.workspace = true
+# arch-agent-sandbox Step 1: SHA-256 of the canonical-serialised
+# resolved policy, exposed via `agt::policy::Resolver::fingerprint()`.
+# Same digest is reused by `agt::audit::AuditRecord::policy_sha` in
+# Step 5 — pulling the dep here, not there, so the resolver tests
+# already cover the hash plumbing.
+sha2.workspace = true
+libc.workspace = true
+toml_edit.workspace = true
+sy-core = { path = "crates/sy-core" }
+sy-ipc = { path = "crates/sy-ipc" }
+tokio-util.workspace = true
+# arch-observability Step 2: the supervisor / worker / knowledge
+# daemon emit structured `tracing` events directly (instead of the
+# legacy `eprintln!("…")` lines). `sy-core::obs::init` installs the
+# subscriber stack; this dep gives the binary the `info!`/`warn!`/
+# `error!` macros at every call site.
+tracing.workspace = true
+crossbeam-channel.workspace = true
+futures-util.workspace = true
+ulid.workspace = true
+rustix.workspace = true
+# arch-agent-sandbox Step 3: in-process Landlock + seccomp + env scrub
+# sandbox layers (SPEC §4.4 step 3). `landlock` builds the FS/TCP
+# ruleset; `seccompiler` compiles the syscall deny set. Both are
+# applied in the child between `fork(2)` and `execve(2)` via
+# `CommandExt::pre_exec` (see `src/agt/sandbox/exec.rs`).
+landlock.workspace = true
+seccompiler.workspace = true
+# arch-observability Step 7: scheduler.rs + supervisor/mod.rs emit
+# `sy_workload_*` / `sy_queue_depth` / `sy_models_warm` via the
+# `metrics` facade. No recorder is installed in production (Zone 6.2
+# UDS prometheus exporter is deferred); emissions are cheap no-ops
+# until then.
+metrics.workspace = true
+# arch-agent-sandbox Step 5 (SPEC §4.4 "Audit log"): dual-sink audit
+# log. `libsystemd::logging::journal_send` lands the structured `SY_*`
+# fields in journald; `zstd::stream::copy_encode` compresses the
+# 64 MiB rotated `audit.jsonl.1` archives.
+libsystemd.workspace = true
+zstd.workspace = true
+# arch-supervision Step 4: each daemon calls `sy_core::notify::ready()`
+# after its listener bind so `Type=notify` units enter `active (running)`
+# instead of staying `activating`. The dep is workspace-pinned; the
+# call sites live in `src/knowledge/daemon.rs`, `src/agt/daemon.rs`,
+# and `src/stack/bar/app.rs`.
+sd-notify.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# `DebuggingRecorder` powers the Step 7 scheduler test (`tests::
+# workload_completed_increments_counter`). Dev-only — the production
+# build never installs a recorder.
+metrics-util.workspace = true
+# Captures `tracing` events into a per-test buffer so the
+# arch-observability Step 2 conversion tests can assert on
+# structured fields without installing a process-global subscriber
+# (which `tracing` only allows once per process). See the
+# `warn_on_npu_eagain_emits_structured_field` and
+# `info_workload_completed_carries_latency` tests.
+tracing-test = "0.2"
 
 [profile.release]
 lto = "thin"

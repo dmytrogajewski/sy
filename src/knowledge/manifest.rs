@@ -123,7 +123,7 @@ impl QdrManifest {
         let root = self.folder.clone();
         wb.filter_entry(move |dent| {
             // Files: always pass; the file-level filtering lives elsewhere.
-            if !dent.file_type().map_or(false, |ft| ft.is_dir()) {
+            if !dent.file_type().is_some_and(|ft| ft.is_dir()) {
                 return true;
             }
             // The job's own root must be allowed (it carries our qdr.toml).

@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use serde_json::Value;
 use tokio::sync::{mpsc, Mutex};
+use ulid::Ulid;
 
 use crate::agt::{
     acp::AcpChild,
@@ -26,6 +27,13 @@ pub struct Session {
     pub subscribers: Vec<mpsc::Sender<DaemonEvent>>,
     pub jsonl: Option<File>,
     pub dir: PathBuf,
+    /// IPC v1 envelope `request_id` that spawned this session via
+    /// `agt.run`. Stamped onto every audit record emitted by the
+    /// session's permission-prompt path so journald (`SY_REQUEST_ID`)
+    /// and JSONL queries correlate the decision back to the
+    /// originating call. `None` for rehydrated sessions where the
+    /// envelope didn't survive a daemon restart.
+    pub originating_request_id: Option<Ulid>,
 }
 
 impl Session {
@@ -66,6 +74,7 @@ impl Session {
             subscribers: Vec::new(),
             jsonl,
             dir,
+            originating_request_id: None,
         })
     }
 

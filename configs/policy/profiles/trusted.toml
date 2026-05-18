@@ -1,0 +1,24 @@
+# trusted — opt-in profile. Requires `sy policy trust --confirm`
+# from a TTY (SPEC §4.4 step 2). DO NOT ship as a default — only the
+# operator-confirmed sentinel under $XDG_STATE_HOME/sy/trusted.toml
+# unlocks this profile at runtime (Step 2 of arch-agent-sandbox).
+#
+# `exec_allowlist = [ { bin = "*", argv = ["*"] } ]` — the bin glob
+# `*` matches every binary path; argv `*` matches every argument
+# string. `deny_network = false` + `require_consent = "never"` skip
+# both the network gate and the consent prompt.
+
+read_paths = ["$REPO", "/usr", "/etc"]
+write_paths = ["$REPO"]
+net_outbound_allowlist = []
+env_passthrough_allowlist = ["PATH", "HOME", "LANG", "TERM"]
+max_runtime_seconds = 600
+max_stdout_bytes = 67108864
+max_memory_mb = 4096
+max_pids = 1024
+deny_network = false
+require_consent = "never"
+
+[[exec_allowlist]]
+bin = "*"
+argv = ["*"]

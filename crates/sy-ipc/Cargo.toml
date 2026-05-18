@@ -1,0 +1,42 @@
+[package]
+name = "sy-ipc"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "IPC v1 envelope + framing for the sy workspace (SPEC §4.2). Length-delimited JSON-RPC 2.0-shaped frames with the `sy.v1` envelope extensions."
+
+[dependencies]
+# Wire types + framing + async I/O. `sy-core` carries `Priority`
+# and `ErrorCode` which the envelope embeds verbatim. `tokio` /
+# `rustix` / `futures-util` land in Step 2 for the `Server`/`Client`
+# skeleton + `SO_PEERCRED` origin gate.
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sy-core = { path = "../sy-core" }
+tokio.workspace = true
+tokio-util.workspace = true
+bytes.workspace = true
+ulid.workspace = true
+rustix.workspace = true
+futures-util.workspace = true
+# arch-observability Step 4: the server wraps each dispatch in
+# `sy_core::obs::with_trace_id_async` so events emitted by the
+# handler carry the request's trace context. The call is async,
+# so `tracing` itself rides along (not just the `sy_core::obs`
+# helpers).
+tracing.workspace = true
+# arch-observability Step 7: every `Response::Err` the server emits
+# bumps `sy_ipc_errors_total{endpoint, kind}`. No recorder is
+# installed by sy-ipc itself; emissions are cheap no-ops until Zone
+# 6.2's UDS exporter (or a test recorder) makes them visible.
+metrics.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+# Step 4 test (`server_picks_up_request_trace_id`) downcasts the
+# globally-installed dispatcher to a `Registry` to read
+# `TraceCtx` from extensions. Production code doesn't need
+# `tracing-subscriber`; only the test does.
+tracing-subscriber.workspace = true
