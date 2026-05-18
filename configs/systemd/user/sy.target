@@ -15,3 +15,17 @@
 Description=sy desktop AI plane
 PartOf=graphical-session.target
 After=graphical-session.target
+
+# `WantedBy=default.target` is what actually makes the unit activate
+# at login. `PartOf=` above only propagates STOP (graphical session
+# ending tears sy.target down with the rest of the desktop); it does
+# NOT start the target when the upstream activates — that's standard
+# systemd semantics. Without `[Install] WantedBy=…` the unit is
+# `linked` but `disabled` and the whole memory plane (agentd,
+# knowledge, qdrant) stays inactive after reboot. We pick
+# `default.target` (the user-manager root activated by
+# `user@.service`) over `graphical-session.target` so the plane stays
+# reachable in non-graphical user sessions (SSH, rescue) too. The
+# graphical-session teardown coupling is already handled by `PartOf=`.
+[Install]
+WantedBy=default.target

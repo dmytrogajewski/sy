@@ -157,6 +157,18 @@ pub fn sync_units(opts: &ApplyOpts) -> Result<UnitDiff> {
 
     if opts.daemon_reload {
         run_daemon_reload()?;
+        // Productized boot path (BUG-20260519-0121): the sy.target
+        // file ships without a `WantedBy=` symlink in
+        // `default.target.wants/` until something runs `systemctl
+        // --user enable sy.target`. Without it the target is `linked
+        // disabled` and stays inactive after reboot, so none of the
+        // services symlinked under `sy.target.wants/` (agentd,
+        // knowledge, qdrant) come up. We enable here so a single
+        // `sy apply` produces a working memory plane on reboot —
+        // `systemctl enable` is idempotent and cheap.
+        if opts.source_dir.join("sy.target").is_file() {
+            run_enable_sy_target()?;
+        }
     }
 
     Ok(diff)
@@ -411,6 +423,21 @@ fn run_daemon_reload() -> Result<()> {
             st
         ));
     }
+    Ok(())
+}
+
+/// `systemctl --user enable sy.target` so the user manager pulls the
+/// memory plane up at login. Idempotent — running it on an already
+/// enabled target is a silent no-op. We swallow the exit code so a
+/// missing user manager (e.g. running `sy apply` in a chroot or under
+/// `sudo` where `XDG_RUNTIME_DIR` isn't a real user bus) doesn't fail
+/// the whole apply: stderr from systemctl will already explain
+/// what's wrong, and re-running under a real session fixes it.
+fn run_enable_sy_target() -> Result<()> {
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "enable", "sy.target"])
+        .status()
+        .context("spawn systemctl --user enable sy.target")?;
     Ok(())
 }
 
