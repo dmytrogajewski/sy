@@ -11,7 +11,7 @@
 
     "modules-left":   ["niri/workspaces", "niri/language"],
     "modules-center": ["niri/window"],
-    "modules-right":  ["custom/sy-syauth", "cpu", "memory", "custom/sy-gpu", "custom/sy-npu", "custom/sy-disk", "custom/sy-silent", "custom/sy-vol", "custom/sy-bl", "custom/notif", "custom/sy-knowledge", "custom/agents", "custom/bt", "network", "clock", "custom/pwr", "custom/sy-bat"],
+    "modules-right":  ["cpu", "memory", "custom/sy-gpu", "custom/sy-npu", "custom/sy-disk", "custom/sy-silent", "custom/sy-vol", "custom/sy-bl", "custom/sy-knowledge", "custom/agents", "custom/bt", "network", "custom/notif", "clock", "custom/sy-syauth", "custom/sy-power", "custom/pwr", "custom/sy-bat"],
 
     "niri/workspaces": {
         "format": "{value}",
@@ -80,6 +80,12 @@
         "on-click": "{{ home }}/.local/bin/sy bt"
     },
 
+    // interval=1 is intentional for pair-flow latency: the LESC
+    // confirmation popup must surface within ~1s of `syauth pair`
+    // writing pair-request.json. The `signal` field (waybar SIGRTMIN+N
+    // wakes) already covers on-demand refreshes for the five-state
+    // pill in src/syauth.rs::render_pill; do NOT raise this without
+    // also wiring a signal sender on pair start.
     "custom/sy-syauth": {
         "exec":            "{{ home }}/.local/bin/sy syauth --waybar",
         "return-type":     "json",
@@ -87,6 +93,19 @@
         "on-click":        "{{ home }}/.local/bin/sy syauth accept",
         "on-click-right":  "{{ home }}/.local/bin/sy syauth reject",
         "tooltip":         true
+    },
+
+    // SPEC §5 power-orchestrator pill: profile + shield state +
+    // onboarding countdown + drift indicator. interval=1 mirrors
+    // syauth so a drift/meeting flip surfaces inside the 2 s
+    // R6 cross-cutting DoD. Click opens the human status line.
+    // Module schema lives in configs/waybar/modules/sy-power.json.
+    "custom/sy-power": {
+        "exec":         "{{ home }}/.local/bin/sy power status --waybar",
+        "return-type":  "json",
+        "interval":     1,
+        "tooltip":      true,
+        "on-click":     "{{ home }}/.local/bin/sy power status"
     },
 
     "custom/pwr": {

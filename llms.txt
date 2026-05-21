@@ -1,0 +1,26 @@
+# sy
+
+> An Agentic OS layer for Fedora 43 — a single Rust binary plus declarative configs that turn a stock Fedora laptop into an agent-first workstation, with no snowflake state outside the repo.
+
+`sy` is one repo, one binary, one source of truth. A fresh machine plus `cargo build --release && ./target/release/sy apply` reproduces the entire system. The binary hosts every plane — `aiplane` (on-device NPU inference via ONNX Runtime + AMD VitisAI EP), `agt` (sandboxed agent runner), `knowledge` (semantic search backed by qdrant), `power` (adaptive power governor), `stack` (layer-shell waybar replacement), `syauth` (phone-as-key sudo), and the niri/wayland rice — all supervised by the user-level `sy.target` and reachable over the same CLIG + JSON-over-stdio surface, so an agent drives any plane the same way a human does.
+
+This file follows the [llms.txt proposal](https://llmstxt.org/). Paths are repository-relative.
+
+## Docs
+
+- [README](README.md): project entry point — what `sy` is, the planes it hosts, the install command, and the usage examples.
+- [Tutorial: Getting started](docs/tutorials/getting-started.md): bring up `sy` end-to-end on a fresh Fedora 43 laptop.
+- [How-to: Add a knowledge source](docs/how-to/add-a-knowledge-source.md): register a directory with the `knowledge` plane and run the first search.
+- [How-to: Troubleshoot syauth](docs/how-to/troubleshoot-syauth.md): diagnose phone-as-key sudo failures (BlueZ pairing, PAM, Android companion).
+- [Reference: CLI](docs/reference/cli.md): every `sy` subcommand — synopsis, options, exit codes, environment variables, examples.
+- [Reference: Glossary](docs/reference/glossary.md): one-line definitions for `sy`-specific terms (plane, aiplane, re-exec dance, snowflake, VitisAI EP, sy.target, …).
+- [Reference: pam_syauth.so](docs/reference/syauth-pam-module.md): PAM module reference for the syauth phone-as-key flow.
+- [Explanation: How the planes fit together](docs/explanation/architecture.md): the mental model — why one binary hosts every plane, how IPC threads the seams, the trade-offs we accepted.
+
+## Optional
+
+- [CHANGELOG](CHANGELOG.md): notable changes per [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) and [SemVer](https://semver.org/).
+- [ADR 0001 — Use Architecture Decision Records](docs/adr/0001-use-adrs.md): why `sy` records decisions as MADR-shaped ADRs under `docs/adr/`.
+- [ADR 0002 — Virtual workspace with a sy-core vocabulary crate](docs/adr/0002-virtual-workspace-with-sy-core-vocabulary.md): why the workspace is split with a shared vocabulary crate instead of one monolithic crate.
+- [ADR 0003 — VitisAI EP, not CUDA, for on-device embedding](docs/adr/0003-vitisai-ep-not-cuda-for-on-device-embedding.md): why the `aiplane` embed workload runs on the AMD XDNA2 NPU via VitisAI EP rather than CUDA.
+- [SPEC: Architecture refactor](specs/research/architecture-refactor/SPEC.md): the umbrella spec for the six-zone architectural hardening pass driving current refactors.

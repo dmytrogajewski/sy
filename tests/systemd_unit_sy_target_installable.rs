@@ -14,12 +14,9 @@ const SY_TARGET: &str = "configs/systemd/user/sy.target";
 
 #[test]
 fn sy_target_has_install_section_with_wantedby() {
-    let body = std::fs::read_to_string(SY_TARGET)
-        .unwrap_or_else(|e| panic!("read {SY_TARGET}: {e}"));
-    assert!(
-        Path::new(SY_TARGET).exists(),
-        "{SY_TARGET} must exist",
-    );
+    let body =
+        std::fs::read_to_string(SY_TARGET).unwrap_or_else(|e| panic!("read {SY_TARGET}: {e}"));
+    assert!(Path::new(SY_TARGET).exists(), "{SY_TARGET} must exist",);
 
     let mut in_install = false;
     let mut saw_wantedby = false;
@@ -57,7 +54,9 @@ fn sy_target_has_install_section_with_wantedby() {
 
     let target = wantedby_value.expect("wantedby_value set when saw_wantedby");
     assert!(
-        target.split_ascii_whitespace().any(|t| t == "default.target"),
+        target
+            .split_ascii_whitespace()
+            .any(|t| t == "default.target"),
         "sy.target should be `WantedBy=default.target` so the user \
          manager pulls it up unconditionally at login (default.target \
          is the user-manager root, activated by user@.service). Got: \

@@ -1,0 +1,9 @@
+{
+    "custom/sy-power": {
+        "exec":        "{{ home }}/.local/bin/sy power status --waybar",
+        "return-type": "json",
+        "interval":    1,
+        "tooltip":     true,
+        "on-click":    "{{ home }}/.local/bin/sy power status"
+    }
+}

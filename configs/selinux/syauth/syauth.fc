@@ -1,0 +1,6 @@
+# File-context spec for syauth_var_lib_t. Consumed by `semodule_package
+# -f` (raw kernel file_contexts format — no m4 / refpolicy macros). The
+# install script then calls `restorecon -RvF /var/lib/syauth` to apply
+# the new labels to the live filesystem.
+/var/lib/syauth          -d  system_u:object_r:syauth_var_lib_t:s0
+/var/lib/syauth(/.*)?        system_u:object_r:syauth_var_lib_t:s0

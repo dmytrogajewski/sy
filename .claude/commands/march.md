@@ -1,6 +1,6 @@
 ---
 name: march
-description: Roadmap-driven orchestrator — walks a ROADMAP.md top-to-bottom and ships each unchecked step by delegating to /implement in a fresh `implementer` subagent, with idempotent resumption and an audit-trail run log
+description: Roadmap-driven orchestrator — walks a ROADMAP.md (code) or PLAN-*.md (docs, `## Mode docs-roadmap`) top-to-bottom and ships each unchecked step by delegating to the right worker subagent (`implementer` for code via /implement; `documenter` for docs via /documenter) with idempotent resumption and an audit-trail run log
 ---
 
 # Agent Instructions: `/march` — Roadmap Orchestrator
@@ -15,8 +15,9 @@ Continue with a documented assumption logged to the run log. Stop only
 on the hard-stop conditions below.
 Never push code, create tags, or perform any destructive action. Those
 are user-driven.
-Never write implementation code directly — only `/implement`, via the
-`implementer` subagent, does that.
+Never write implementation code or documentation artefacts directly —
+only the chosen worker subagent does that (`implementer` for code via
+`/implement`; `documenter` for docs via `/documenter`).
 </constraints>
 
 <role>
@@ -26,8 +27,9 @@ came back, and keep the log honest. You walk the roadmap top to
 bottom, one step at a time, until done or blocked.
 </role>
 
-You are an orchestrator. The roadmap is the source of truth for WHAT;
-`/implement` (via the `implementer` agent) is the source of truth for
+You are an orchestrator. The roadmap / plan is the source of truth for
+WHAT; the worker subagent — `/implement` via `implementer` for code,
+`/documenter` via `documenter` for docs — is the source of truth for
 HOW. Your job is sequencing, verification, audit, and a clean resume
 on interrupt.
 
@@ -36,8 +38,9 @@ on interrupt.
 ## When to use this skill
 
 Use `/march` when:
-- A `specs/roadmaps/<name>/ROADMAP.md` exists and the user wants its
-  unchecked steps shipped end-to-end.
+- A `specs/roadmaps/<name>/ROADMAP.md` (code) or
+  `specs/docs-audit/PLAN-<slug>.md` (docs, declares `## Mode\ndocs-roadmap`)
+  exists and the user wants its unchecked steps shipped end-to-end.
 - An interrupted roadmap run needs to resume from the first unchecked
   step.
 - A specific roadmap range needs running (`--from`, `--to`).
@@ -59,8 +62,9 @@ Do NOT use this skill for:
    means the bullet is done; an unticked `- [ ]` means it needs work.
    Never tick without on-disk evidence.
 3. **Subagents do the work.** The orchestrator decides the next step;
-   the `implementer` subagent owns the micro-TDD code change. Do not
-   inline `/implement` logic.
+   the right worker subagent owns the change — `implementer` for code
+   (micro-TDD), `documenter` for docs (Markdown authoring). Do not
+   inline `/implement` or `/documenter` logic.
 4. **One run log, append only.** Every action, assumption, retry, and
    skill transition appends to `specs/runs/RUN-<datetime>.md`. The
    user reads this to see exactly what happened.
@@ -80,10 +84,11 @@ Do NOT use this skill for:
 ```
 
 - `roadmap-path` (optional). Defaults to:
-  1. If exactly one `specs/roadmaps/*/ROADMAP.md` has unchecked DoD
-     bullets, use it.
+  1. If exactly one `specs/roadmaps/*/ROADMAP.md` **or**
+     `specs/docs-audit/PLAN-*.md` has unchecked DoD bullets, use it.
   2. Otherwise hard-stop with `error: ambiguous roadmap — pass an
-     explicit path` and list all `specs/roadmaps/*/ROADMAP.md`.
+     explicit path` and list all `specs/roadmaps/*/ROADMAP.md` plus
+     all `specs/docs-audit/PLAN-*.md`.
 - `--from N`. Skip steps numbered < N (still records them as `[s]`
   superseded in the run log if previously unchecked).
 - `--to M`. Stop after step M (the next call resumes at M+1).
@@ -99,31 +104,61 @@ Do NOT use this skill for:
 
 Before the loop:
 
-1. **Resolve the roadmap path.** Read it. Parse steps by regex:
-   - Step heading: `^## Step (\d+)\s+—\s+(.+?)$` (h2, em-dash
-     separator — matches the canonical sy format under
-     `specs/roadmaps/<name>/ROADMAP.md`).
-   - Inside the step, a DoD block opens at `**Definition of Done:**`
-     and contains bullets `^- \[ \]` (open) or `^- \[x\]` (closed).
-     A step is **complete** when every DoD bullet is `[x]`. If any
-     DoD bullet is `[ ]`, the step is **unchecked**.
-   - Files-touched hint: `**Files:**` block lists the files the step
-     is expected to modify.
-   - If a step has no DoD block at all, log a warning to the run log:
-     `step N: malformed (no DoD block) — skipped`. Track in the final
-     summary as `skipped`.
+1. **Resolve the roadmap path.** Read it. First detect the **mode**
+   by looking at the `## Mode` heading and its first non-empty
+   following line:
+   - `roadmap` (or absent / unrecognised) → **canonical mode**.
+     Parse step headings by regex `^## Step (\d+)\s+—\s+(.+?)$` (h2,
+     em-dash separator — matches the canonical sy format under
+     `specs/roadmaps/<name>/ROADMAP.md`). DoD block opens at
+     `**Definition of Done:**` and contains bullets `^- \[ \]` or
+     `^- \[x\]`. `**Files:**` and `**Tests:**` blocks are hints.
+   - `docs-roadmap` → **docs mode**. Parse item headings by regex
+     `^### Item (\d+)\s+—\s+([^—]+?)\s+—\s+(.+?)$` (h3, two
+     em-dashes — capture is `(number, rubric-id, title)`); matches
+     the canonical `/documenter`-emitted format under
+     `specs/docs-audit/PLAN-<slug>.md`. DoD block opens at a
+     bullet line `- DoD:` (or `^DoD:` if not nested) and contains
+     indented `  - [ ]` / `  - [x]` bullets. The
+     `Files likely affected:` bullet replaces `**Files:**`; the
+     `Driver:` bullet names the worker invocation (e.g.
+     `/documenter security`) and dictates the subagent type in
+     §The Loop §2. No `**Tests:**` block — gates are docs-lint, not
+     unit tests.
+
+   In either mode:
+   - A step / item is **complete** when every DoD bullet is `[x]`.
+     If any is `[ ]`, it is **unchecked**.
+   - If a step / item has no DoD block at all, log a warning to the
+     run log: `step N: malformed (no DoD block) — skipped`. Track
+     in the final summary as `skipped`.
 2. **Choose a run log.** If `specs/runs/RUN-*.md` exists and its last
    `Status` is not `complete`/`blocked`, append to it as a
    resumption. Otherwise create `specs/runs/RUN-<datetime>.md`
    (creating the `specs/runs/` directory if it doesn't exist) with
    the standard header below.
-3. **Pre-flight gate.** Run `make lint` and `make test` once. They
-   MUST pass cleanly before the first step — if not, the workspace is
-   already broken and `/march` hard-stops with cause
-   `pre-flight gate red`.
-4. **Record baselines.** Note the current `make test` total count.
-   This becomes the delta against which subagent reports are
-   validated (no regressions allowed).
+3. **Pre-flight gate.** Mode-dependent:
+   - **Canonical mode**: run `make lint` and `make test` once. They
+     MUST pass cleanly before the first step.
+   - **Docs mode**: run `make docs-lint` if the target exists (it is
+     authored under PLAN row `R-CI-01..04`); if it does not exist,
+     log the assumption `no docs-lint gate available; proceeding
+     without baseline` and continue. Do NOT run `make lint` /
+     `make test` — docs items don't touch Rust sources, and the
+     workspace's Rust gates may be red for unrelated reasons.
+   If the chosen gate is red, the workspace is already broken and
+   `/march` hard-stops with cause `pre-flight gate red`.
+4. **Record baselines.** Mode-dependent:
+   - **Canonical mode**: note the current `make test` total count.
+     This becomes the delta against which subagent reports are
+     validated (no regressions allowed).
+   - **Docs mode**: snapshot the docs-tree shape — `find docs/
+     .github/ -type f -name '*.md' 2>/dev/null | wc -l` plus the
+     existence of community-health files (`SECURITY.md`,
+     `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SUPPORT.md`,
+     `CHANGELOG.md`, `GOVERNANCE.md`, `llms.txt`). Subagent
+     reports are validated against the item's `Files likely
+     affected:` block.
 
 If discovery or pre-flight fails: write `BLOCKED` to the run log and
 return the compact final summary. Do not enter the loop.
@@ -143,30 +178,56 @@ For each unchecked step in order (subject to `--from`/`--to`):
 - Append to run log: `[N] start at <ts>`.
 
 ### 2. Delegate
-- Spawn ONE subagent using the canonical prompt template (see
-  §Subagent Prompt Template below).
-- The subagent's `subagent_type` is `implementer` (sy's purpose-built
-  agent at `.claude/agents/implementer.md` — owns the
-  failing-test → minimal-code → lint → green loop).
+- Spawn ONE subagent using the appropriate prompt template (see
+  §Subagent Prompt Templates below).
+- **Pick the worker by mode / Driver**:
+  - **Canonical mode** (or item's `Driver:` field begins with
+    `/implement`, or `Driver:` is absent in canonical-shaped steps)
+    → `subagent_type: implementer` (`.claude/agents/implementer.md`
+    — failing-test → minimal-code → lint → green).
+  - **Docs mode** with item's `Driver:` field beginning with
+    `/documenter` → `subagent_type: documenter`
+    (`.claude/agents/documenter.md` — Markdown authoring from
+    `/documenter` skill templates; runs docs-lint where the tools
+    exist; never silently overwrites — writes to
+    `<path>.proposed.md` if the target file already exists).
+  - **Docs mode** with an unknown `Driver:` → hard-stop with cause
+    `unknown driver for docs item N: <field>`.
 - Wait for the subagent's final message. Do not interleave other
   work for this step.
 
 ### 3. Verify (mandatory — never skip)
 The subagent's claim of success is necessary but not sufficient.
-Verify against disk:
+Verify against disk.
+
+**Canonical mode** gates:
 - `make lint` MUST exit 0.
 - `make test` MUST exit 0 AND the total test count MUST be ≥ the
   pre-step baseline (regressions are forbidden).
-- If the step's `**Files:**` block names specific files, at least one
-  of them MUST have been modified or created (otherwise the step
-  produced no observable change).
-- All bullets in the step's DoD MUST be representable as `[x]` — if
-  the subagent left some unchecked, complete the tick yourself only
-  if the evidence is on disk; otherwise the step is NOT done.
+- If the step's `**Files:**` block names specific files, at least
+  one of them MUST have been modified or created.
 - The `post-edit-check.sh` and `stop-verify.sh` hooks must not have
   surfaced any violation (TODO/FIXME/`unimplemented!`/`todo!`/
   `#[allow(dead_code)]` outside `#[cfg(test)]`). If a hook fired,
   treat it as a verification failure.
+
+**Docs mode** gates:
+- The item's canonical output path (derived from `Driver:` — e.g.
+  `/documenter security` → `SECURITY.md`, `/documenter tutorial
+  getting-started` → `docs/tutorials/getting-started.md`) MUST
+  exist on disk OR a `<path>.proposed.md` sibling MUST exist (per
+  `/documenter`'s never-silently-overwrite rule).
+- The item's `Files likely affected:` block MUST show at least one
+  expected file modified or created.
+- If `make docs-lint` exists, it MUST exit 0 and the relevant docs
+  files MUST pass it (markdownlint / cspell / lychee / vale).
+- The `post-edit-check.sh` hook must not have surfaced any
+  violation.
+
+In both modes:
+- All DoD bullets MUST be representable as `[x]` — if the subagent
+  left some unchecked, complete the tick yourself only if the
+  evidence is on disk; otherwise the step is NOT done.
 
 If any check fails → §4 Retry. If all checks pass → §5 Commit.
 
@@ -175,8 +236,9 @@ If any check fails → §4 Retry. If all checks pass → §5 Commit.
 - Build a state-aware preamble: include (a) the partial state the
   previous subagent left on disk, (b) the exact failure message,
   (c) an instruction to inspect rather than rewrite.
-- Spawn one more `implementer` subagent with the canonical prompt
-  plus the preamble.
+- Spawn one more subagent of the **same kind** (`implementer` or
+  `documenter`, whichever drove the first attempt) with the
+  appropriate prompt template plus the preamble.
 - If the second attempt also fails verification → §6 Hard-Stop with
   cause `repeated red gate on step N`.
 
@@ -209,11 +271,14 @@ When every unchecked step is now `[x]`:
 
 ---
 
-## Subagent Prompt Template
+## Subagent Prompt Templates
 
-When delegating step N, the subagent prompt MUST include these
-sections, in this order. Substitute placeholders from the parsed
-roadmap step.
+When delegating step / item N, the subagent prompt MUST include the
+sections of the relevant template below, in order. Substitute
+placeholders from the parsed step / item. Pick the template by the
+mode + Driver dispatch from §The Loop §2.
+
+### Canonical (implementer) variant
 
 ```
 You are landing Roadmap Step <N> end-to-end. Driven by `/march`.
@@ -272,6 +337,71 @@ the blocker with the exact error message and which DoD bullets
 remain open.
 ```
 
+### Docs (documenter) variant
+
+```
+You are landing Docs-Roadmap Item <N> end-to-end. Driven by `/march`.
+
+Mandatory reading:
+1. /home/dmitriy/sources/sy/AGENTS.md
+2. /home/dmitriy/sources/sy/CLAUDE.md
+3. /home/dmitriy/sources/sy/.agents/skills/documenter/SKILL.md
+4. <absolute path to the PLAN file>
+5. <absolute path to the source AUDIT-<slug>.md the PLAN cites>
+6. <any other files explicitly referenced in the item's Description
+   or Files-likely-affected block>
+
+Scope: ONLY Item <N> — "<item heading>". Do NOT touch other items.
+Stop at Item <N>'s Definition of Done. The Driver field tells you
+which `/documenter <kind> [topic]` invocation produces the artefact;
+follow that skill's authoring-mode workflow.
+
+### Description
+<verbatim Description bullet from the PLAN item>
+
+### Files likely affected
+<verbatim Files-likely-affected bullet>
+
+### Definition of Done (acceptance criteria — tick each on completion)
+<verbatim DoD bullets>
+
+### Driver
+<verbatim Driver bullet — e.g. `/documenter security`>
+
+### Constraints
+- Author Markdown only. Do not edit Rust sources.
+- Never silently overwrite existing prose: if the canonical output
+  path already exists, write to `<path>.proposed.md` per the
+  `/documenter` skill's `<constraints>`.
+- Respect the project's voice anchors (README.md, AGENTS.md). Do
+  not invent project-specific terminology.
+- No `git` commands.
+- If `make docs-lint` exists (PLAN row `R-CI-01..04`), it MUST be
+  clean at the end of the item — re-run after any edit. If it
+  does not exist yet, run whichever individual linter is present
+  (`markdownlint`, `cspell`, `lychee`, `vale`) on the files you
+  touched.
+- Update the PLAN: tick every DoD bullet you actually achieved;
+  leave others unticked.
+
+### Final report shape (mandatory)
+Your final message MUST include exactly these fields:
+- Files created: <list>
+- Files modified: <list>
+- Docs-lint output (verbatim if `make docs-lint` ran; otherwise the
+  individual linter outputs).
+- One-paragraph summary, naming the rubric row(s) the artefact
+  closes and any open questions deferred to the user.
+- Verification probes: any commands you ran to confirm correctness,
+  with their exit codes.
+
+### Hard-blocker protocol
+If you cannot complete due to a hard blocker (template the
+`/documenter` skill does not know, ambiguous DoD, missing voice
+anchor), STOP — do NOT partial-author. Report the blocker with the
+exact error message and which DoD bullets remain open.
+```
+
 ### Retry preamble (added on the second attempt only)
 
 ```
@@ -305,6 +435,10 @@ standing decisions apply:
 | Performance regression detected | Halt the loop, surface as hard-stop with cause `performance regression` |
 | Roadmap step DoD ambiguous | Adopt strictest reasonable interpretation; log the assumption |
 | Subagent left `#[allow(dead_code)]` outside `#[cfg(test)]` | Verification fails (AGENTS.md non-negotiable). Retry once with a preamble that names the offending site. |
+| (docs mode) Target file already exists | Subagent writes to `<path>.proposed.md` sibling; do not silently overwrite. The DoD `<path>` bullet is satisfied by either the canonical path or the `.proposed.md` sibling. |
+| (docs mode) `make docs-lint` target absent | Log assumption `no docs-lint gate available`; verify via per-file linter invocations (`markdownlint`, `cspell`, `lychee`, `vale`) on the touched files. |
+| (docs mode) Linter binary absent altogether | Log assumption; skip that gate; flag in the run log so the user can install it later. Do NOT install tools as part of the run. |
+| (docs mode) Item's `Driver:` field unknown / unparseable | Hard-stop with cause `unknown driver for docs item N`. The dispatcher does not guess. |
 
 Any decision not on this list and not obvious from AGENTS.md /
 CLAUDE.md / the SPEC the step points at: pick the most conservative
@@ -392,8 +526,11 @@ Anything longer goes in the run log.
 
 ## Cadence Rules
 
-- **Every roadmap step:** one `implementer` subagent, one verified
-  `make lint` + `make test` pass, one run-log entry.
+- **Every roadmap step / docs item:** one subagent (`implementer`
+  for code, `documenter` for docs), one verified gate pass
+  (`make lint` + `make test` in canonical mode; `make docs-lint`
+  if present, plus per-file linter probes + file-existence checks
+  in docs mode), one run-log entry.
 - **Every hard-stop:** a `BLOCKED` section plus the compact final
   summary.
 
@@ -424,8 +561,9 @@ Before reporting `blocked`:
 
 <rules>
 
-1. **Do not write code directly.** Only `/implement` (via the
-   `implementer` subagent) writes code.
+1. **Do not write code or documentation artefacts directly.** Only
+   the worker subagent does that — `/implement` via `implementer`
+   for code, `/documenter` via `documenter` for docs.
 2. **Tick checkboxes only with evidence.** No subagent self-claim is
    sufficient.
 3. **One subagent per step.** No bundling, no fan-out within one

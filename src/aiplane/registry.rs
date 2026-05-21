@@ -9,11 +9,30 @@
 //! session pool, status snapshot, CLI dispatch — picks it up by
 //! enumerating `WorkloadKind`.
 
-use std::{path::PathBuf, sync::Mutex, time::Instant};
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::Instant,
+};
 
 use anyhow::Result;
 
 use super::session::SessionPool;
+
+/// Snapshot of registry dispatch state — value type so consumers
+/// (e.g. `power::intent::AiplaneIntentChannel`) hold no lock across
+/// the boundary. `depth` is the number of in-flight `Registry::run`
+/// calls; `head_workload` is the kind name of the most recently
+/// dispatched workload (or `None` when the registry has never run
+/// anything).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RegistrySnapshot {
+    pub depth: usize,
+    pub head_workload: Option<String>,
+}
 
 // Data-shape vocabulary lives in `sy-core`. Re-exported here so the
 // `super::registry::<Type>` import path consumers use throughout the
@@ -91,6 +110,35 @@ pub struct Registry {
     pub pool: std::sync::Arc<SessionPool>,
     workloads: std::collections::HashMap<WorkloadKind, std::sync::Arc<dyn Workload>>,
     stats: Mutex<std::collections::HashMap<WorkloadKind, WorkloadHealth>>,
+    /// Shared counter incremented on `run()` entry, decremented on
+    /// exit (via `InFlightGuard::drop`). Read by
+    /// `current_queue_depth` for the intent panel's NPU-queue tap.
+    in_flight: Arc<AtomicUsize>,
+    /// Kind name of the most recently dispatched workload (set on
+    /// `run()` entry). `Mutex<Option<String>>` because we read it
+    /// by-clone in `current_queue_depth`.
+    last_workload: Arc<Mutex<Option<String>>>,
+}
+
+/// RAII guard that bumps `in_flight` on construction and decrements
+/// it on drop. Used by `Registry::run` so the counter is correct
+/// even when the workload's `run()` returns `Err` or panics — Drop
+/// runs in both cases.
+struct InFlightGuard {
+    counter: Arc<AtomicUsize>,
+}
+
+impl InFlightGuard {
+    fn new(counter: Arc<AtomicUsize>) -> Self {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self { counter }
+    }
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl Registry {
@@ -99,6 +147,33 @@ impl Registry {
             pool,
             workloads: std::collections::HashMap::new(),
             stats: Mutex::new(std::collections::HashMap::new()),
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            last_workload: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Shared counter of in-flight `run()` calls. Cloned cheaply by
+    /// `power::intent::AiplaneIntentChannel` so it can read depth
+    /// without holding any reference to the registry itself.
+    pub fn in_flight_counter(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.in_flight)
+    }
+
+    /// Shared "most recently dispatched workload" slot. Cloned by
+    /// the intent channel for the same reason as `in_flight_counter`.
+    pub fn last_workload_slot(&self) -> Arc<Mutex<Option<String>>> {
+        Arc::clone(&self.last_workload)
+    }
+
+    /// By-value snapshot of dispatch state. No lock is held across
+    /// the return — `head_workload` is cloned, `depth` is an atomic
+    /// load.
+    pub fn current_queue_depth(&self) -> RegistrySnapshot {
+        let depth = self.in_flight.load(Ordering::SeqCst);
+        let head_workload = self.last_workload.lock().ok().and_then(|g| g.clone());
+        RegistrySnapshot {
+            depth,
+            head_workload,
         }
     }
 
@@ -131,6 +206,14 @@ impl Registry {
             .get(&kind)
             .ok_or_else(|| anyhow::anyhow!("workload {kind} not registered"))?
             .clone();
+        // Record this kind as the head workload so the intent panel
+        // can surface "currently running: <kind>" to the bandit /
+        // forecaster. Done before the `InFlightGuard` so a slow
+        // `load()` is still attributed to the right kind.
+        if let Ok(mut slot) = self.last_workload.lock() {
+            *slot = Some(kind.as_str().to_string());
+        }
+        let _guard = InFlightGuard::new(Arc::clone(&self.in_flight));
         // Lazy load on first call.
         w.load(&self.pool)?;
         let t0 = Instant::now();
@@ -280,6 +363,41 @@ mod tests {
     }
 
     // WorkloadState ser/default tests moved to `sy-core::workload::tests`.
+
+    #[test]
+    fn current_queue_depth_is_consistent() {
+        // Hold two `InFlightGuard`s simultaneously and observe the
+        // snapshot reports depth=2. Mirrors the daemon's behaviour
+        // where two threads are inside `Registry::run` at once. Also
+        // exercises the `last_workload` slot via a manual write so the
+        // snapshot carries a non-None `head_workload`.
+        use super::super::session::SessionPool;
+        use std::sync::Arc;
+        let reg = Registry::new(Arc::new(SessionPool::new()));
+
+        // Empty registry, no calls → empty snapshot.
+        let s0 = reg.current_queue_depth();
+        assert_eq!(s0.depth, 0);
+        assert_eq!(s0.head_workload, None);
+
+        // Two concurrent in-flight calls.
+        let g1 = InFlightGuard::new(reg.in_flight_counter());
+        let g2 = InFlightGuard::new(reg.in_flight_counter());
+        if let Ok(mut slot) = reg.last_workload_slot().lock() {
+            *slot = Some(WorkloadKind::Embed.as_str().to_string());
+        }
+        let s2 = reg.current_queue_depth();
+        assert_eq!(s2.depth, 2);
+        assert_eq!(s2.head_workload.as_deref(), Some("embed"));
+
+        // Both guards dropped → depth returns to zero, but
+        // `head_workload` is sticky (most recently dispatched).
+        drop(g1);
+        drop(g2);
+        let s_end = reg.current_queue_depth();
+        assert_eq!(s_end.depth, 0);
+        assert_eq!(s_end.head_workload.as_deref(), Some("embed"));
+    }
 
     #[test]
     fn registry_rejects_unregistered_kind() {

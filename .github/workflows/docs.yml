@@ -1,0 +1,190 @@
+# Docs CI for sy.
+#
+# Closes rubric rows R-CI-01..04 of specs/docs-audit/AUDIT-full.md:
+#   - markdownlint (R-CI-01)
+#   - Vale, Microsoft + Google packs, advisory mode (R-CI-02)
+#   - cspell with project dictionary at cspell.json (R-CI-03)
+#   - lychee link check (R-CI-04)
+#
+# And rubric rows R-ECO-01 + R-ECO-03 (PLAN Item 26):
+#   - rust-doc: cargo doc -D warnings + cargo test --doc on Rust changes
+#
+# The workflow trigger is the union of Markdown changes and Rust
+# changes; per-job `if:` gates (driven by a `changes` setup job using
+# dorny/paths-filter) make sure Markdown-only PRs do not run the Rust
+# job and Rust-only PRs do not run the Markdown jobs. Mirror locally
+# via `make docs-lint` (Markdown) and `make lint` (Rust).
+---
+name: docs
+"on":
+  pull_request:
+    paths:
+      - "**/*.md"
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+      - "cspell.json"
+      - ".vale.ini"
+      - "lychee.toml"
+      - "**/*.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+  push:
+    branches: [main]
+    paths:
+      - "**/*.md"
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+      - "cspell.json"
+      - ".vale.ini"
+      - "lychee.toml"
+      - "**/*.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    # Detect which file groups changed so downstream jobs can skip
+    # themselves on unrelated PRs (Markdown jobs on Rust-only PRs,
+    # Rust-doc job on Markdown-only PRs).
+    name: detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      docs: ${{ steps.filter.outputs.docs }}
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Filter paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            docs:
+              - '**/*.md'
+              - 'docs/**'
+              - 'cspell.json'
+              - '.vale.ini'
+              - 'lychee.toml'
+              - '.github/workflows/docs.yml'
+            rust:
+              - '**/*.rs'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'crates/**'
+              - '.github/workflows/docs.yml'
+
+  markdownlint:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    name: markdownlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run markdownlint-cli2
+        uses: DavidAnson/markdownlint-cli2-action@v16
+        with:
+          globs: |
+            **/*.md
+            !target/**
+            !node_modules/**
+            !specs/runs/**
+
+  vale:
+    # Advisory only per audit row R-CI-02 — fail_on_error stays false.
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    name: vale (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run Vale (Microsoft + Google packs)
+        uses: errata-ai/vale-action@reviewdog
+        with:
+          fail_on_error: false
+          version: 3.7.1
+          reporter: github-pr-check
+          filter_mode: added
+          files: '["README.md", "AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "SECURITY.md", "SUPPORT.md", "GOVERNANCE.md", "CODE_OF_CONDUCT.md", "CHANGELOG.md", "docs"]'
+
+  cspell:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    name: cspell
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run cspell
+        uses: streetsidesoftware/cspell-action@v6
+        with:
+          config: cspell.json
+          incremental_files_only: false
+          files: |
+            **/*.md
+
+  lychee:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    name: lychee
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Restore lychee cache
+        uses: actions/cache@v4
+        with:
+          path: .lycheecache
+          key: lychee-${{ github.sha }}
+          restore-keys: lychee-
+      - name: Run lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --config lychee.toml --cache --max-cache-age 1d './**/*.md'
+          fail: true
+          jobSummary: true
+
+  rust-doc:
+    # Closes audit rows R-ECO-01 (every public item carries a rustdoc-
+    # usable comment) and R-ECO-03 (doctests compile) per PLAN Item 26.
+    #
+    # NOTE: this job currently fails on `main` — see
+    # `specs/bugs/BUG-20260521-2255.md` for the 52 outstanding rustdoc
+    # errors (37 broken intra-doc links + 14 unclosed HTML tags + 1
+    # public→private link). Wired here so the CI gate exists; will turn
+    # green when /implement closes the BUG.
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    name: rust-doc
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-doc-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: rust-doc-${{ runner.os }}-
+      - name: cargo doc -D warnings (private items)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-deps --document-private-items --workspace
+      - name: cargo test --doc
+        run: cargo test --doc --workspace

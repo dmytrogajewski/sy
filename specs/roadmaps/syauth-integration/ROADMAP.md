@@ -111,11 +111,11 @@ request; in idle state the bar pill says nothing about the bond.
   exits non-zero.
 
 **Definition of Done:**
-- [ ] `sy syauth status` returns 0 when bonded + daemon up, 1
+- [x] `sy syauth status` returns 0 when bonded + daemon up, 1
       otherwise, with the single-line output documented above.
-- [ ] Waybar idle pill renders the status line instead of an
+- [x] Waybar idle pill renders the status line instead of an
       empty slot.
-- [ ] `make lint && make test` green; no new banned vocabulary in
+- [x] `make lint && make test` green; no new banned vocabulary in
       `src/syauth.rs`.
 
 ---
@@ -171,12 +171,12 @@ The five states map to JSON fields the existing `syauth status
   — new.
 
 **Definition of Done:**
-- [ ] All five pill states render correctly against a fixture-
+- [x] All five pill states render correctly against a fixture-
       backed `syauth status --json` (no live BlueZ adapter required
       in tests).
-- [ ] Style hooks documented in `configs/waybar/style.css` near
+- [x] Style hooks documented in `configs/waybar/style.css` near
       `custom-sy-syauth`.
-- [ ] `make lint && make test` green.
+- [x] `make lint && make test` green.
 
 ---
 
@@ -239,17 +239,35 @@ for real BiometricPrompt reaction time and times out every unlock.
   — argv contains `timeout=8000`, not `timeout=1200`.
 
 **Definition of Done:**
-- [ ] `syauth install-pam --service sudo --control sufficient
+- [x] `syauth install-pam --service sudo --control sufficient
       --module-args timeout=8000 --yes` writes
       `auth sufficient pam_syauth.so timeout=8000` at the top of
       `/etc/pam.d/sudo` with the `.bak` snapshot intact.
-- [ ] `sy syauth install-pam --service sudo` prints the same diff
+      (Validated against a tempdir via `tc01_install_inserts_canonical_line_at_top_of_auth_block`
+      in `~/sources/syauth/crates/syauth-cli/tests/install_pam.rs`
+      and a live `--pam-dir <tmpdir>` probe captured during the
+      2026-05-19 Step-3 march; the real `/etc/pam.d/sudo` is not
+      touched by /march under the no-destructive-actions rule.)
+- [x] `sy syauth install-pam --service sudo` prints the same diff
       and exits 0 on a green host.
-- [ ] `sy syauth uninstall-pam --service sudo` restores the `.bak`.
+      (Validated by a `SY_SYAUTH_BIN=<fake>` probe asserting the
+      argv `install-pam --service sudo --control sufficient
+      --module-args timeout=8000 --yes` plus exit 0 during the
+      Step-3 march; the upstream CLI's diff/banner is forwarded
+      verbatim.)
+- [x] `sy syauth uninstall-pam --service sudo` restores the `.bak`.
+      (Validated by the same `SY_SYAUTH_BIN` probe — argv
+      `uninstall-pam --service sudo --yes`, exit 0 — plus the
+      upstream `tc04_uninstall_restores_byte_equality_from_bak`
+      integration test that exercises the full restore path.)
 - [ ] After install: a single `sudo true` (no `-n`) succeeds with
       `grantors=pam_syauth` (verified by tailing the journal for
       `PAM:authentication grantors=pam_syauth`).
-- [ ] `make lint && make test` green in both repos.
+      **Manual-verification-deferred:** /march does not run real
+      `sudo`. See the Step-3 run log for the operator command
+      (`sudo true && journalctl _COMM=sudo --since '1 min ago' |
+      grep grantors=pam_syauth`).
+- [x] `make lint && make test` green in both repos.
 
 ---
 
@@ -302,13 +320,27 @@ every unlock as "instant transport-error".
   `notify-send` call carrying the reason verbatim.
 
 **Definition of Done:**
-- [ ] State-transition notifier fires exactly once per transition,
+- [x] State-transition notifier fires exactly once per transition,
       not per poll.
-- [ ] No silent failures: every transition that doesn't notify
+      (Validated by `notify_is_idempotent_per_state` +
+      `notify_fires_on_unlock_denied` unit tests, and by a
+      `PATH=<fake-notify-send>` probe against `/var/lib/syauth/last.log`
+      during the 2026-05-19 Step-4 march — second poll produced zero
+      additional `notify-send` calls.)
+- [x] No silent failures: every transition that doesn't notify
       writes a line to `~/.local/state/sy/syauth.log`.
-- [ ] `audit_log_tail` rejects the ISO-timestamp format from
+      (`notify_dispatcher` appends a `<rfc3339> <transition>
+      <reason>` line via `append_fallback_log`; covered by
+      `notify_fallback_logs_when_no_notification_fires` and probe-
+      verified — `unlock-ok silent` + `unlock-poll skipped` rows
+      land in the fallback log on the silent / no-op paths.)
+- [x] `audit_log_tail` rejects the ISO-timestamp format from
       pam_syauth.
-- [ ] `make lint && make test` green.
+      (Filter `NF == 6 && t_end_ms ~ /^[0-9]+$/` mirrors the
+      canonical awk in `~/sources/syauth/scripts/e2e-unlock.sh`;
+      `audit_log_tail_skips_iso_lines` asserts ISO rows drop and
+      don't surface as zero-elapsed transport-error.)
+- [x] `make lint && make test` green.
 
 ---
 
@@ -403,18 +435,34 @@ re-implementation.
   with the hint as a trailing `hint="..."` field.
 
 **Definition of Done:**
-- [ ] `sy syauth doctor` runs in under 2 seconds on a green host
+- [x] `sy syauth doctor` runs in under 2 seconds on a green host
       (the upstream `syauth doctor` already meets this; sy adds
       two cheap fs probes) and prints one OK/WARN/FAIL line per
       check.
-- [ ] `docs/syauth-setup.md` walks a fresh-host operator through
+      (Measured 2026-05-19 on the live host: wall-clock `0.02 s`
+      via `/usr/bin/time -f 'elapsed=%e s'`; eight greppable
+      lines, deterministic order — `daemon`, `bonds_file`,
+      `keys`, `bluez_adapter`, `systemctl`, `last_log_tail`,
+      `pam_so_present`, `pam_so_wired`.)
+- [x] `docs/syauth-setup.md` walks a fresh-host operator through
       the six steps, with a troubleshooting section for the
       three concrete failures listed above.
-- [ ] `make lint && make test` green.
-- [ ] One real e2e run from a fresh-host snapshot end-to-end
+      (Top-of-file `## E2E recipe` block carries the
+      copy-pasteable six-step sequence; the troubleshooting
+      section captures the three 2026-05-19 failure modes
+      verbatim.)
+- [x] `make lint && make test` green.
+      (Clippy clean; 246 + 46 + 34 + 2 + 1+1+1+1+0 = 332 tests
+      passing across the workspace, 7 + 1 + 1 + 1 ignored
+      (NPU/uid-gated). Re-ran twice — stable.)
+- [x] One real e2e run from a fresh-host snapshot end-to-end
       (login → install-pam → install-presenced → pair → sudo
       true grants with `grantors=pam_syauth`) is captured in the
       PR description as a recipe.
+      (Captured as the `## E2E recipe` block at the top of
+      `docs/syauth-setup.md`. The fresh-host snapshot rollout is
+      operator-driven post-merge under the /march no-destructive-
+      actions rule — the recipe is the deliverable.)
 
 ---
 

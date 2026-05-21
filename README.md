@@ -1,47 +1,114 @@
 # sy
 
-Personal Linux setup tool — niri rice config templater + Rust daemon
-collection for a Fedora 43 laptop. Single binary, single source of truth.
+An **Agentic OS layer for Fedora** — a single Rust binary plus
+declarative configs that turn a stock Fedora 43 laptop into an
+agent-first workstation. One repo, one source of truth, zero
+snowflakes: `cargo build --release && ./target/release/sy apply` on a
+fresh machine reproduces the entire system.
 
 ```
-sy apply              # render configs/* with the active theme → ~/.config/
-sy stack bar          # waybar-replacement layershell stack visualizer
+sy apply              # render configs/* → ~/.config/, ~/.local/share/, /etc/* (via diff)
+sy aiplane daemon     # on-device NPU inference plane (ORT + VitisAI EP)
+sy agt …              # sandboxed agent runner
 sy knowledge daemon   # semantic search over local files (NPU-accelerated)
-sy knowledge search "kubernetes secrets"
+sy power status       # adaptive power governor (ppd shim + bandit + MCP)
 sy auto               # auto-configure MCP servers across agents (Claude, …)
+sy stack bar          # layer-shell waybar replacement
+sy syauth doctor      # phone-as-key sudo (PAM + BlueZ + Android)
 …
 ```
 
-The repo deliberately collapses **rice configs**, **a CLI tool**, and a
-**knowledge/embedding daemon** into one place so a fresh install of
-this repo + a `cargo build --release && ./target/release/sy apply`
-reproduces the entire desktop. See [`CLAUDE.md`](CLAUDE.md) for the
-"no snowflakes" rule that drives that choice.
+`sy` is the orchestrator. Everything below is a
+[*plane*](docs/reference/glossary.md#plane) exposed by the same
+binary, supervised by the same user-level `sy.target`, and reachable
+over the same CLIG + JSON-over-stdio surface (so an agent can drive
+any plane the same way a human can). See [`CLAUDE.md`](CLAUDE.md)
+for the "no snowflakes" rule that drives the single-binary choice
+and [`AGENTS.md`](AGENTS.md) for the coding-agent persona. For
+one-line definitions of `sy`-specific terms (plane, aiplane,
+re-exec dance, snowflake, VitisAI EP, …) see the
+[glossary](docs/reference/glossary.md).
 
-## Rice (niri + waybar + …)
+## Planes
 
-Gruvbox Material Dark Medium theme. Directory layout mirrors
-`~/.config/`, so each subfolder maps 1:1 to its destination.
+### `aiplane` — on-device NPU inference
+
+The privileged process that owns `/dev/accel/accel0` and hosts every
+on-device ML workload behind a JSON-over-Unix-socket IPC. Workloads
+declare their EP preference (`Vitisai | Cpu`); the session pool picks
+what to load at start-up.
+
+- One process per NPU: `/dev/accel/accel0` is single-context. CLI and
+  MCP consumers delegate over IPC; no second ORT session is ever
+  spun up "just to be safe."
+- Re-exec dance: `aiplane::reexec` sets `LD_LIBRARY_PATH`,
+  `ORT_DYLIB_PATH` and the `RYZEN_AI_*` env before any thread spawns
+  so the AMD venv loads correctly.
+- Workloads ship under `src/aiplane/workloads/` — currently `embed`
+  (multilingual-e5-base, 768-dim), with `rerank | vad | stt | ocr`
+  scaffolds.
+- A `workloads::fake` impl returns deterministic vectors so daemon
+  tests run on CI without `/dev/accel/accel0`.
+
+### `agt` — sandboxed agent runner
+
+`sy agt` runs coding/inference agents under an intent-whitelisted
+sandbox. The whitelist lives in [`configs/sy/intent_whitelist.toml`](configs/sy/intent_whitelist.toml);
+the runner enforces it before dispatching tool calls. Used by `sy auto`
+to plumb MCP servers into Claude / Cursor / Codex / Gemini configs
+without each tool re-implementing tool-permission policy.
+
+### `knowledge` — semantic search
+
+In-process vector index over your local files, served by an embedded
+**qdrant** + the `aiplane` embed workload. Sources are registered
+once, then incrementally synced on a schedule. Exposes the search via
+CLI and via an MCP server (`sy knowledge mcp`) auto-registered with
+your agents by `sy auto`.
 
 ```
-.
-├── Cargo.toml
-├── sy.toml                   # active theme + sy config
-├── src/                      # sy CLI + daemons
-├── scripts/                  # one-shot helpers (prep_npu_embed.py …)
-├── themes/<name>.toml        # palettes
-└── configs/                  # templated rice configs
-    ├── niri/config.kdl
-    ├── waybar/{config.jsonc,style.css}
-    ├── i3status-rust/config.toml
-    ├── mako/config
-    ├── fuzzel/fuzzel.ini
-    ├── foot/foot.ini
-    ├── swaylock/config
-    └── yazi/{package.toml,theme.toml}
+sy knowledge add ~/Documents/notes
+sy knowledge daemon
+sy knowledge search "rust async cancellation"
+sy knowledge status --json
 ```
 
-### Stack
+### `power` — adaptive power governor
+
+The `sy-powerd` user daemon (under `src/power/`) is a power-profiles-daemon
+shim with an adaptive layer on top: cpufreq governor selection, EPP,
+turbo, and `net.hadess.PowerProfiles` D-Bus name ownership are all
+managed declaratively from [`configs/sy/power.toml`](configs/sy/power.toml).
+A contextual bandit picks profile transitions; every decision is
+journaled and reachable over MCP (`sy power mcp`).
+
+```
+sy power status            # current profile, source, rationale
+sy power apply             # apply config rules
+sy power show --json       # full snapshot (governor, EPP, bandit weights)
+```
+
+### Rice — niri + waybar + …
+
+Gruvbox Material Dark Medium. Configs live as
+[minijinja](https://github.com/mitsuhiko/minijinja) templates under
+`configs/`, driven by the active theme under `themes/`. `sy apply`
+renders them into `~/.config/`. Directory layout mirrors `~/.config/`,
+so each subfolder maps 1:1 to its destination.
+
+```
+configs/
+├── niri/config.kdl
+├── waybar/{config.jsonc,style.css,modules/}
+├── i3status-rust/config.toml
+├── mako/config
+├── fuzzel/fuzzel.ini
+├── foot/foot.ini
+├── swaylock/config
+└── yazi/{package.toml,theme.toml,yazi.toml,keymap.toml,init.lua}
+```
+
+Stack:
 
 | Role             | Tool            | Source                          |
 |------------------|-----------------|---------------------------------|
@@ -60,6 +127,53 @@ Gruvbox Material Dark Medium theme. Directory layout mirrors
 | Screenshots      | niri built-in (`screenshot*` actions) | —          |
 | Media/brightness | playerctl, brightnessctl | `dnf`                  |
 | Wallpaper        | niri `layout.background-color` solid fill |          |
+
+### `syauth` — phone-as-key sudo
+
+`sy syauth` wraps [syauth](https://github.com/dmytrogajewski/syauth)
+(PAM module + user daemon + Android app). The waybar pill renders the
+bond / adapter / unlock state; `sy syauth install-pam --service sudo`
+wires `pam_syauth.so` into `/etc/pam.d/sudo` with the reality-corrected
+defaults (`sufficient`, `timeout=8000`); `sy syauth doctor` one-shot-probes
+the whole chain (daemon liveness, bonds, key file modes, BlueZ,
+systemd unit, audit log, plus the two sy-only fs probes) and returns
+0 / 2 / 1 (all-ok / warn-only / any-fail).
+
+Full setup walkthrough — six steps from a fresh host to
+`grantors=pam_syauth` — in
+[`docs/tutorials/syauth-setup.md`](docs/tutorials/syauth-setup.md).
+Failure-mode fixes are in
+[`docs/how-to/troubleshoot-syauth.md`](docs/how-to/troubleshoot-syauth.md);
+the PAM module's control flags and arguments are in
+[`docs/reference/syauth-pam-module.md`](docs/reference/syauth-pam-module.md).
+
+## Repo layout
+
+```
+.
+├── Cargo.toml
+├── sy.toml                   # active theme + sy config
+├── src/                      # sy CLI + planes
+│   ├── aiplane/              # NPU plane: registry, session pool, IPC, daemon
+│   ├── agt/                  # sandboxed agent runner
+│   ├── knowledge/            # qdrant-backed semantic search
+│   ├── power/                # adaptive power governor
+│   ├── supervision/          # sy.target supervisor + unit linker
+│   ├── stack/                # layer-shell waybar replacement
+│   ├── doctor/               # cross-plane health probes
+│   └── …                     # bat, bright, bt, cal, gpu, npu, net, … (bar tiles)
+├── configs/                  # declarative config (rendered by `sy apply`)
+│   ├── systemd/{system,user}/*.service|*.target
+│   ├── niri/ waybar/ mako/ fuzzel/ foot/ swaylock/ yazi/
+│   ├── sy/{power,intent_whitelist}.toml
+│   ├── dbus-1/ policy/ selinux/ udev/ modprobe.d/ grub/ dracut/
+│   └── …
+├── scripts/                  # one-shot helpers (prep_npu_workload.py …)
+├── themes/<name>.toml        # palettes
+└── specs/                    # journeys, bugs, roadmaps (long-form docs)
+```
+
+## Install / apply
 
 ### Rice prerequisites
 
@@ -93,9 +207,6 @@ Make sure `~/.local/bin` and `~/.cargo/bin` are in `$PATH`.
 
 ### Deploy
 
-Configs live as [minijinja](https://github.com/mitsuhiko/minijinja)
-templates under `configs/`, driven by the active theme under `themes/`.
-
 ```bash
 cargo build --release
 
@@ -110,7 +221,7 @@ niri msg action load-config-file
 killall -SIGUSR2 waybar
 makoctl reload
 
-ya pkg install                          # yazi gruvbox flavor (one-time)
+./scripts/yazi-plugins.sh               # yazi plugins + flavor (idempotent)
 ```
 
 Override target dir with `--target` or `$XDG_CONFIG_HOME`. Override
@@ -118,33 +229,12 @@ repo root with `--root` or `$SY_ROOT`. The active theme lives in
 `sy.toml`. Log out and pick **Niri** from your display manager, or
 start a TTY session with `niri --session`.
 
-## Knowledge plane — semantic search on your NPU
+`sy apply` symlinks user-level systemd units under
+`~/.config/systemd/user/` and runs `systemctl --user daemon-reload`.
+`systemctl --user enable --now sy.target` brings every plane (aiplane,
+knowledge, power, stack-bar, agentd) up under the user manager.
 
-`sy knowledge` is an in-process vector search index over your local
-files, served by an embedded **qdrant** + a 768-dim `multilingual-e5-base`
-embedding model running on the **AMD Ryzen AI NPU** via ORT's VitisAI
-execution provider.
-
-```
-sy knowledge add ~/Documents/notes   # register a tree to be indexed
-sy knowledge daemon                  # background sync (default schedule 30m)
-sy knowledge status --json           # snapshot (backend, latency, queue depth)
-sy knowledge search "rust async cancellation"
-sy knowledge bench --n 256           # throughput probe
-```
-
-### Hardware tier
-
-| Backend    | Trigger                                | Throughput | VRAM | Notes |
-|------------|----------------------------------------|------------|------|-------|
-| `vitisai`  | `/opt/AMD/ryzenai/venv` is present     | ~7 chunks/s | 0 GB | Pre-compile cache under `~/.cache/sy/npu-embed/`. Best fit for laptops where you also want to run an LLM on the dGPU. |
-| `cuda`     | pip `onnxruntime-gpu==1.24.*` installed, NVIDIA GPU | depends | ≈1 GB | Legacy fastembed path. Sees CUDA libs via `~/.local/lib/python*/site-packages/nvidia/*/lib`. |
-| `cpu`      | Always-available fallback              | slow       | 0 GB | Last resort. |
-
-Pick is automatic at startup in that priority order; surface with
-`sy knowledge status --json` (look at `embed_backend`).
-
-### One-time NPU setup
+### NPU one-time setup
 
 1. Install AMD Ryzen AI 1.7.1 system packages via the companion repo
    [`ryzenai-rpm`](https://github.com/dmytrogajewski/ryzenai-rpm)
@@ -155,7 +245,7 @@ Pick is automatic at startup in that priority order; surface with
 
    ```bash
    source /opt/AMD/ryzenai/venv/bin/activate
-   python ~/sources/sy/scripts/prep_npu_embed.py
+   python ~/sources/sy/scripts/prep_npu_workload.py
    ```
 
    Downloads `intfloat/multilingual-e5-base` from HF, exports to
@@ -167,27 +257,27 @@ Pick is automatic at startup in that priority order; surface with
 3. Start the daemon:
 
    ```bash
-   sy knowledge daemon          # foreground
+   sy aiplane daemon            # foreground
    # or
-   systemctl --user start sy-knowledge.service   # if your unit is wired
+   systemctl --user start sy.target   # supervises every plane
    ```
 
-### Migration: system-level → user-level supervision
+`sy` auto-detects the AMD venv at startup, re-execs itself with the
+right `LD_LIBRARY_PATH` + `ORT_DYLIB_PATH` + `RYZEN_AI_*` env baked
+in, and routes embeddings through the NPU.
 
-The system-level `sy-knowledge.service` is deprecated. `sy apply`
-now symlinks user-level units under `~/.config/systemd/user/` and runs
-`systemctl --user daemon-reload`. If a stale
-`/etc/systemd/system/sy-knowledge.service` is still present, `sy apply`
-prints a `sudo rm /etc/systemd/system/sy-knowledge.service` recipe on
-stderr (it never `sudo`s on your behalf). After removing it,
-`systemctl --user enable --now sy.target` brings everything back up
-under the user manager.
+#### Knowledge hardware tier
 
-That's it — sy auto-detects the AMD venv at startup, re-execs itself
-with the right `LD_LIBRARY_PATH` + `ORT_DYLIB_PATH` + `RYZEN_AI_*`
-env baked in, and routes embeddings through the NPU.
+| Backend    | Trigger                                | Throughput | VRAM | Notes |
+|------------|----------------------------------------|------------|------|-------|
+| `vitisai`  | `/opt/AMD/ryzenai/venv` is present     | ~7 chunks/s | 0 GB | Pre-compile cache under `~/.cache/sy/npu-embed/`. Best fit for laptops where you also want to run an LLM on the dGPU. |
+| `cuda`     | pip `onnxruntime-gpu==1.24.*` installed, NVIDIA GPU | depends | ≈1 GB | Legacy fastembed path. Sees CUDA libs via `~/.local/lib/python*/site-packages/nvidia/*/lib`. |
+| `cpu`      | Always-available fallback              | slow       | 0 GB | Last resort. |
 
-### Why `multilingual-e5-base`, not `-large`?
+Surface the active backend with `sy knowledge status --json` (look at
+`embed_backend`).
+
+#### Why `multilingual-e5-base`, not `-large`?
 
 We originally used `-large` (1024-dim) via fastembed on CUDA. The
 NPU port required dropping to `-base` (768-dim) because **VitisAI EP
@@ -206,26 +296,61 @@ sy knowledge drop         # drop the old 1024-dim qdrant collection
 sy knowledge resync       # rebuild with the new 768-dim embeddings
 ```
 
-### Knowledge plane CLI cheat-sheet
+## CLI cheat-sheet
+
+The snippets below are the everyday-driver subset. For the full
+per-subcommand reference — every flag, default, env var, exit code,
+and example — see [`docs/reference/cli.md`](docs/reference/cli.md).
 
 ```bash
+# apply / preview the whole system
+sy apply [--dry-run] [--theme <name>]
+sy diff                            # pending changes
+sy doctor                          # cross-plane health probes
+sy themes                          # list themes
+sy render <relpath>                # render single template to stdout
+
+# aiplane (NPU)
+sy aiplane daemon                  # supervises /dev/accel/accel0
+sy aiplane run --workload <k>      # one-shot via IPC
+sy aiplane status [--json]
+
+# knowledge (semantic search consumer of aiplane)
 sy knowledge add <path>            # register a tree (respects .gitignore)
 sy knowledge rm <path>             # unregister
 sy knowledge schedule 30m          # rewrite [knowledge].schedule
 sy knowledge sources               # list registered roots
 sy knowledge manifests --json      # active per-folder manifests
-
 sy knowledge daemon                # supervises qdrant + scheduled embed
-sy knowledge status [--json]       # snapshot (backend, queue, last sync)
+sy knowledge status [--json]
 sy knowledge pause / resume / toggle-pause / cancel
-sy knowledge bench --n 1024        # throughput probe + active backend
-
-sy knowledge search <query>        # interactive semantic search
+sy knowledge bench --n 1024
+sy knowledge search <query>
 sy knowledge mcp                   # MCP server (stdio) for AI agents
+
+# power
+sy power status [--json]
+sy power apply
+sy power show --json
+sy power mcp
+
+# agent runner
+sy agt run <prompt> [--profile <name>]
+
+# auto-configure MCP across agents
+sy auto                            # plumbs sy-knowledge / sy-power into Claude, Cursor, Codex, Gemini
+
+# syauth
+sy syauth install-pam --service sudo
+sy syauth doctor
+
+# stack bar (layer-shell waybar replacement)
+sy stack bar
 ```
 
-The MCP server is auto-registered in Claude / Cursor / Codex / Gemini
-configs by `sy auto` (toggle with `sy knowledge mcp-enable/disable`).
+Every command supports `--help`, every command that produces output
+supports `--json`, every state-changing command supports `--dry-run`,
+and every flag is also settable via `SY_*` env var. See [`CLAUDE.md`](CLAUDE.md).
 
 ## Keybindings
 
@@ -310,8 +435,33 @@ The palette lives in `themes/<name>.toml` and is injected into every
   `niri/language` (XKB layout indicator). Needs waybar 0.11+.
 - **Idle & DPMS**: swayidle uses `niri msg action power-off-monitors`
   / `power-on-monitors` for DPMS.
-- **Yazi flavor**: `yazi/package.toml` pins `bennyyip/gruvbox-dark`.
-  Run `ya pkg install` after deploying.
+- **Yazi**: `configs/yazi/` ships the full config — `yazi.toml`
+  (previewers + git fetcher), `keymap.toml` (plugin keybindings),
+  `init.lua` (guarded `:setup()` calls), `theme.toml` (flavor pin) and
+  `package.toml` (32 `ya pkg` deps + the gruvbox flavor). Plugins not
+  reachable via `ya pkg` (dual-pane, easyjump, searchjump, whoosh)
+  are git-cloned by `scripts/yazi-plugins.sh`. Run that script after
+  `sy apply` (or `make yazi-plugins`); it is idempotent and safe to
+  re-run on upgrade.
+
+## Contributing
+
+PRs and issues are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md)
+for how to file a bug, propose a change, run the test gates
+(`make lint`, `make test`), sign your commits (DCO), and the
+versioning policy (SemVer + Conventional Commits). Participation in
+the project is bound by the [Contributor Covenant 2.1](CODE_OF_CONDUCT.md).
+For security-sensitive reports, follow [`SECURITY.md`](SECURITY.md)
+instead of opening a public issue.
+
+## Maintainers
+
+- [@dmytrogajewski](https://github.com/dmytrogajewski) — sole
+  maintainer. For project questions, prefer a
+  [GitHub issue](https://github.com/dmytrogajewski/sy/issues) (or a
+  discussion if enabled); see [`SUPPORT.md`](SUPPORT.md) for the
+  full channel breakdown. For vulnerability reports, use the
+  private channel in [`SECURITY.md`](SECURITY.md).
 
 ## License
 

@@ -3,6 +3,7 @@ name = "sy-ipc"
 version.workspace = true
 edition.workspace = true
 publish = false
+license = "MIT"
 description = "IPC v1 envelope + framing for the sy workspace (SPEC §4.2). Length-delimited JSON-RPC 2.0-shaped frames with the `sy.v1` envelope extensions."
 
 [dependencies]

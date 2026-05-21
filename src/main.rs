@@ -1,3 +1,8 @@
+//! sy CLI entry point. See `README.md` for the agentic-OS overview
+//! and `AGENTS.md` for the coding-agent contracts (TDD, non-negotiables,
+//! NPU-plane norms). Public APIs live in the `sy-core`, `sy-ipc`, and
+//! `sy-testutils` library crates; this binary wires the planes together.
+
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -28,6 +33,7 @@ mod net;
 mod notif;
 mod npu;
 mod popup;
+mod power;
 mod pwr;
 mod silent;
 mod sound;
@@ -208,19 +214,34 @@ enum Cmd {
         #[arg(long)]
         waybar: bool,
     },
-    /// syauth pair-confirm applet (accept|reject|status; --waybar for bar JSON)
+    /// syauth applet (accept|reject|status|install-pam|uninstall-pam|doctor; --waybar for bar JSON)
     Syauth {
-        /// accept | reject | status (default: status)
+        /// accept | reject | status | install-pam | uninstall-pam | doctor (default: status)
         action: Option<String>,
         /// Emit waybar-compatible JSON for the bar slot.
         #[arg(long, conflicts_with = "action")]
         waybar: bool,
+        /// PAM service for install-pam / uninstall-pam (e.g. `sudo`).
+        #[arg(long)]
+        service: Option<String>,
+        /// PAM control flag for install-pam (default: `sufficient`; wrapper forwards explicitly).
+        #[arg(long)]
+        control: Option<String>,
+        /// Skip the upstream CLI's interactive confirmation prompt.
+        #[arg(long)]
+        yes: bool,
     },
     /// Power menu: tuned profile + lock/suspend/reboot/shutdown/logout
     Pwr {
         /// Emit waybar-compatible JSON
         #[arg(long)]
         waybar: bool,
+    },
+    /// ML-driven power orchestrator (sy-power). Subcommands:
+    /// status|daemon|apply|log|profile|explain|train|show|mcp.
+    Power {
+        #[command(subcommand)]
+        cmd: power::PowerCmd,
     },
     /// FIDO/U2F auth for swaylock via pam_u2f (enable|disable|status)
     Fido {
@@ -341,6 +362,10 @@ fn main() -> Result<()> {
             eprintln!("error: {}", se.msg);
             std::process::exit(se.code);
         }
+        if let Some(pe) = e.downcast_ref::<power::PowerError>() {
+            eprintln!("error: {}", pe.msg);
+            std::process::exit(pe.code);
+        }
     }
     result
 }
@@ -435,8 +460,21 @@ fn run() -> Result<()> {
             notif::run(act, &rest)
         }
         Cmd::Bt { waybar } => bt::run(waybar),
-        Cmd::Syauth { action, waybar } => syauth::run(action.as_deref(), waybar),
+        Cmd::Syauth {
+            action,
+            waybar,
+            service,
+            control,
+            yes,
+        } => syauth::run_cli(
+            action.as_deref(),
+            waybar,
+            service.as_deref(),
+            control.as_deref(),
+            yes,
+        ),
         Cmd::Pwr { waybar } => pwr::run(waybar),
+        Cmd::Power { cmd } => power::dispatch(cmd),
         Cmd::Fido { action } => fido::run(action.as_deref()),
         Cmd::Silent { action, waybar } => silent::run(action.as_deref(), waybar),
         Cmd::Snd { action } => match action.as_str() {

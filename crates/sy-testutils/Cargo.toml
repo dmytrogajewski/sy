@@ -3,6 +3,7 @@ name = "sy-testutils"
 version.workspace = true
 edition.workspace = true
 publish = false
+license = "MIT"
 description = "Daemon-in-thread integration harness for sy workspace tests. Dev-dep only — never linked into sy itself."
 
 [dependencies]

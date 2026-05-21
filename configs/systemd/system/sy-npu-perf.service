@@ -28,11 +28,16 @@
 [Unit]
 Description=sy: AMD XDNA NPU power mode primer
 Documentation=https://github.com/dmytrogajewski/sy
-# Run as soon as the kernel has the amdxdna driver bound. The driver
-# is in-tree in mainline 6.10+; here it bound at boot via the PCI
-# subsystem, so `multi-user.target` is reached well after `accel0`
-# is up. Keeping the dependency loose keeps install simple.
-After=multi-user.target
+# sy-amdxdna-load.service guarantees the driver is loaded and
+# /dev/accel/accel0 exists. Wanting + ordering after it means pmode
+# never races a missing device, even on the first boot after a kernel
+# update regenerates the initramfs (see sy-amdxdna-load.service for
+# the request_firmware-in-initrd story).
+After=sy-amdxdna-load.service multi-user.target
+Wants=sy-amdxdna-load.service
+# If amdxdna failed to load (no firmware, no NPU silicon), skip the
+# pmode call instead of dragging multi-user.target into a failure.
+ConditionPathExists=/dev/accel/accel0
 
 [Service]
 Type=oneshot

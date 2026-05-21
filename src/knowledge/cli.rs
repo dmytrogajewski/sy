@@ -1392,4 +1392,3 @@ fn flush_batch(
     ctx.after_batch();
     Ok(())
 }
-

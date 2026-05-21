@@ -92,7 +92,9 @@ tooltip {
 #custom-sy-vol,
 #custom-sy-bl,
 #custom-sy-bat,
-#custom-sy-knowledge {
+#custom-sy-knowledge,
+#custom-sy-syauth,
+#custom-sy-power {
     color: @fg;
     padding: 0 6px;
 }
@@ -108,7 +110,8 @@ tooltip {
 #custom-sy-silent:hover,
 #custom-sy-vol:hover,
 #custom-sy-bl:hover,
-#custom-sy-knowledge:hover {
+#custom-sy-knowledge:hover,
+#custom-sy-power:hover {
     background: @bg1;
 }
 
@@ -184,6 +187,39 @@ tooltip {
 #custom-agents.active   { color: @fg; }
 #custom-agents.busy     { color: @yellow; }
 #custom-agents.awaiting { color: @red; }
+
+/* custom/sy-syauth — compact phone-as-key pill rendered by
+ * `sy syauth --waybar` (see src/syauth.rs::render_pill). Text is
+ * always the 🔑 emoji (pair flow adds the 6-digit code beside it).
+ * Color carries the state; full status goes to the tooltip.
+ *   .ok            — phone reachable / in-flight challenge   → cyan
+ *   .reconnecting  — recent transport-error or timeout       → yellow
+ *   .degraded      — daemon down OR permanent denied         → red
+ *   .unpaired      — no phone is bonded yet                  → red
+ *   .pending       — LESC pair confirmation awaiting accept  → green
+ */
+#custom-sy-syauth.ok           { color: @aqua; }
+#custom-sy-syauth.reconnecting { color: @yellow; }
+#custom-sy-syauth.degraded     { color: @red; }
+#custom-sy-syauth.unpaired     { color: @red; }
+#custom-sy-syauth.pending      { color: @green; font-weight: bold; }
+
+/* custom/sy-power — SPEC §5 power-orchestrator pill, rendered by
+ * `sy power status --waybar` (see src/power/status.rs::format_waybar).
+ * Class precedence: drift > meeting > onboarding > rules > bandit.
+ *   .drift       — ADWIN alarm: daemon retraining, rules-only       → red
+ *   .meeting     — VAD-locked MEETING shield (call quality first)   → green
+ *   .onboarding  — first 14d rules-only window (countdown in text)  → yellow
+ *   .rules       — bandit + baseline agree (no exploration this tick)→ dim
+ *   .bandit      — bandit's pick diverges from baseline              → aqua
+ *   .error       — daemon-down soft-error envelope (bar keeps polling)→ red
+ */
+#custom-sy-power.drift      { color: @red; font-weight: bold; }
+#custom-sy-power.meeting    { color: @green; }
+#custom-sy-power.onboarding { color: @yellow; }
+#custom-sy-power.rules      { color: @fg_dim; }
+#custom-sy-power.bandit     { color: @aqua; }
+#custom-sy-power.error      { color: @red; }
 
 #network.disconnected {
     color: @fg_dim;

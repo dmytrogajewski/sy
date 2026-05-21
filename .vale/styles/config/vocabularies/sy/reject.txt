@@ -1,0 +1,2 @@
+# Terms intentionally rejected in sy docs.
+# Empty for now — populate as the audit surfaces banned phrasings.

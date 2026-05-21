@@ -20,3 +20,19 @@
 *.swp
 .idea/
 .vscode/
+
+# Docs-lint caches and Vale-managed style packs. The custom Vale
+# vocabulary at .vale/styles/config/vocabularies/ IS checked in;
+# `vale sync` writes the Microsoft + Google packs into
+# .vale/styles/{Microsoft,Google}/ and those are not.
+/.lycheecache
+/.vale/styles/Microsoft/
+/.vale/styles/Google/
+/.vale/styles/Vale/
+
+# npm artifacts from local docs-lint invocation (markdownlint-cli2,
+# cspell). Repo doesn't ship a package.json — these only appear when
+# a contributor installs the linters globally and then accidentally
+# initialises one locally.
+/node_modules/
+/package-lock.json

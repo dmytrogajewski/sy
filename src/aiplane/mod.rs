@@ -43,9 +43,14 @@ pub mod worker;
 pub mod worker_ipc;
 pub mod workloads;
 
-/// Shared process-wide mutex for tests that mutate `XDG_RUNTIME_DIR`.
-/// All daemon-in-thread / worker-in-thread tests acquire this so they
-/// don't cross-route requests when cargo runs them in parallel.
+/// Shared process-wide mutex for tests that mutate `XDG_RUNTIME_DIR`
+/// (or other globals — `XDG_STATE_HOME`, `SY_*` env vars, the NPU
+/// `/dev/accel/accel0` device handle). All daemon-in-thread /
+/// worker-in-thread / socket-binding tests acquire this so they don't
+/// cross-route requests when cargo runs them in parallel. Modules
+/// outside `aiplane::` (e.g. `syauth`, `power::cli`, `doctor::checks`)
+/// re-export this as their own lock so every env-touching test in the
+/// `sy` bin shares one rendezvous point.
 #[cfg(test)]
 pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

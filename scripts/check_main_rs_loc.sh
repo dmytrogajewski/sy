@@ -20,9 +20,19 @@
 # (docstring + four-line `#[command(subcommand)]` block) + dispatch
 # arm + `ServiceError` exit-code mapping (heavy lifting lives in
 # `src/supervision/{service,status,logs}.rs`); the running total is
-# 1025 lines after these zones land. Pass a lower value as $1 when
-# later zones extract logic out of main.rs and the budget should
-# ratchet.
+# 1025 lines after these zones land + 15 lines for the
+# syauth-integration Step 3 `Cmd::Syauth` flag expansion (the
+# `--service` / `--control` / `--yes` clap fields with their
+# docstrings; dispatch is a single-line shim into
+# `src/syauth.rs::run_cli`) — running total 1040 + 10 lines for the
+# sy-power Step 1 `Cmd::Power` clap variant (docstring + nested
+# `#[command(subcommand)]` block) + `mod power;` declaration +
+# dispatch arm; heavy lifting lives in `src/power/cli.rs::dispatch`
+# + 10 lines for `cargo fmt`-driven re-flow of the pre-existing
+# `Cmd::Syauth` match arm into the multi-line struct destructure
+# rustfmt requires once the file is touched. Running total: 1060.
+# Pass a lower value as $1 when later zones extract logic out of
+# main.rs and the budget should ratchet.
 #
 # Exit: 0 on under-budget, 1 on over-budget, 2 on usage error.
 set -euo pipefail

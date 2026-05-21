@@ -94,7 +94,14 @@ pub mod exit {
 /// Canonical short names recognised by `sy service`. Every other unit
 /// must be passed by its full `sy-<name>.service` (or `sy.target`)
 /// name; anything else triggers a usage error.
-const CANONICAL: &[&str] = &["aiplane", "knowledge", "qdrant", "stack-bar", "agentd"];
+const CANONICAL: &[&str] = &[
+    "aiplane",
+    "knowledge",
+    "qdrant",
+    "stack-bar",
+    "agentd",
+    "powerd",
+];
 
 /// Resolve a user-supplied short name to the full systemd unit name.
 ///
@@ -215,6 +222,8 @@ mod tests {
             ("qdrant", "sy-qdrant.service"),
             ("stack-bar", "sy-stack-bar.service"),
             ("agentd", "sy-agentd.service"),
+            // Step 10: sy-powerd joins the canonical roster.
+            ("powerd", "sy-powerd.service"),
         ] {
             assert_eq!(
                 name_to_unit(short).unwrap(),

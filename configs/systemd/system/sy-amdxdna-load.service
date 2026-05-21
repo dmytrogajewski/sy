@@ -1,0 +1,81 @@
+# sy: explicit post-pivot loader for the AMD XDNA NPU driver.
+#
+# Companion to /etc/dracut.conf.d/sy-amdxdna-defer.conf, which keeps
+# amdxdna out of the initramfs (firmware blob would be inaccessible
+# during early probe — see that file's header for the full story).
+#
+# After pivot_root, udev's normal PCI-alias matching will autoload
+# amdxdna against the NPU device — but timing relative to downstream
+# units (sy-npu-perf, sy-knowledge) is not deterministic. This oneshot
+# forces an explicit, synchronous load and waits for /dev/accel/accel0
+# to appear, so anything that `After=sy-amdxdna-load.service` can
+# assume the device node exists.
+#
+# Idempotent: skips the modprobe if the device is already present
+# (the common case once udev has done its job).
+#
+# Install (one-time, via `make install-system-npu` or by hand):
+#   sudo cp configs/systemd/system/sy-amdxdna-load.service \
+#          /etc/systemd/system/sy-amdxdna-load.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now sy-amdxdna-load.service
+#
+# Verify:
+#   systemctl status sy-amdxdna-load.service
+#   ls /dev/accel/accel0
+#   xrt-smi examine | tail -5
+
+[Unit]
+Description=sy: load AMD XDNA NPU driver after pivot_root
+Documentation=https://github.com/dmytrogajewski/sy
+# Run after the real root is in place and the firmware tree is
+# reachable. local-fs.target guarantees /lib/firmware is mounted.
+# We deliberately schedule before multi-user.target so sy-npu-perf
+# (which ordered itself After=multi-user.target) sees the device.
+After=local-fs.target systemd-udev-settle.service
+Wants=local-fs.target
+Before=sy-npu-perf.service multi-user.target
+
+# Don't even try if the firmware tree isn't installed (e.g. a fresh
+# machine before xrt-plugin-amdxdna is rpm-installed). The unit will
+# log a skip and exit success.
+ConditionPathExists=/lib/firmware/amdnpu
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/bash -c ' \
+  set -e; \
+  # Bail out early on hosts without NPU silicon so this unit can ship \
+  # to non-Ryzen-AI boxes without failing multi-user.target. The class \
+  # filter (11:80, "Signal processing controller / Other") matches the \
+  # PCI alias amdxdna registers: pci:v00001022d*sv*sd*bc11sc80i*. \
+  if ! lspci -d 1022:: -n 2>/dev/null | awk "{print \$2}" | grep -q "^1180:"; then \
+    echo "sy-amdxdna-load: no AMD signal-processing PCI device, skipping" >&2; \
+    exit 0; \
+  fi; \
+  if [ -e /dev/accel/accel0 ]; then \
+    echo "sy-amdxdna-load: /dev/accel/accel0 already present, nothing to do" >&2; \
+    exit 0; \
+  fi; \
+  # Driver loaded but no device node usually means probe failed in a \
+  # prior initrd. Reload so request_firmware() retries against the \
+  # now-mounted /lib/firmware. \
+  if [ -d /sys/module/amdxdna ]; then \
+    echo "sy-amdxdna-load: amdxdna loaded but no device — reloading" >&2; \
+    /usr/sbin/modprobe -r amdxdna || true; \
+  fi; \
+  /usr/sbin/modprobe amdxdna; \
+  # Wait up to ~5 s for udev to publish /dev/accel/accel0. \
+  for _ in 1 2 3 4 5 6 7 8 9 10; do \
+    [ -e /dev/accel/accel0 ] && exit 0; \
+    sleep 0.5; \
+  done; \
+  echo "sy-amdxdna-load: /dev/accel/accel0 never appeared (modprobe ok but probe failed); check journalctl -k for amdxdna" >&2; \
+  exit 0; \
+'
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

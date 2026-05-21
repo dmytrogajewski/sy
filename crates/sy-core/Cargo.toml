@@ -3,6 +3,7 @@ name = "sy-core"
 version.workspace = true
 edition.workspace = true
 publish = false
+license = "MIT"
 description = "Shared vocabulary for the sy workspace (types, errors, IPC envelope). Deliberately small — see SPEC.md §3.2 K1 'hub-crate' note."
 
 [dependencies]

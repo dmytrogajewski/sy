@@ -1,0 +1,81 @@
+# sy power orchestrator daemon (sensors + intent + telemetry).
+#
+# This file is the sole supervisor for `sy-powerd` — the 1 Hz tokio
+# daemon shipped in `src/power/daemon.rs` (sy-power roadmap Step 10).
+# R1 scope is sensors-and-telemetry only: every tick reads the 12
+# sensor + intent channels, appends one NDJSON entry to
+# `~/.local/state/sy/power/telemetry-YYYY-MM-DD.ndjson`, and pings
+# `WATCHDOG=1` at half-interval. **No actuation** — `platform_profile`,
+# EPP, iGPU mode, NPU pmode, and cgroup writes land in R2 (Step 19).
+#
+# Lifecycle shape (mirrors sy-knowledge.service):
+#
+# - `Type=notify` + `NotifyAccess=main`: the daemon emits `READY=1`
+#   after the IPC socket binds (per `power::daemon::run`). Without
+#   `NotifyAccess=main`, a future child process could spoof readiness
+#   on our behalf.
+# - `WatchdogSec=10s`: `sy_core::notify::spawn_watchdog` (routed
+#   through the `Notifier` trait so the cadence is unit-tested) pings
+#   every ~5 s. A frozen tick loop → systemd kills + restarts. The
+#   vendor-default revert in SPEC §4 NFR Reliability is deferred to
+#   Step 19 (R1 has no actuation to revert).
+# - `Restart=on-failure` + `StartLimitBurst=5` + `RestartSec=5s`:
+#   matches the sy-knowledge backoff so a sensor-surface panic on a
+#   weird kernel doesn't restart-storm the journal.
+# - `Nice=10`: background-priority; bar / niri / focused agent come
+#   first. Sensor I/O is cheap (sub-5 ms per tick) so we don't need a
+#   `MemoryHigh=` cap at this stage.
+# - `PartOf=sy.target` + `WantedBy=sy.target`: `systemctl --user
+#   start sy.target` brings the daemon up alongside knowledge, agentd,
+#   aiplane, stack-bar; a target stop cascades the teardown.
+#
+# Manual verification recipe (post-merge, post-`sy apply`):
+#
+#   cp target/release/sy ~/.local/bin/sy
+#   cp configs/systemd/user/sy-powerd.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user start sy-powerd.service
+#   systemctl --user status sy-powerd.service   # expect Active: active (running), READY=1
+#   tail -n 3 ~/.local/state/sy/power/telemetry-$(date -u +%F).ndjson
+#
+# Source: specs/research/sy-power/SPEC.md §4, specs/roadmaps/sy-power/ROADMAP.md Step 10.
+#
+# Step 37 — PPD-replacement:
+#   `Conflicts=power-profiles-daemon.service` is unconditional. When
+#   `sy power apply --yes` masks PPD this is redundant; when PPD is
+#   absent from the host the directive is a documented no-op
+#   (systemd ignores Conflicts= against units it doesn't know about);
+#   only in the `--with-ppd` co-existence mode does it bite — and that
+#   is exactly the mode `sy power apply --with-ppd` avoids by NOT
+#   starting sy-powerd as a hard PPD replacement (the shim skips the
+#   `net.hadess.PowerProfiles` bus-name bind, so PPD keeps that name
+#   and the systemd-level conflict is interpreted by `systemctl
+#   start`-time arbitration). Operators in `--with-ppd` mode start
+#   only one of the two daemons at a time.
+
+[Unit]
+Description=sy power orchestrator (sensors + intent + telemetry)
+Documentation=https://github.com/dmytrogajewski/sy
+PartOf=sy.target
+Conflicts=power-profiles-daemon.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=10s
+ExecStart=%h/.local/bin/sy power daemon
+
+# Background-priority — the bar / niri / focused agent come first.
+Nice=10
+
+Restart=on-failure
+RestartSec=5s
+StartLimitInterval=60s
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sy-powerd
+
+[Install]
+WantedBy=sy.target

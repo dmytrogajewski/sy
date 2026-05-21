@@ -702,8 +702,11 @@ mod tests {
 
     /// Lock around `XDG_RUNTIME_DIR` mutation so the per-endpoint
     /// socket-missing tests below can run in parallel under cargo's
-    /// default scheduler without trampling each other's env.
-    static IPC_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// default scheduler without trampling each other's env. Use the
+    /// crate-wide canonical lock so we also serialise against
+    /// `aiplane::ipc::tests`, which dial sockets resolved from the
+    /// same env var.
+    use crate::aiplane::TEST_ENV_LOCK as IPC_ENV_LOCK;
 
     fn with_runtime_dir<F: FnOnce()>(dir: &std::path::Path, f: F) {
         let _guard = IPC_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());

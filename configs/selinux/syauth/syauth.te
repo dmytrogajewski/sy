@@ -1,0 +1,41 @@
+module syauth 1.0.0;
+
+# Why this module exists:
+#   pam_syauth.so appends one CSV row to /var/lib/syauth/last.log on
+#   every authentication attempt (success or denied). On a default
+#   Fedora targeted policy the file inherits the generic `var_lib_t`
+#   type, which xdm_t (gdm-session-worker) is NOT allowed to append
+#   to. The result post-reboot is an AVC denial like:
+#
+#     avc: denied { append } for comm="gdm-session-wor" name="last.log"
+#       scontext=...:xdm_t:... tcontext=...:var_lib_t tclass=file
+#
+#   This module introduces a dedicated `syauth_var_lib_t` type for
+#   /var/lib/syauth(/.*)? and grants the minimum write surface to
+#   xdm_t. sudo on Fedora targeted is unconfined (no `sudo_t` domain
+#   exists), so its PAM stack runs as unconfined_t and is covered by
+#   the unconfined_t rule below — which is also the syauth-presenced
+#   daemon's domain, so retyping the audit log does not break the
+#   writer.
+
+require {
+    type xdm_t;
+    type unconfined_t;
+    attribute file_type;
+    class file { getattr open read write append create unlink lock setattr };
+    class dir  { getattr open search read write add_name remove_name };
+}
+
+type syauth_var_lib_t, file_type;
+
+# pam_syauth.so loaded inside gdm-session-worker appends last.log
+# on every GDM authentication / unlock attempt.
+allow xdm_t syauth_var_lib_t:file { getattr open append lock };
+allow xdm_t syauth_var_lib_t:dir  { getattr open search };
+
+# syauth-presenced runs as the user (unconfined_t on Fedora targeted)
+# and creates / rotates / writes the audit log itself. Sudo's PAM
+# stack also runs here on Fedora (no sudo_t domain), so this rule
+# covers both daemon writes and sudo-side pam_syauth appends.
+allow unconfined_t syauth_var_lib_t:file { getattr open read write append create unlink lock setattr };
+allow unconfined_t syauth_var_lib_t:dir  { getattr open search read write add_name remove_name };

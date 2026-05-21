@@ -1,0 +1,94 @@
+# Lychee link checker configuration for sy.
+#
+# Closes rubric row R-CI-04 of specs/docs-audit/AUDIT-full.md.
+#
+# Format: https://github.com/lycheeverse/lychee/blob/master/lychee.example.toml
+
+#############################################################################
+# Runtime
+#############################################################################
+
+# Be polite to upstreams.
+max_concurrency = 8
+
+# 20 seconds per request handles slow upstreams without dragging CI.
+timeout = 20
+
+# Wait this long before retrying a transient failure.
+retry_wait_time = 2
+
+# Follow at most this many redirects per link.
+max_redirects = 5
+
+# 0 means default (currently 3).
+max_retries = 3
+
+# Treat these status codes as success. 429 (Too Many Requests) is
+# treated as success because rate-limited links are not broken — they
+# just rate-limited us. 206 (Partial Content) is success for ranged
+# requests some CDNs return.
+accept = ["200", "206", "429"]
+
+# User-Agent so upstreams that block default lychee UA still answer.
+user_agent = "lychee/0.x (sy docs CI; +https://github.com/dmytrogajewski/sy)"
+
+# Cache lookups between runs so PR turnaround stays fast.
+cache = true
+max_cache_age = "1d"
+
+#############################################################################
+# Scopes
+#############################################################################
+
+# Only check schemes that resolve over the network — skip file://,
+# mailto:, javascript:, and similar to avoid false positives.
+scheme = ["http", "https"]
+
+# Don't traverse local filesystem links across directories.
+include_fragments = false
+
+# Don't fail the build when a link is excluded.
+verbose = "info"
+
+#############################################################################
+# Exclusions
+#############################################################################
+
+# Default to allow; explicit excludes below.
+exclude_all_private = true
+exclude_link_local = true
+exclude_loopback = true
+exclude_mail = true
+
+# Patterns excluded by regex (PCRE-style). One pattern per line.
+exclude = [
+  # Localhost variants — covered by exclude_loopback but list explicitly.
+  "^https?://(localhost|127\\.0\\.0\\.1|::1)(:\\d+)?(/|$)",
+
+  # GitHub compare URLs in CHANGELOG.md — these 404 until the
+  # corresponding tag is pushed. Re-enable per tag once releases ship.
+  "^https://github\\.com/dmytrogajewski/sy/compare/.*",
+  "^https://github\\.com/dmytrogajewski/sy/releases/tag/.*",
+
+  # Rate-limited social / archive sites that flap on CI.
+  "^https?://(www\\.)?twitter\\.com",
+  "^https?://(www\\.)?x\\.com",
+  "^https?://(www\\.)?linkedin\\.com",
+  "^https?://(www\\.)?reddit\\.com",
+
+  # Local file links inside the repo that lychee resolves via the
+  # filesystem — covered by `scheme` above, but Markdown's
+  # `[text](path)` syntax can fool the parser.
+  "^file://",
+
+  # SPDX identifier links (cited as SPDX:MIT etc., not real URLs).
+  "^SPDX",
+]
+
+#############################################################################
+# Headers
+#############################################################################
+
+# Some upstreams 403 without an Accept header.
+[headers]
+Accept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"

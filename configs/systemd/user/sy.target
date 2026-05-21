@@ -1,9 +1,9 @@
 # sy desktop AI plane — group root.
 #
 # `systemctl --user start sy.target` brings up every member service
-# (aiplane, knowledge, qdrant, agentd, stack-bar). `systemctl --user
-# stop sy.target` tears them all down atomically — services declare
-# `PartOf=sy.target` so a target stop cascades.
+# (aiplane, knowledge, qdrant, agentd, stack-bar, powerd). `systemctl
+# --user stop sy.target` tears them all down atomically — services
+# declare `PartOf=sy.target` so a target stop cascades.
 #
 # `PartOf=graphical-session.target` chains us onto the niri-managed
 # graphical session: logging out tears down sy.target with the rest

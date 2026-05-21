@@ -231,13 +231,9 @@ fn sandbox_exec(
         profile = profile_name,
         "sandbox-exec policy loaded"
     );
-    let mut profile = policy::resolver::resolve_profile(
-        &policy_root,
-        profile_name,
-        tool_key,
-        &cwd_buf,
-    )
-    .with_context(|| format!("resolve profile {profile_name}"))?;
+    let mut profile =
+        policy::resolver::resolve_profile(&policy_root, profile_name, tool_key, &cwd_buf)
+            .with_context(|| format!("resolve profile {profile_name}"))?;
     // Landlock blocks execve when the binary itself isn't in
     // read_paths — the kernel can't load the image. The profile
     // can't know agent install locations a priori (claude lives in
@@ -315,13 +311,9 @@ fn sandbox_run(
     let policy_root = policy::resolver::resolve_policy_root(&cwd_buf)
         .context("locate policy/profiles for sandbox-run")?;
     let tool_key = bin.file_stem().and_then(|s| s.to_str());
-    let mut profile = policy::resolver::resolve_profile(
-        &policy_root,
-        profile_name,
-        tool_key,
-        &cwd_buf,
-    )
-    .with_context(|| format!("resolve profile {profile_name}"))?;
+    let mut profile =
+        policy::resolver::resolve_profile(&policy_root, profile_name, tool_key, &cwd_buf)
+            .with_context(|| format!("resolve profile {profile_name}"))?;
     extend_read_paths_with_bin_dir(&mut profile, bin);
     let status = sandbox::scope::run_in_scope(&profile, profile_name, bin, argv, &cwd_buf)?;
     std::process::exit(status.code().unwrap_or(1));

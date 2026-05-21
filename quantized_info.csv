@@ -1,0 +1,9 @@
+/home/dmitriy/.cache/sy/aiplane/bge-reranker-v2-m3/bge-reranker-v2-m3.onnx quantization quantization info,2026-05-18 16:52:10
+quantization stage,time consumed(s),sub stage,time consumed(s)
+pre process,3.60
+,,calibration: collect data (onnx inference + numpy statistics),7.54
+,,calibration: compute data,0.00
+calibration (collect data + compute data),10.03
+static quantization,1.68
+post process(including finetuning),0.00
+e2e,29.28605829600201

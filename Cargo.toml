@@ -142,12 +142,122 @@ zstd = "0.13"
 # only). 0.5 drops the `unset_env` bool argument of 0.4, returns
 # `Option<Duration>` directly from `watchdog_enabled`.
 sd-notify = "0.5"
+# sy-power Step 5 (SPEC §2 "12-signal panel" — logind inhibitor watcher).
+# The `intent::logind` channel calls `org.freedesktop.login1.Manager
+# .ListInhibitors` on the system bus and emits `IntentEvent::CallActive`
+# when Teams / Slack / Zoom / Discord hold `Inhibit("idle")`. 5.x is
+# already pinned in `Cargo.lock` (transitive via iced's `mundy`), so
+# declaring it here adds no version skew. The `blocking` subset keeps
+# the channel synchronous + matches Step 4's `PsiChannel` shape.
+zbus = { version = "5", default-features = false, features = ["blocking-api"] }
+# sy-power Step 7 (SPEC §2 "12-signal panel" — cgroup ancestry intent
+# channel). `intent::cgroup` walks `/proc/<pid>/cgroup` ancestry to
+# match new processes against an allow-list and emits
+# `IntentEvent::ProcessFromAncestor`. 0.18 is the current stable line;
+# only the `Process::cgroups` parser is used so the dep is small.
+procfs = "0.18"
+# sy-power Step 24 (SPEC §2 "GRU on CPU via tract" + Phase R4
+# inference path). Pure-Rust ONNX runtime; sub-ms on the tiny GRU
+# (16 input × 16 hidden × 5-class output, ~2-5k params). Pinned to
+# the 0.22 minor — 0.23 is dev only. Re-exports the prost-generated
+# `pb::ModelProto` types under `tract_onnx::pb`, which the warmup-
+# fixture generator (`examples/gen_warmup_gru.rs`) uses to emit a
+# rules-equivalent ONNX without a separate protobuf schema.
+tract-onnx = "0.22"
+# Step 24 hot-reload primitive. The daemon (Step 26) holds an
+# `ArcSwap<Model>`; the trainer (Step 25) swaps freshly-exported
+# ONNX in without taking a lock on the read path.
+arc-swap = "1"
+# Step 24 weight serialisation per SPEC §3 ("Cargo deps added").
+# Used by Step 25's trainer to round-trip GRU weights between
+# burn-ndarray and the ONNX exporter; declared here so the dep
+# graph lands in one place.
+safetensors = "0.4"
+# sy-power Step 25: offline GRU trainer. SPEC §3 / §6 pinned burn
+# 0.20; that release was never published to crates.io so the
+# workspace pins 0.21 — the closest published minor with the same
+# major. `default-features = false` keeps the GPU backends
+# (wgpu/cuda/rocm/tch/candle/router/remote/collective) off the
+# build path; only the pure-Rust `ndarray` backend and the
+# `autodiff` adjoint backend are pulled in. The `train` feature
+# ships the optim crate (`burn::optim::Adam` etc.) that the
+# retrain loop in `src/power/trainer.rs` drives. We hand-emit the
+# ONNX protobuf from the trained weights (SPEC §6 documented
+# fallback) instead of relying on burn's `onnx-export` feature —
+# that path lives in `gen_warmup_gru.rs` already and round-trips
+# cleanly through tract. `prost` was already a dev-dep used by
+# `gen_warmup_gru.rs`; promoted to a workspace dep so the trainer
+# can reuse `tract_onnx::pb` types without redeclaring the schema
+# (prost is a transitive of tract-onnx so this adds zero compile
+# cost).
+burn = { version = "0.21", default-features = false, features = ["ndarray", "autodiff", "train"] }
+burn-ndarray = { version = "0.21", default-features = false }
+burn-autodiff = { version = "0.21", default-features = false }
+prost = "0.11"
+# sy-power Step 34 (SPEC §RV.2): SVG plot rendering for the offline
+# power report. The roadmap pin reads `plotters = "0.4"`; that minor
+# is unreleased — 0.3.7 is the latest published as of 2026-05-20, so
+# we pin the published line. `default-features = false` drops the
+# `bitmap_backend` (and its `image` transitive — already in the tree
+# via the stack-bar pipeline, but no need to widen its feature set),
+# `ttf`/`font-kit` (we render with the built-in stroke font so the
+# SVG stays self-contained and we don't ship Inter as a separate
+# asset yet — Step 35 revisits typography), and `chrono` (the
+# extractor module already owns the time axis as `f64` ticks). The
+# enabled feature set covers every plot variant: `svg_backend` for
+# the `SVGBackend`, `all_series` for `LineSeries`/`AreaSeries`,
+# `all_elements` for `Histogram`/`Rectangle` cells (heatmap and bar
+# charts), and `full_palette` so we can use distinct named colours
+# alongside the line-style / marker-shape monochrome cues.
+plotters = { version = "0.3.7", default-features = false, features = ["svg_backend", "all_series", "all_elements", "full_palette"] }
+# sy-power Step 35 (SPEC §RV.2 / Phase RV finale — `sy power show` PDF
+# assembly). The roadmap pin reads `typst = "0.13"` + `typst-pdf =
+# "0.13"`; the typst library API requires a full `World`
+# implementation (font book, file system, source resolver, package
+# manager, ~3 KLoC of glue) and bundles a 6 MB font set that the
+# binary-size budget does not allow. `pdf-writer` 0.14 is the same
+# crate the typst project itself uses to emit the final PDF bytes —
+# step-by-step, no font loading, no async, no system deps. Authoring
+# the 8-panel report directly via `pdf-writer` keeps the
+# pure-function contract Step 33's metric extractors established
+# (`Vec<u8>` in, `Vec<u8>` out) without dragging in the typst world.
+pdf-writer = "0.14"
+# sy-power Step P2-2 (sy-power-production roadmap): rasterise the Step-34
+# SVG plots to RGB pixmaps so `compile_pdf` can embed them as PDF Image
+# XObjects. `default-features = false` drops `text` (fontdb + rustybuzz +
+# unicode-* trees), `system-fonts` (fontconfig), `memmap-fonts`, and
+# `raster-images` (gif + jpeg + webp) — none of plotters' SVG output
+# needs fonts on disk (plotters serialises glyphs as `<text>` tags whose
+# missing-font outlines degrade to bounding-box placeholders; captions
+# live in the PDF text stream instead) or raster sub-images. The dep
+# tree is therefore confined to usvg's geometry layer + tiny-skia, the
+# latter already in tree as a plotters transitive.
+resvg = { version = "0.45", default-features = false }
+# sy-power Step P2-2: PDF `/FlateDecode` stream compression for the
+# rasterised plot pixels. `flate2` is already in the dep tree via
+# `burn-core` (LZ4/Flate codec for tensor archives) and `png` (a
+# tiny-skia transitive), so declaring it here adds zero compile
+# cost. Pinned to the workspace `1` line — the API surface
+# (`ZlibEncoder` + `write_all`) has been stable since 1.0.
+flate2 = "1"
 
 [package]
 name = "sy"
 version.workspace = true
 edition.workspace = true
-description = "Apply niri rice configs with themes and templating"
+description = "Agentic OS layer for Fedora — single Rust binary plus declarative configs that ship an on-device NPU inference plane, agent sandbox, MCP fabric, semantic knowledge plane, power governor, and a niri/wayland rice"
+# `sy` is a Fedora-coupled OS layer (AMD venv re-exec dance,
+# user-systemd supervision, polkit/SELinux integration), not a
+# library; it cannot be `cargo install`-ed by an end user. The
+# workspace-header comment above documents the rationale at length;
+# this field is the load-bearing assertion. Decision recorded in
+# `docs/adr/0004-publish-policy.md` (Item 24, PLAN-full.md).
+publish = false
+# Declared even though `publish = false` so `cargo info` / `docs.rs`
+# / `crates.io` would pick the README up if the publish policy ever
+# flips. Cheap and lossless — see ADR-0004.
+readme = "README.md"
+license = "MIT"
 
 [[bin]]
 name = "sy"
@@ -160,6 +270,13 @@ default = ["bar-iced"]
 # spawn-at-startup is fire-and-forget and silently swallows a missing-feature
 # stub. Disable with `--no-default-features` if you need a CLI/MCP-only build.
 bar-iced = ["dep:iced", "dep:iced_layershell"]
+# sy-power Step 36 (Phase R7): integration tests that round-trip
+# against a real `net.hadess.PowerProfiles` shim on the system bus.
+# Gated because CI lacks a system D-Bus + polkit grant for the
+# `net.hadess.PowerProfiles` well-known name; flip on locally with
+# `cargo test --features test-dbus` once `power-profiles-daemon`
+# has been masked.
+test-dbus = []
 
 [dependencies]
 anyhow.workspace = true
@@ -233,6 +350,59 @@ zstd.workspace = true
 # call sites live in `src/knowledge/daemon.rs`, `src/agt/daemon.rs`,
 # and `src/stack/bar/app.rs`.
 sd-notify.workspace = true
+# sy-power Step 5: `intent::logind` watcher subscribes to systemd-logind's
+# inhibitor list over the system bus and emits `IntentEvent::CallActive`
+# when Teams / Slack / Zoom / Discord hold `Inhibit("idle")`. The
+# `blocking-api` feature gives us `zbus::blocking::Connection`, which
+# keeps the channel synchronous (matches Step 4's `PsiChannel`).
+zbus.workspace = true
+# sy-power Step 7: `intent::cgroup` walks `/proc/<pid>/cgroup` to match
+# new processes against an allow-list and emits
+# `IntentEvent::ProcessFromAncestor`. The pure-fn parser also runs in
+# tests against synthetic cgroup lines, so the bus-less degradation is
+# baked in.
+procfs.workspace = true
+# sy-power Step 24: GRU inference path (SPEC §2 "tract on CPU"),
+# hot-reload via `ArcSwap<Model>`, weights round-trip via
+# `safetensors` in Step 25.
+tract-onnx.workspace = true
+arc-swap.workspace = true
+safetensors.workspace = true
+# sy-power Step 25: burn-ndarray trainer + autodiff. Pure-CPU; the
+# trainer runs in the daemon's idle+plugged window (Step 26). The
+# ONNX export is hand-emitted via `prost` against `tract_onnx::pb`
+# types — SPEC §6's documented fallback to burn's `onnx-export`
+# feature. `prost` was previously dev-only (gen_warmup_gru.rs);
+# the trainer needs the same encode path at runtime.
+burn.workspace = true
+burn-ndarray.workspace = true
+burn-autodiff.workspace = true
+prost.workspace = true
+# sy-power Step 34 (SPEC §RV.2): SVG plot rendering for the offline
+# `sy power show` PDF. Pure-Rust SVG backend; no font-kit, no
+# bitmap_backend, no `image` widening — see the workspace dep comment
+# above for the feature-set rationale. The dep is dev-light: the
+# daemon never instantiates a `Plot`; only the one-shot
+# `sy power show` (Step 36) does, after the metrics extractors of
+# Step 33 produce a `ReportMetrics<'_>` bundle.
+plotters.workspace = true
+# sy-power Step 35: see workspace dep comment for the typst→pdf-writer
+# deviation rationale. The dep is one-shot only — the daemon never
+# instantiates the report; only `sy power show` does, after the
+# Step-33 metric extractors produce a `ReportMetrics<'_>` bundle.
+pdf-writer.workspace = true
+# sy-power Step P2-2: PDF image-embed path for the Step-34 SVG plots.
+# Pure-Rust SVG rasteriser; pulls usvg + tiny-skia (already a plotters
+# transitive). See workspace dep comment for the feature-set rationale.
+resvg.workspace = true
+# sy-power Step P2-2: zlib compression of the DeviceRGB pixel stream
+# embedded under PDF `/FlateDecode`. Transitively present via burn /
+# png so the dep adds no compile cost.
+flate2.workspace = true
+
+[[example]]
+name = "gen_warmup_gru"
+path = "examples/gen_warmup_gru.rs"
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -1484,6 +1484,15 @@ mod tests {
 
     #[test]
     fn socket_path_uses_xdg_runtime_dir_when_set() {
+        // Hold `TEST_ENV_LOCK` so the env-var mutation does not race
+        // with the daemon-smoke tests below that also set
+        // `XDG_RUNTIME_DIR` (and read it back inside `socket_path()`
+        // between bind and connect). Without this lock the smoke
+        // tests intermittently bind on one path and connect on
+        // another, surfacing as ENOENT / ECONNREFUSED flakes.
+        let _smoke = crate::aiplane::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let prev = env::var("XDG_RUNTIME_DIR").ok();
         env::set_var("XDG_RUNTIME_DIR", "/tmp/sy-test-runtime");
         let p = socket_path();

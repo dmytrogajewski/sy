@@ -2,11 +2,27 @@
 
 > **See also: [`AGENTS.md`](AGENTS.md)** — the shared coding-agent
 > persona, non-negotiables, working loop, and NPU-plane norms. This
-> file (`CLAUDE.md`) covers the rice-level "no snowflakes" rule and the
-> CLIG + agent-friendly CLI conventions; `AGENTS.md` covers everything
-> else (tests, dead code, NPU specifics, file layout). The `/<skill>`
-> commands under `.claude/commands/` are skill-specific playbooks
-> (e.g. `/bug`, `/implement`, `/npu-prep`, `/workload`, `/debug-npu`).
+> file (`CLAUDE.md`) covers the system-wide "no snowflakes" rule and
+> the CLIG + agent-friendly CLI conventions; `AGENTS.md` covers
+> everything else (tests, dead code, NPU specifics, file layout).
+> The `/<skill>` commands under `.claude/commands/` are skill-specific
+> playbooks (e.g. `/bug`, `/implement`, `/npu-prep`, `/workload`,
+> `/debug-npu`).
+
+## What sy is
+
+`sy` is an **Agentic OS layer for Fedora 43**: a single Rust binary
+plus declarative configs that turn a stock Fedora laptop into an
+agent-first workstation. The same binary hosts every plane — the
+NPU inference plane (`aiplane`), the sandboxed agent runner (`agt`),
+the semantic knowledge plane (`knowledge`), the adaptive power
+governor (`power`), the layer-shell bar (`stack`), `syauth`, and the
+niri/wayland rice — all supervised by the user-level `sy.target`.
+
+Every plane is reachable over the same CLIG + JSON-over-stdio
+surface so an agent can drive any plane the same way a human can.
+A fresh machine + `cargo build --release && ./target/release/sy apply`
+must reproduce the entire system. That is non-negotiable; see below.
 
 ## Core rule: no snowflakes
 
