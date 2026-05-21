@@ -44,8 +44,10 @@ max_cache_age = "1d"
 # mailto:, javascript:, and similar to avoid false positives.
 scheme = ["http", "https"]
 
-# Don't traverse local filesystem links across directories.
-include_fragments = false
+# `include_fragments` was a boolean in earlier lychee releases and
+# became a struct in 0.20+; we don't actually need to override the
+# default (false), so drop the line to keep the config forward-
+# compatible across patch versions.
 
 # Don't fail the build when a link is excluded.
 verbose = "info"
@@ -58,7 +60,11 @@ verbose = "info"
 exclude_all_private = true
 exclude_link_local = true
 exclude_loopback = true
-exclude_mail = true
+# `mailto:` links are off by default; enable explicitly when needed.
+# (The old `exclude_mail = true` field was removed in lychee 0.20; the
+# replacement `include_mail = false` is the default, so omitting it is
+# fine and keeps the config compatible with lychee 0.20+.)
+include_mail = false
 
 # Patterns excluded by regex (PCRE-style). One pattern per line.
 exclude = [
@@ -83,12 +89,19 @@ exclude = [
 
   # SPDX identifier links (cited as SPDX:MIT etc., not real URLs).
   "^SPDX",
+
+  # amd.com pages flap on lychee's HTTP/2 client ("Server may not
+  # support HTTP/2 properly"); the page itself is reachable in a
+  # browser, the failure is purely an HTTP/2 protocol mismatch.
+  "^https?://(www\\.)?amd\\.com/",
 ]
 
 #############################################################################
 # Headers
 #############################################################################
 
-# Some upstreams 403 without an Accept header.
-[headers]
+# Some upstreams 403 without an Accept header. lychee 0.20+ renamed the
+# table from `[headers]` to `[header]` (singular); the rest of the shape
+# (string → string map) is unchanged.
+[header]
 Accept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"

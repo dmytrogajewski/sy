@@ -1,3 +1,5 @@
+<img src="assets/sy.png" alt="sy mascot — a tiny kitten" align="right" width="220" />
+
 # sy
 
 An **Agentic OS layer for Fedora** — a single Rust binary plus

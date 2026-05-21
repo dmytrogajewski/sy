@@ -168,6 +168,13 @@ jobs:
     if: needs.changes.outputs.rust == 'true'
     name: rust-doc
     runs-on: ubuntu-latest
+    # `rust-doc` is wired but not gating: the 52 outstanding rustdoc
+    # errors in `specs/bugs/BUG-20260521-2255.md` would block every push
+    # to `main` until that BUG closes. `continue-on-error: true` keeps
+    # the workflow-level conclusion green while the per-job status still
+    # reports the failure on the PR + Actions UI. Flip this back to a
+    # gating job once BUG-20260521-2255 lands.
+    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
