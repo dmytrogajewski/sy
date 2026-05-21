@@ -94,6 +94,11 @@ exclude = [
   # support HTTP/2 properly"); the page itself is reachable in a
   # browser, the failure is purely an HTTP/2 protocol mismatch.
   "^https?://(www\\.)?amd\\.com/",
+
+  # Documentation-template placeholders. The documenter skill renders
+  # `@maintainer-handle → https://github.com/maintainer-handle` as a
+  # contributor-list example; the URL is intentionally a placeholder.
+  "^https?://github\\.com/maintainer-handle/?$",
 ]
 
 #############################################################################
