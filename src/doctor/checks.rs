@@ -27,8 +27,13 @@ use super::{Check, CheckResult, Status};
 
 /// SPEC §4.6 "first batch" of checks. Order is stable; consumers
 /// (operators, CI greppers) rely on it.
+///
+/// sy-mon ROADMAP Step 21 appends the dashboard-plumbing checks
+/// (`mon.collect.running`, one `mon.metrics_socket.<plane>` per known
+/// plane, `mon.history.writable`) so the daily `sy doctor` sweep
+/// covers the popup + aggregator surface.
 pub fn default_checks() -> Vec<Box<dyn Check>> {
-    vec![
+    let mut checks: Vec<Box<dyn Check>> = vec![
         Box::new(NpuDevice),
         Box::new(VitisaiCachePresent),
         Box::new(QdrantReachable),
@@ -41,7 +46,9 @@ pub fn default_checks() -> Vec<Box<dyn Check>> {
         Box::new(LandlockVersion),
         Box::new(SystemdUserSession),
         Box::new(CoredumpRecentCount),
-    ]
+    ];
+    checks.extend(crate::mon::doctor::mon_doctor_checks());
+    checks
 }
 
 // -- aiplane.npu.device ----------------------------------------------------
@@ -271,7 +278,11 @@ impl Check for IpcEndpoint {
 /// runtime per check, so we frame the request ourselves over a blocking
 /// `UnixStream` using the same length-delimited shape the async codec
 /// emits. This matches SPEC §4.2 framing and `sy_ipc::codec`.
-fn probe_system_health(sock: &Path) -> Result<String, String> {
+///
+/// `pub(crate)` so the sy-mon doctor checks (`src/mon/doctor.rs`) can
+/// reuse the same probe for `$XDG_RUNTIME_DIR/sy/mon.sock` without
+/// dragging in a tokio runtime per check (sy-mon ROADMAP Step 21).
+pub(crate) fn probe_system_health(sock: &Path) -> Result<String, String> {
     let mut stream = UnixStream::connect(sock).map_err(|e| format!("connect: {e}"))?;
     stream
         .set_read_timeout(Some(Duration::from_millis(IPC_SYSTEM_HEALTH_TIMEOUT_MS)))

@@ -1,0 +1,53 @@
+# sy-mon-collect — system-health metrics aggregator daemon.
+#
+# Source: specs/research/sy-mon/SPEC.md §3 SCOPE item 3 + §4
+# Non-functional Reliability. Roadmap step:
+# specs/roadmaps/sy-mon/ROADMAP.md Step 11.
+#
+# Step 11 ships:
+# - a tokio multi-thread runtime hosting the 1 Hz tick,
+# - host-sensor sampling (cpu / mem / load) into the mmap ring buffer
+#   at $XDG_RUNTIME_DIR/sy/mon/history.bin (Step 7 artefact),
+# - the `Type=notify` handshake so the unit reaches `active (running)`
+#   once the first tick has landed and the ring is populated.
+#
+# Step 12+ extend the same daemon with:
+# - the per-plane Prometheus UDS scrape leg (Step 12),
+# - the `system.mon.{snapshot,subscribe,history}` IPC handlers
+#   bound at $XDG_RUNTIME_DIR/sy/mon.sock (Step 13),
+# - the doctor surface (Step 21).
+#
+# `Type=notify`: `mon::collect::run` calls `sy_core::notify::ready()`
+# after the ring opens and the first tick completes. `WatchdogSec`
+# arms the watchdog timer; `sy_core::notify::spawn_watchdog` pings
+# `WATCHDOG=1` at half-interval. `NotifyAccess=main` keeps the
+# notify socket private to the daemon pid.
+#
+# `Restart=on-failure` + `RestartSec=2s` matches SPEC §4
+# Reliability: the daemon validates the ring buffer magic on open
+# and rebuilds it if corrupt, so a crash-restart loop converges
+# quickly on a fresh ring.
+
+[Unit]
+Description=sy-mon collect — host + plane metrics aggregator
+Documentation=https://github.com/dmytrogajewski/sy
+PartOf=sy.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=30s
+TimeoutStartSec=30s
+ExecStart=%h/.local/bin/sy mon collect
+
+Restart=on-failure
+RestartSec=2s
+StartLimitInterval=60s
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sy-mon-collect
+
+[Install]
+WantedBy=sy.target

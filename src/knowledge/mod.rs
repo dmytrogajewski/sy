@@ -23,6 +23,7 @@ pub mod manifest;
 pub mod mcp;
 pub mod normalize;
 pub mod qdrant;
+pub mod repair;
 pub mod runctx;
 pub mod sources;
 pub mod state;
@@ -191,6 +192,18 @@ pub enum KnowledgeCmd {
         #[arg(long)]
         json: bool,
     },
+
+    /// Pre-flight scrub of the qdrant storage tree: quarantines any
+    /// segment containing an empty / unparseable JSON file and sweeps
+    /// stale `.atomicwrite*` leaks from each shard root. Idempotent;
+    /// wired as `ExecStartPre=` on `sy-qdrant.service`. BUG-20260524-2203.
+    RepairQdrant {
+        #[arg(long)]
+        json: bool,
+        /// Suppress non-error output. The systemd unit uses this.
+        #[arg(long, short)]
+        quiet: bool,
+    },
 }
 
 pub fn dispatch(cmd: KnowledgeCmd) -> Result<()> {
@@ -236,6 +249,7 @@ pub fn dispatch(cmd: KnowledgeCmd) -> Result<()> {
         KnowledgeCmd::McpEnable { apply, json } => cli::mcp_enable(apply, json),
         KnowledgeCmd::McpDisable { apply, json } => cli::mcp_disable(apply, json),
         KnowledgeCmd::McpStatus { json } => cli::mcp_status_cmd(json),
+        KnowledgeCmd::RepairQdrant { json, quiet } => cli::repair_qdrant(json, quiet),
     }
 }
 

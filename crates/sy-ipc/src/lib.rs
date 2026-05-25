@@ -27,7 +27,8 @@ pub use envelope::{
     SpanId, TraceId, SCHEMA_VERSION,
 };
 pub use reserved::{
-    BuildInfo, Capabilities, HealthFn, HealthSnapshot, HealthState, SystemMethods,
+    BuildInfo, Capabilities, HealthFn, HealthSnapshot, HealthState, MonHistoryParams,
+    MonSnapshotParams, MonSubscribeParams, SystemMethods, MON_SECONDS_MAX, MON_SECONDS_MIN,
     PROTOCOL_VERSION, SYSTEM_METHODS,
 };
 pub use server::{Handler, Server};

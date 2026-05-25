@@ -29,6 +29,9 @@ mod fido;
 mod gpu;
 mod ipc_cli;
 mod knowledge;
+mod mon;
+#[cfg(feature = "mon-exporter")]
+mod mon_exporter;
 mod net;
 mod notif;
 mod npu;
@@ -40,8 +43,10 @@ mod sound;
 mod stack;
 mod supervision;
 mod syauth;
+mod themes;
 mod vol;
 mod wallpaper;
+mod waybar;
 mod wifi;
 
 /// sy — apply niri rice configs with themes and templating.
@@ -311,6 +316,16 @@ enum Cmd {
         #[command(subcommand)]
         cmd: crash::CrashCmd,
     },
+    /// `sy mon` — on-demand system-health dashboard (sy-mon SPEC §3).
+    /// Subcommands: `collect` (Step 11/13 aggregator), `snapshot`
+    /// (Step 14 CLI consumer), `mcp` (Step 14 stdio MCP server),
+    /// `open` / `close` (Step 16 popup). A bare `sy mon` invocation
+    /// defaults to `open` (Step 19 routes Mod+M through the same
+    /// path via `popup::toggle`).
+    Mon {
+        #[command(subcommand)]
+        cmd: Option<mon::cli::MonCmd>,
+    },
     /// `systemctl --user` / `journalctl --user` wrapper per SPEC §4.7
     /// (arch-supervision Step 3). Subcommands: start|stop|restart|
     /// status|enable|disable|logs. See `sy service --help`.
@@ -366,6 +381,10 @@ fn main() -> Result<()> {
             eprintln!("error: {}", pe.msg);
             std::process::exit(pe.code);
         }
+        if let Some(me) = e.downcast_ref::<mon::MonError>() {
+            eprintln!("error: {}", me.msg);
+            std::process::exit(me.code);
+        }
     }
     result
 }
@@ -409,7 +428,7 @@ fn run() -> Result<()> {
         }
         Cmd::Themes => {
             let (root, _, _) = resolve_repo()?;
-            list_themes(&root)
+            themes::list(&root)
         }
         Cmd::Render { theme, path } => {
             let (root, syf, _) = resolve_repo()?;
@@ -491,6 +510,7 @@ fn run() -> Result<()> {
         Cmd::Doctor { json, only } => doctor::dispatch(doctor::DoctorOpts { json, only }),
         Cmd::Crash { cmd } => crash::dispatch(cmd),
         Cmd::Service { cmd } => supervision::service::dispatch(cmd),
+        Cmd::Mon { cmd } => mon::cli::dispatch(cmd.unwrap_or(mon::cli::default_subcommand())),
     }
 }
 
@@ -561,6 +581,7 @@ fn apply(root: &Path, target: &Path, ctx: &toml::Table, theme: &str, dry: bool) 
 
     let mut changed = 0usize;
     let mut unchanged = 0usize;
+    let mut waybar_touched = false;
     for entry in WalkDir::new(&source).min_depth(1) {
         let entry = entry.context("walk")?;
         if !entry.file_type().is_file() {
@@ -600,7 +621,14 @@ fn apply(root: &Path, target: &Path, ctx: &toml::Table, theme: &str, dry: bool) 
             fs::write(&dest, &rendered).with_context(|| format!("write {}", dest.display()))?;
             println!("  + {}", rel.display());
         }
+        waybar_touched |= rel.starts_with("waybar");
         changed += 1;
+    }
+    // A waybar/* change is invisible until the bar re-reads its
+    // files; without this the operator had to chase SIGUSR2 by
+    // hand after every `sy apply` (CLAUDE.md "no snowflakes").
+    if waybar_touched && !dry {
+        waybar::reload();
     }
 
     println!();
@@ -1034,30 +1062,5 @@ fn install(dry: bool) -> Result<()> {
     let _ = Command::new("restorecon").arg(&dest).status();
 
     println!("  + {} ({} bytes)", dest.display(), bytes.len());
-    Ok(())
-}
-
-fn list_themes(root: &Path) -> Result<()> {
-    let dir = root.join("themes");
-    if !dir.is_dir() {
-        return Ok(());
-    }
-    let mut names: Vec<String> = fs::read_dir(&dir)?
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let p = e.path();
-            (p.extension().and_then(|s| s.to_str()) == Some("toml"))
-                .then(|| {
-                    p.file_stem()
-                        .and_then(|s| s.to_str())
-                        .map(|s| s.to_string())
-                })
-                .flatten()
-        })
-        .collect();
-    names.sort();
-    for n in names {
-        println!("{n}");
-    }
     Ok(())
 }

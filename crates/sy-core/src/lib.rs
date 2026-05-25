@@ -12,9 +12,11 @@
 
 pub mod error;
 pub mod metrics;
+pub mod mon;
 pub mod notify;
 pub mod obs;
 pub mod priority;
+pub mod sensors;
 pub mod trace;
 pub mod workload;
 

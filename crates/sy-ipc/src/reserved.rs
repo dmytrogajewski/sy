@@ -187,7 +187,62 @@ impl SystemMethods {
 
 /// Wire-stable list of reserved method names. Exposed so daemons
 /// can also serve them as a static array if they prefer.
-pub const SYSTEM_METHODS: &[&str] = &["system.describe", "system.health", "system.cancel"];
+///
+/// `system.mon.*` entries are reserved for the `sy mon collect`
+/// aggregator (sy-mon ROADMAP Step 8 / SPEC §4); daemons that host
+/// the aggregator wire dispatch in a later step, but reservation
+/// here keeps the namespace stable for clients enumerating
+/// `system.describe.result.methods`.
+pub const SYSTEM_METHODS: &[&str] = &[
+    "system.describe",
+    "system.health",
+    "system.cancel",
+    "system.mon.snapshot",
+    "system.mon.subscribe",
+    "system.mon.history",
+];
+
+/// Inclusive lower bound for `system.mon.history.seconds` (SPEC §4
+/// MCP schema).
+pub const MON_SECONDS_MIN: u32 = 1;
+
+/// Inclusive upper bound for `system.mon.history.seconds` (SPEC §4
+/// MCP schema — matches the ring-buffer's default 600 s window).
+pub const MON_SECONDS_MAX: u32 = 600;
+
+/// Empty params marker for `system.mon.snapshot`. Carried as a
+/// distinct type so daemons can `serde_json::from_value::<_>` and
+/// surface a `BadRequest` when callers send extraneous fields.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct MonSnapshotParams {}
+
+/// Empty params marker for `system.mon.subscribe` — same rationale
+/// as [`MonSnapshotParams`].
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct MonSubscribeParams {}
+
+/// Params for `system.mon.history` (SPEC §4 MCP schema).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MonHistoryParams {
+    /// Metric name from `crates/sy-core/src/metrics.rs::CORE_METRICS`.
+    pub metric: String,
+    /// Window size in seconds; must be in `[MON_SECONDS_MIN, MON_SECONDS_MAX]`.
+    pub seconds: u32,
+}
+
+impl MonHistoryParams {
+    /// Validate `seconds` against the SPEC §4 inclusive bounds.
+    /// Returns a lightweight `&'static str` reason on violation so
+    /// daemons can wrap into [`ErrorBody`] with their own
+    /// [`ErrorCode`] choice; the aggregator's dispatch arm lands in
+    /// sy-mon ROADMAP Step 13.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.seconds < MON_SECONDS_MIN || self.seconds > MON_SECONDS_MAX {
+            return Err("seconds out of range [1, 600]");
+        }
+        Ok(())
+    }
+}
 
 fn ok(request_id: Ulid, result: serde_json::Value) -> Response {
     Response::Ok {
@@ -401,6 +456,68 @@ mod tests {
                 snap.state
             }
             other => panic!("expected Ok, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mon_methods_listed_in_describe() {
+        // sy-mon ROADMAP Step 8 / SPEC §4: every IPC v1 daemon that
+        // hosts the `sy mon collect` aggregator must advertise the
+        // three reserved `system.mon.*` ops so clients can discover
+        // them via `system.describe`.
+        let sys = SystemMethods::new(
+            build_info(),
+            Arc::new(|| HealthSnapshot {
+                state: HealthState::Ready,
+                status_line: "ok".into(),
+                queue_depth: 0,
+                warm_models: vec![],
+            }),
+            Arc::new(CancelRegistry::new()),
+            Capabilities::baseline(),
+            vec![],
+        );
+        let methods = sys.describe_methods();
+        for expected in [
+            "system.mon.snapshot",
+            "system.mon.subscribe",
+            "system.mon.history",
+        ] {
+            assert!(
+                methods.iter().any(|m| m == expected),
+                "describe_methods() must list {expected}, got {methods:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mon_history_params_validate() {
+        // SPEC §4 MCP schema: `seconds` ∈ [1, 600]. The bound is
+        // enforced at the param-struct level so daemons can reject
+        // out-of-range requests before dispatching into the ring
+        // buffer.
+        let too_low = MonHistoryParams {
+            metric: "sy_cpu_util".into(),
+            seconds: MON_SECONDS_MIN - 1,
+        };
+        assert!(too_low.validate().is_err(), "seconds=0 must fail");
+
+        let too_high = MonHistoryParams {
+            metric: "sy_cpu_util".into(),
+            seconds: MON_SECONDS_MAX + 1,
+        };
+        assert!(too_high.validate().is_err(), "seconds=601 must fail");
+
+        for ok_seconds in [MON_SECONDS_MIN, 42, MON_SECONDS_MAX] {
+            let p = MonHistoryParams {
+                metric: "sy_cpu_util".into(),
+                seconds: ok_seconds,
+            };
+            assert!(
+                p.validate().is_ok(),
+                "seconds={ok_seconds} must pass, got {:?}",
+                p.validate()
+            );
         }
     }
 }

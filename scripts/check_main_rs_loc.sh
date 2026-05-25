@@ -31,8 +31,21 @@
 # + 10 lines for `cargo fmt`-driven re-flow of the pre-existing
 # `Cmd::Syauth` match arm into the multi-line struct destructure
 # rustfmt requires once the file is touched. Running total: 1060.
-# Pass a lower value as $1 when later zones extract logic out of
-# main.rs and the budget should ratchet.
+# Pre-flight for the sy-mon roadmap extracted `list_themes` into
+# `src/themes.rs` (-23 body lines + 1 `mod themes;` declaration +
+# the `list_themes` call site rename — net -22). Running total:
+# 1038, with 22 lines of slack reserved for the sy-mon roadmap's
+# `Cmd::Mon` clap variant (docstring + nested `#[command(
+# subcommand)]` block) + `mod mon;` declaration + dispatch arm
+# that will land in sy-mon Step 11. Plus 6 lines for the waybar
+# auto-reload follow-up: `mod waybar;` declaration + one-line
+# `waybar_touched |= rel.starts_with("waybar")` flag inside the
+# render loop + a four-line `if waybar_touched && !dry {
+# waybar::reload(); }` trailer so `sy apply` is the single deploy
+# verb per CLAUDE.md "no snowflakes" (SIGUSR2 plumbing itself
+# lives in `src/waybar.rs`). Running total: 1066. Pass a lower
+# value as $1 when later zones extract logic out of main.rs and
+# the budget should ratchet.
 #
 # Exit: 0 on under-budget, 1 on over-budget, 2 on usage error.
 set -euo pipefail

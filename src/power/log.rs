@@ -55,7 +55,6 @@ pub const SCHEMA_ID: &str = "sy.power.audit/v1";
 /// thick-report threshold unreachable.
 pub const DEFAULT_MAX_SIZE_BYTES: u64 = 200 * 1024 * 1024;
 
-
 /// Default retention horizon. SPEC §4 "Migration & Compatibility".
 pub const DEFAULT_RETENTION_DAYS: u32 = 7;
 
@@ -547,7 +546,10 @@ fn file_tail_has_size_cap_marker(path: &Path) -> bool {
         return false;
     }
     let mut tail = Vec::with_capacity(MARKER_TAIL_PROBE_BYTES as usize);
-    if f.take(MARKER_TAIL_PROBE_BYTES).read_to_end(&mut tail).is_err() {
+    if f.take(MARKER_TAIL_PROBE_BYTES)
+        .read_to_end(&mut tail)
+        .is_err()
+    {
         return false;
     }
     // The marker line is JSON without internal newlines, so a raw

@@ -162,6 +162,15 @@ impl Doctor {
         Self { checks }
     }
 
+    /// Same as [`Self::with_checks`] but reachable from sibling
+    /// modules at compile time. Used by `sy mon doctor` (sy-mon
+    /// ROADMAP Step 21) to run the dashboard-plumbing checks under a
+    /// private `Doctor` instance without leaking the full check list
+    /// from `Doctor::new()` into the JSON.
+    pub fn with_checks_public(checks: Vec<Box<dyn Check>>) -> Self {
+        Self { checks }
+    }
+
     /// Run all registered checks honoring `opts.only`. Returns the
     /// report; the caller decides what to do with the exit code.
     pub fn run(&self, opts: &DoctorOpts) -> DoctorReport {
@@ -207,6 +216,14 @@ pub fn dispatch(opts: DoctorOpts) -> Result<()> {
     }
     drop(out);
     std::process::exit(report.exit_code());
+}
+
+/// Public re-export of [`write_human`] so sibling modules
+/// (`mon::doctor::dispatch`) can render the human-form report without
+/// re-implementing the same loop. Kept as a thin pass-through so this
+/// module remains the single source of truth for the format.
+pub fn write_human_public<W: Write>(w: &mut W, report: &DoctorReport) -> io::Result<()> {
+    write_human(w, report)
 }
 
 /// Human-readable rendering. Linear-list grouped by `name` prefix

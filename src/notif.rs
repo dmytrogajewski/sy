@@ -466,9 +466,38 @@ fn menu() -> Result<()> {
         MenuAction::Noop => Ok(()),
         MenuAction::Clear => clear(),
         MenuAction::MarkRead(id) => {
+            show_picked(&id)?;
             mark_read(&id, true)?;
             refresh_waybar();
             Ok(())
         }
     }
+}
+
+/// Render the picked notification's body so the user can read it
+/// before it disappears from the unread list. The watcher in
+/// `watch()` filters out `app == "sy"` before persisting, so the
+/// `notify-send -a sy` here renders a mako popup WITHOUT seeding a
+/// new record (which would push the unread counter back up the
+/// moment the user marks one read). Body and summary are passed
+/// verbatim — mako handles its own wrapping / truncation.
+fn show_picked(id: &str) -> Result<()> {
+    let recs = list_recent(SCAN_DAYS);
+    let Some(r) = recs.into_iter().find(|r| r.id == id) else {
+        return Ok(());
+    };
+    let summary = if r.summary.is_empty() {
+        r.app.clone()
+    } else {
+        r.summary.clone()
+    };
+    let body = if r.body.is_empty() {
+        format!("(no body)\n— {} · {}", r.app, format_ts(r.ts))
+    } else {
+        format!("{}\n— {} · {}", r.body, r.app, format_ts(r.ts))
+    };
+    let _ = Command::new("notify-send")
+        .args(["-a", "sy", "-t", "8000", &summary, &body])
+        .status();
+    Ok(())
 }

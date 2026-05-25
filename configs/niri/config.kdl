@@ -210,6 +210,7 @@ binds {
     Mod+A            { spawn "{{ home }}/.local/bin/sy" "agt" "run"; }
     Mod+P            { spawn "{{ home }}/.local/bin/sy" "stack" "toggle"; }
     Mod+S            { spawn "{{ home }}/.local/bin/sy" "silent"; }
+    Mod+M hotkey-overlay-title="sy mon — system dashboard" { spawn "{{ home }}/.local/bin/sy" "popup" "mon"; }
     Mod+Escape allow-inhibiting=false { spawn "swaylock" "-f"; }
 
     // Session

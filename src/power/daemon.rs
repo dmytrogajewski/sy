@@ -1091,6 +1091,32 @@ pub fn production_npu_actuator() -> NpuActuator {
     )
 }
 
+/// sy-mon Step 20: install the power plane's Prometheus UDS exporter
+/// at `$XDG_RUNTIME_DIR/sy/power/metrics.sock`. Must be called from
+/// inside the powerd tokio runtime so the shared installer's accept
+/// task lands on the right runtime.
+#[cfg(feature = "mon-exporter")]
+async fn install_power_mon_exporter() -> anyhow::Result<sy_core::obs::mon_exporter::UdsGuard> {
+    let path = crate::mon_exporter::socket_path_for("power")?;
+    let guard = sy_core::obs::mon_exporter::install(path.clone())
+        .map_err(|e| anyhow::anyhow!("install power mon-exporter at {}: {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(guard.path()) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            let _ = std::fs::set_permissions(guard.path(), perms);
+        }
+    }
+    tracing::info!(
+        target: "sy::power::daemon",
+        path = %guard.path().display(),
+        "power mon-exporter bound"
+    );
+    Ok(guard)
+}
+
 /// `sy-powerd` entrypoint dispatched from `cli::dispatch(PowerCmd::Daemon)`.
 ///
 /// Step 10 scope (no actuation):
@@ -1135,6 +1161,29 @@ async fn run_async() -> anyhow::Result<()> {
         }
     }
     tracing::info!(target: "sy::power::daemon", socket = %sock.display(), "sy-powerd listening");
+
+    // sy-mon Step 20: bind the power plane's Prometheus UDS at
+    // `$XDG_RUNTIME_DIR/sy/power/metrics.sock`. Direct install on the
+    // current tokio runtime; the returned guard lives for the
+    // daemon's lifetime and unlinks the socket on Drop. Bind failure
+    // is non-fatal — `sy mon doctor` (Step 21) is the alarm surface.
+    // The roadmap step lists `src/power/cli.rs` for this wiring but
+    // the actual daemon entrypoint is here (`power/daemon.rs::run`);
+    // wiring it in `cli.rs` would attach the exporter to the short-
+    // lived `sy power` CLI dispatcher rather than the long-lived
+    // `sy-powerd` process the aggregator actually scrapes.
+    #[cfg(feature = "mon-exporter")]
+    let _mon_exporter = match install_power_mon_exporter().await {
+        Ok(g) => Some(g),
+        Err(e) => {
+            tracing::warn!(
+                target: "sy::power::daemon",
+                error = %format!("{e:#}"),
+                "power mon-exporter failed to bind; continuing without metrics socket"
+            );
+            None
+        }
+    };
 
     // SPEC §4 NFR Reliability: install a panic hook that writes the
     // vendor defaults synchronously before the panic propagates. The

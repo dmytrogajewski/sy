@@ -35,6 +35,11 @@
 //!   is described so doctor can flag it as "no producer yet".
 //! - Histogram `sy_workload_latency_seconds{kind}` — scheduler emits
 //!   the dispatch-to-completion delta on every run.
+//! - Gauge `sy_supervisor_plane_state{plane, state}` — sy-mon Step 20:
+//!   one row per (plane, logical-state) pair, value 1 when the plane
+//!   is currently in that state and 0 otherwise. Emitted by
+//!   `sy mon collect` on every tick from its supervisor sensor so
+//!   the supervisor panel has data even when no plane is restarting.
 
 use metrics::{describe_counter, describe_gauge, describe_histogram};
 
@@ -92,6 +97,10 @@ pub const CORE_METRICS: &[CoreMetric] = &[
         name: "sy_workload_latency_seconds",
         kind: MetricKind::Histogram,
     },
+    CoreMetric {
+        name: "sy_supervisor_plane_state",
+        kind: MetricKind::Gauge,
+    },
 ];
 
 /// Pre-declare every catalogue entry with the installed `metrics`
@@ -130,6 +139,9 @@ fn describe_text(name: &str) -> &'static str {
         "sy_workload_latency_seconds" => {
             "workload dispatch-to-completion latency, by workload kind"
         }
+        "sy_supervisor_plane_state" => {
+            "supervised plane state indicator (1 when active in that state, 0 otherwise)"
+        }
         _ => "",
     }
 }
@@ -155,6 +167,10 @@ mod tests {
             "sy_policy_denials_total",
             "sy_ipc_errors_total",
             "sy_npu_temp_celsius",
+            // sy-mon Step 20 (SPEC §4 supervisor panel): added so
+            // every supervised plane has a non-zero metric for the
+            // `sy mon` supervisor panel.
+            "sy_supervisor_plane_state",
         ]
         .into_iter()
         .collect();

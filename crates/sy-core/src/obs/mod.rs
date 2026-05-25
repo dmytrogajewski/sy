@@ -23,6 +23,14 @@
 //! appender. Dropping it before process exit risks losing buffered
 //! log lines.
 
+// sy-mon Step 9 (SPEC §3 SCOPE item 1 "`mon-exporter` feature on every
+// plane"): the Prometheus UDS exposition surface. Gated so default
+// builds don't link hyper (SPEC §6 risk mitigation: "second HTTP
+// stack"). Step 10 (aiplane) and Step 20 (remaining planes) will call
+// `mon_exporter::install(path)` from their daemon entrypoints.
+#[cfg(feature = "mon-exporter")]
+pub mod mon_exporter;
+
 mod otel_fmt;
 pub mod panic;
 mod trace_ctx;

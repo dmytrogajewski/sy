@@ -336,6 +336,13 @@ sy power apply
 sy power show --json
 sy power mcp
 
+# mon — system health popup + 1 Hz aggregator
+sy mon                             # toggle the layer-shell popup (Super+m)
+sy mon snapshot [--json]           # one-shot snapshot from the aggregator
+sy mon doctor [--json]             # plumbing checks (folds into sy doctor)
+sy mon mcp                         # MCP stdio server (system.mon.{snapshot,history})
+sy mon waybar                      # waybar custom-module tile (ok/degraded/down)
+
 # agent runner
 sy agt run <prompt> [--profile <name>]
 
@@ -385,6 +392,7 @@ Mod key is **Super** (Mod4). Full list below.
 | `Print` / `Shift+Print`           | Interactive / whole-screen screenshot → clipboard |
 | `Super+Print` / `Super+Shift+Print` | Whole-screen / active-window → `~/Pictures/` |
 | Volume / brightness / media keys  | Work out of the box                      |
+| `Super+m`                         | Toggle `sy mon` system health popup      |
 
 ### Niri vs sway
 

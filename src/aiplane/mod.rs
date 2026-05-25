@@ -32,6 +32,8 @@
 pub mod cli;
 pub mod error;
 pub mod ipc;
+#[cfg(feature = "mon-exporter")]
+pub mod mon_exporter;
 pub mod reexec;
 pub mod registry;
 pub mod scheduler;

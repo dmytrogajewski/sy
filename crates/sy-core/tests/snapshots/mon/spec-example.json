@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "captured_at_ms": 1747900000000,
+  "cpu": {
+    "per_core_util_pct": [
+      12.3,
+      4.1
+    ],
+    "freq_mhz": [
+      3800,
+      3800
+    ],
+    "temp_c": 58.2,
+    "load_avg": [
+      1.42,
+      1.1,
+      0.95
+    ]
+  },
+  "mem": {
+    "total_mib": 32768,
+    "used_mib": 14210,
+    "swap_used_mib": 0
+  },
+  "gpu": [
+    {
+      "vendor": "amd",
+      "name": "Radeon 890M",
+      "util_pct": 4,
+      "vram_used_mib": 512,
+      "vram_total_mib": 8192,
+      "temp_c": 49.0,
+      "power_w": 6.3
+    }
+  ],
+  "npu": {
+    "vendor": "amd-xdna",
+    "util_pct": 73,
+    "active": true,
+    "fw_version": "1.5.10",
+    "power_w": 4.2,
+    "holders": [
+      "sy-aiplane"
+    ]
+  },
+  "net": [
+    {
+      "name": "wlan0",
+      "rx_bytes": 1234567,
+      "tx_bytes": 89012
+    }
+  ],
+  "disk": [
+    {
+      "name": "nvme0n1",
+      "reads": 4321,
+      "writes": 765,
+      "io_in_progress": 0
+    }
+  ],
+  "aiplane": {
+    "queue_depth": {
+      "embed": 0,
+      "rerank": 2
+    },
+    "warm": {
+      "embed": 1,
+      "rerank": 1
+    },
+    "latency_p99_ms": {
+      "embed": 18.4,
+      "rerank": 41.0
+    },
+    "errors_total": 0
+  },
+  "knowledge": {
+    "collections": 4,
+    "docs_indexed": 17402,
+    "embed_throughput_docs_per_s": 32.1,
+    "search_qps": 0.4
+  },
+  "agents": {
+    "running": 2,
+    "rss_total_mib": 412,
+    "policy_denials_recent": 0
+  },
+  "power": {
+    "current_arm": "balanced",
+    "dwell_pct": {
+      "balanced": 0.71,
+      "perf": 0.18,
+      "save": 0.11
+    },
+    "regret_cum": 0.034
+  },
+  "supervisor": {
+    "planes": [
+      {
+        "name": "aiplane",
+        "state": "active",
+        "restarts": 0
+      }
+    ]
+  },
+  "errors": []
+}

@@ -487,6 +487,12 @@ sandbox can register without waiting.
   UDS exporter for now. (Step 7 lands the catalogue +
   emissions; the snapshot endpoint and the UDS exporter remain
   Zone 6.2 follow-ups per SPEC §3.3 Zone 6 "OUT".)
+  **Update (sy-mon ROADMAP Step 22):** the UDS exporter ships as
+  `sy-mon-collect.service` — each plane exposes a Prometheus-text
+  socket under `$XDG_RUNTIME_DIR/sy/<plane>/metrics.sock` and the
+  aggregator scrapes them at 1 Hz. The remote-scrape path is
+  documented in `docs/admin/mon-remote.md` (`socat` UDS-to-TCP
+  bridge), matching SPEC §3 anti-goals.
 
 ---
 

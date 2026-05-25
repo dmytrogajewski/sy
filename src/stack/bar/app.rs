@@ -278,6 +278,39 @@ pub fn run() -> anyhow::Result<()> {
     // a missed `STOPPING=1` only costs us a `Result=signal` label
     // in `journalctl`, not correctness.
     let _watchdog = sy_core::notify::spawn_watchdog();
+
+    // sy-mon Step 20: bring up the stack-bar plane's Prometheus UDS
+    // exposition surface at $XDG_RUNTIME_DIR/sy/stack-bar/metrics.sock.
+    // iced owns this thread once we hand control to `daemon(...).run()`
+    // below, so the shared installer's tokio-runtime requirement is
+    // satisfied by [`crate::mon_exporter::PlaneMonExporter`], which
+    // spawns its own runtime thread. The guard is moved into a leak
+    // so it lives for the whole process — iced never returns from
+    // `run()` on a normal exit, and the OS reclaims the socket file
+    // on process tear-down (the supervisor restart cycle is the
+    // happy-path cleanup). Bind failure is non-fatal; see Step 12.
+    #[cfg(feature = "mon-exporter")]
+    match crate::mon_exporter::spawn("stack-bar") {
+        Ok(guard) => {
+            tracing::info!(
+                target: "sy::stack::bar",
+                path = %guard.path().display(),
+                "stack-bar mon-exporter bound"
+            );
+            // iced takes ownership of this thread; leak the guard so
+            // it lives until process exit. Drop-on-exit happens via
+            // the OS's normal teardown.
+            Box::leak(Box::new(guard));
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "sy::stack::bar",
+                error = %format!("{e:#}"),
+                "stack-bar mon-exporter failed to bind; continuing without metrics socket"
+            );
+        }
+    }
+
     // Spawn IPC listener; ops land on a channel we drain inside `update`.
     let (tx, rx) = mpsc::channel();
     let _ = ipc::serve(tx);

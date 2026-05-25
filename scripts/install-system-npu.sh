@@ -16,12 +16,21 @@
 #      — existing xrt-smi pmode=turbo primer, refreshed in case the
 #        repo version drifted from /etc.
 #
-#   4. dracut --force for the running kernel (so the new omit_drivers
+#   4. /etc/profile.d/ryzenai.sh
+#      — silent + idempotent shape of the ryzenai-rpm profile snippet.
+#        Upstream `ryzenai-1.7.1-1.fc43` ships a noisy version that
+#        prints a four-line XRT banner in every interactive shell and
+#        re-prepends $PATH/$LD_LIBRARY_PATH/$PYTHONPATH on each nest.
+#        Re-run this script after every ryzenai rpm refresh —
+#        Fedora's rpmsave behaviour preserves any modification as
+#        .rpmsave but installs the upstream copy. BUG-20260524-2235.
+#
+#   5. dracut --force for the running kernel (so the new omit_drivers
 #      actually takes effect on the next boot).
 #
-#   5. systemctl daemon-reload + enable --now for both units.
+#   6. systemctl daemon-reload + enable --now for both units.
 #
-#   6. If amdxdna is currently loaded but /dev/accel/accel0 is missing
+#   7. If amdxdna is currently loaded but /dev/accel/accel0 is missing
 #      (the failure mode that prompted this fix), rmmod + modprobe so
 #      the NPU comes up THIS session without a reboot.
 #
@@ -39,10 +48,12 @@ REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DRACUT_SRC="$REPO_ROOT/configs/dracut/sy-amdxdna-defer.conf"
 LOAD_SRC="$REPO_ROOT/configs/systemd/system/sy-amdxdna-load.service"
 PERF_SRC="$REPO_ROOT/configs/systemd/system/sy-npu-perf.service"
+RYZENAI_PROFILE_SRC="$REPO_ROOT/configs/profile.d/ryzenai.sh"
 
 DRACUT_DST="/etc/dracut.conf.d/sy-amdxdna-defer.conf"
 LOAD_DST="/etc/systemd/system/sy-amdxdna-load.service"
 PERF_DST="/etc/systemd/system/sy-npu-perf.service"
+RYZENAI_PROFILE_DST="/etc/profile.d/ryzenai.sh"
 
 # install_if_changed src dst — diff-aware copy; returns 0 always.
 # Prints a single "==> updated <dst>" line iff content changed.
@@ -60,9 +71,10 @@ install_if_changed() {
 CHANGED=0
 
 echo "==> installing system files"
-install_if_changed "$DRACUT_SRC" "$DRACUT_DST"
-install_if_changed "$LOAD_SRC"   "$LOAD_DST"
-install_if_changed "$PERF_SRC"   "$PERF_DST"
+install_if_changed "$DRACUT_SRC"          "$DRACUT_DST"
+install_if_changed "$LOAD_SRC"            "$LOAD_DST"
+install_if_changed "$PERF_SRC"            "$PERF_DST"
+install_if_changed "$RYZENAI_PROFILE_SRC" "$RYZENAI_PROFILE_DST"
 
 KVER=$(uname -r)
 INITRAMFS="/boot/initramfs-${KVER}.img"

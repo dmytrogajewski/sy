@@ -1,24 +1,17 @@
 //! `sy npu --waybar` — emits a waybar JSON tile for the AMD Ryzen AI
-//! NPU. Reports actual utilisation %, computed from the kernel's
-//! pm_runtime counters at `/sys/.../power/runtime_{active,suspended}_time`:
+//! NPU. Adapter over [`sy_core::sensors::npu_xdna::sample()`] — the
+//! pm_runtime delta logic, holders walk, and `amdgpu_top --xdna`
+//! fallback all live in `crates/sy-core/src/sensors/npu_xdna.rs` so
+//! `sy mon` and the waybar tile share one read path per metric
+//! (sy-mon ROADMAP Step 5).
 //!
-//!     util_pct = Δactive / (Δactive + Δsuspended) over the
-//!     interval between this and the previous sample.
-//!
-//! We persist the last sample in $XDG_RUNTIME_DIR/sy-npu.last so each
-//! waybar tick (2 s by default) gets a real 2-second utilisation
-//! window. The first tick after boot/reset has no prior sample → we
-//! fall back to the binary D0/D3 power-state read.
-
-use std::path::{Path, PathBuf};
+//! The only sysfs/procfs read still living here is `/proc/cpuinfo`
+//! for the CPU model name in the tooltip — a UI concern that the
+//! sensor crate deliberately doesn't carry.
 
 use anyhow::Result;
 
-const ACCEL_DEV: &str = "/dev/accel/accel0";
-const POWER_STATE_PATH: &str = "/sys/class/accel/accel0/device/power_state";
-const FW_VERSION_PATH: &str = "/sys/class/accel/accel0/device/fw_version";
-const RUNTIME_ACTIVE: &str = "/sys/class/accel/accel0/device/power/runtime_active_time";
-const RUNTIME_SUSPENDED: &str = "/sys/class/accel/accel0/device/power/runtime_suspended_time";
+use sy_core::sensors::npu_xdna::{self, NpuXdnaSample};
 
 const BARS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
@@ -36,7 +29,8 @@ struct Snapshot {
 pub fn run(waybar: bool) -> Result<()> {
     let s = snapshot();
     if waybar {
-        return waybar_out(&s);
+        println!("{}", waybar_out(&s));
+        return Ok(());
     }
     if !s.present {
         println!("no AMD XDNA NPU detected (no /dev/accel/accel0)");
@@ -62,97 +56,30 @@ pub fn run(waybar: bool) -> Result<()> {
     Ok(())
 }
 
+/// Build the local tile view-model by projecting a `NpuXdnaSample`
+/// from the shared sensor. The sample carries the pm_runtime delta,
+/// the holders list, the BDF, and the firmware string; the only
+/// per-tile bit added here is the friendly CPU-model name for the
+/// tooltip (a UI concern that doesn't belong in `sy-core`).
 fn snapshot() -> Snapshot {
-    let mut s = Snapshot::default();
-    if !Path::new(ACCEL_DEV).exists() {
-        return s;
+    project(npu_xdna::sample())
+}
+
+fn project(sample: NpuXdnaSample) -> Snapshot {
+    if !sample.present {
+        return Snapshot::default();
     }
-    s.present = true;
-    s.active = std::fs::read_to_string(POWER_STATE_PATH)
-        .ok()
-        .map(|v| v.trim() == "D0")
-        .unwrap_or(false);
-    s.util_pct = read_util_pct(s.active);
-    s.fw_version = std::fs::read_to_string(FW_VERSION_PATH)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .unwrap_or_default();
-    s.bdf = read_bdf().unwrap_or_default();
-    s.name = read_pci_name(&s.bdf);
-    s.holders = find_holders();
-    s
-}
-
-/// Compute NPU utilisation as a percentage over the interval since the
-/// previous waybar tick. Falls back to a binary 100/0 read of
-/// `power_state` if we have no prior sample (first tick, missing
-/// $XDG_RUNTIME_DIR, etc.).
-fn read_util_pct(active_now: bool) -> u32 {
-    let Some((active, suspended)) = read_pm_counters() else {
-        return if active_now { 100 } else { 0 };
-    };
-    let cache = sample_cache_path();
-    let prev = std::fs::read_to_string(&cache).ok().and_then(parse_sample);
-    if let Err(e) = persist_sample(&cache, active, suspended) {
-        // Non-fatal: we just won't have a delta next tick.
-        let _ = e;
+    let bdf = sample.bdf.unwrap_or_default();
+    let name = read_pci_name(&bdf);
+    Snapshot {
+        present: true,
+        active: sample.active,
+        util_pct: sample.util_pct,
+        fw_version: sample.fw_version.unwrap_or_default(),
+        holders: sample.holders,
+        bdf,
+        name,
     }
-    let Some((p_active, p_suspended)) = prev else {
-        return if active_now { 100 } else { 0 };
-    };
-    let d_active = active.saturating_sub(p_active);
-    let d_suspended = suspended.saturating_sub(p_suspended);
-    let total = d_active + d_suspended;
-    if total == 0 {
-        // No time elapsed in either bucket → the device is either
-        // perfectly idle (D3 the whole time, both counters frozen
-        // because of runtime PM) or perfectly busy. The current
-        // power_state read disambiguates.
-        return if active_now { 100 } else { 0 };
-    }
-    ((d_active * 100) / total).min(100) as u32
-}
-
-fn read_pm_counters() -> Option<(u64, u64)> {
-    let a = std::fs::read_to_string(RUNTIME_ACTIVE).ok()?;
-    let s = std::fs::read_to_string(RUNTIME_SUSPENDED).ok()?;
-    let av: u64 = a.trim().parse().ok()?;
-    let sv: u64 = s.trim().parse().ok()?;
-    Some((av, sv))
-}
-
-fn parse_sample(s: String) -> Option<(u64, u64)> {
-    let mut it = s.split_whitespace();
-    let a: u64 = it.next()?.parse().ok()?;
-    let s: u64 = it.next()?.parse().ok()?;
-    Some((a, s))
-}
-
-fn persist_sample(path: &Path, active: u64, suspended: u64) -> std::io::Result<()> {
-    if let Some(p) = path.parent() {
-        let _ = std::fs::create_dir_all(p);
-    }
-    std::fs::write(path, format!("{active} {suspended}\n"))
-}
-
-fn sample_cache_path() -> PathBuf {
-    if let Ok(d) = std::env::var("XDG_RUNTIME_DIR") {
-        if !d.is_empty() {
-            return PathBuf::from(d).join("sy-npu.last");
-        }
-    }
-    let uid = unsafe { libc::getuid() };
-    PathBuf::from(format!("/run/user/{uid}/sy-npu.last"))
-}
-
-fn read_bdf() -> Option<String> {
-    let link = std::fs::read_link("/sys/class/accel/accel0/device").ok()?;
-    Some(
-        link.file_name()?
-            .to_string_lossy()
-            .trim_start_matches("0000:")
-            .to_string(),
-    )
 }
 
 fn read_pci_name(_bdf: &str) -> String {
@@ -184,47 +111,9 @@ fn read_pci_name(_bdf: &str) -> String {
     }
 }
 
-fn find_holders() -> Vec<String> {
-    let mut holders = Vec::new();
-    let Ok(rd) = std::fs::read_dir("/proc") else {
-        return holders;
-    };
-    for entry in rd.flatten() {
-        let name = entry.file_name();
-        let n = name.to_string_lossy();
-        if !n.chars().all(|c| c.is_ascii_digit()) {
-            continue;
-        }
-        let pid = n.into_owned();
-        let fd_dir: PathBuf = entry.path().join("fd");
-        let Ok(fds) = std::fs::read_dir(&fd_dir) else {
-            continue;
-        };
-        let mut hit = false;
-        for fd in fds.flatten() {
-            if let Ok(target) = std::fs::read_link(fd.path()) {
-                if target.to_string_lossy() == ACCEL_DEV {
-                    hit = true;
-                    break;
-                }
-            }
-        }
-        if hit {
-            let comm = std::fs::read_to_string(entry.path().join("comm"))
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|_| format!("pid {pid}"));
-            holders.push(comm);
-        }
-    }
-    holders.sort();
-    holders.dedup();
-    holders
-}
-
-fn waybar_out(s: &Snapshot) -> Result<()> {
+fn waybar_out(s: &Snapshot) -> String {
     if !s.present {
-        println!(r#"{{"text":"","class":"absent","tooltip":""}}"#);
-        return Ok(());
+        return r#"{"text":"","class":"absent","tooltip":""}"#.to_string();
     }
     let bar = BARS[(s.util_pct as usize * (BARS.len() - 1) / 100).min(BARS.len() - 1)];
     let class = if s.util_pct >= 70 {
@@ -253,9 +142,41 @@ fn waybar_out(s: &Snapshot) -> Result<()> {
         holders,
     );
     // 󰍛 = nerd-font chip glyph; matches the CPU/RAM bar styling.
-    println!(
+    format!(
         r#"{{"text":"󰍛 {bar}","class":"{class}","tooltip":"{tooltip}","percentage":{pct}}}"#,
         pct = s.util_pct
-    );
-    Ok(())
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Golden file: the byte-exact waybar JSON the tile emits for a
+    /// known synthetic snapshot. Locks the tooltip's `\n` escapes and
+    /// the Nerd Font chip glyph so a `configs/waybar/*` consumer that
+    /// already parses these strings keeps working after the read-path
+    /// migration to `sy_core::sensors::npu_xdna`.
+    const GOLDEN_NPU: &str = include_str!("../tests/snapshots/waybar/npu.json");
+    const GOLDEN_NPU_ABSENT: &str = include_str!("../tests/snapshots/waybar/npu-absent.json");
+
+    #[test]
+    fn waybar_output_matches_snapshot() {
+        let s = Snapshot {
+            present: true,
+            active: true,
+            util_pct: 73,
+            fw_version: "1.5.10".to_string(),
+            holders: vec!["sy-aiplane".to_string()],
+            bdf: "c5:00.1".to_string(),
+            name: "NPU on 9 HX 370".to_string(),
+        };
+        assert_eq!(format!("{}\n", waybar_out(&s)), GOLDEN_NPU);
+    }
+
+    #[test]
+    fn waybar_absent_matches_snapshot() {
+        let s = Snapshot::default();
+        assert_eq!(format!("{}\n", waybar_out(&s)), GOLDEN_NPU_ABSENT);
+    }
 }

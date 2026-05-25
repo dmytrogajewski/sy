@@ -22,8 +22,11 @@ pub fn run() -> Result<()> {
 
 #[cfg(feature = "bar-iced")]
 mod app;
+// `pub(crate)` so `src/mon/theme.rs` (Step 15) can re-export the
+// `Palette` tokens through its four-slot projection. Visibility is
+// crate-local; no external consumer.
 #[cfg(feature = "bar-iced")]
-mod theme;
+pub(crate) mod theme;
 
 #[cfg(feature = "bar-iced")]
 pub fn run() -> Result<()> {

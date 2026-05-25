@@ -39,7 +39,7 @@ use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 
 use super::{
-    cli, embed, ipc, manifest, qdrant, runctx::RunCtx, sources, state, status, QDRANT_PORT,
+    cli, embed, ipc, manifest, qdrant, repair, runctx::RunCtx, sources, state, status, QDRANT_PORT,
 };
 use sources::SourceMode;
 
@@ -93,6 +93,49 @@ pub fn run() -> Result<()> {
         );
         None
     } else {
+        // BUG-20260524-2203: scrub the storage tree before spawning so a
+        // single segment with an empty / unparseable JSON file (the
+        // failure mode after an ungraceful shutdown) doesn't panic
+        // qdrant during `Collection::load` and brick the plane until a
+        // human runs `find -size 0` by hand. The systemd-managed path
+        // gets the same scrub via `ExecStartPre=` on
+        // `sy-qdrant.service`, but daemon spawns happen here.
+        match state::qdrant_storage_dir() {
+            Ok(storage) => match repair::quarantine_corrupt_segments(&storage) {
+                Ok(report) if !report.quarantined.is_empty() || report.swept_atomicwrite > 0 => {
+                    tracing::warn!(
+                        target: "sy::knowledge::daemon",
+                        storage = %storage.display(),
+                        quarantined = report.quarantined.len(),
+                        swept_atomicwrite = report.swept_atomicwrite,
+                        shards_scanned = report.shards_scanned,
+                        "qdrant repair pass mutated storage before spawn"
+                    );
+                    for q in &report.quarantined {
+                        tracing::warn!(
+                            target: "sy::knowledge::daemon",
+                            collection = %q.collection,
+                            shard = %q.shard,
+                            segment = %q.segment_id,
+                            new_path = %q.new_path.display(),
+                            reason = %q.reason,
+                            "quarantined corrupt segment"
+                        );
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(
+                    target: "sy::knowledge::daemon",
+                    error = %format!("{e:#}"),
+                    "qdrant repair pass errored; continuing to spawn anyway"
+                ),
+            },
+            Err(e) => tracing::warn!(
+                target: "sy::knowledge::daemon",
+                error = %format!("{e:#}"),
+                "qdrant storage_dir unresolved; skipping repair pass"
+            ),
+        }
         let child = spawn_qdrant().context("spawn qdrant")?;
         if let Err(e) = qdrant::wait_ready(20) {
             let mut c = child;
@@ -109,6 +152,74 @@ pub fn run() -> Result<()> {
     // supervisor is required: if it can't bring the workers up the
     // daemon refuses to start rather than degrading silently.
     init_aiplane_supervisor().context("init aiplane supervisor")?;
+
+    // sy-mon Step 10: bind the aiplane plane's Prometheus UDS
+    // exposition surface at $XDG_RUNTIME_DIR/sy/aiplane/metrics.sock.
+    // The shared installer in `sy_core::obs::mon_exporter` requires
+    // an active tokio runtime, so the wrapper module owns a dedicated
+    // runtime thread; the returned guard holds the install handle for
+    // the daemon's lifetime and unlinks the socket on Drop. Gated on
+    // `mon-exporter` so `--no-default-features` builds skip the bind.
+    #[cfg(feature = "mon-exporter")]
+    let _aiplane_mon_exporter = match crate::aiplane::mon_exporter::spawn() {
+        Ok(g) => {
+            tracing::info!(
+                target: "sy::knowledge::daemon",
+                path = %g.path().display(),
+                "aiplane mon-exporter bound"
+            );
+            Some(g)
+        }
+        Err(e) => {
+            // Bind failure is non-fatal: the aggregator (Step 12)
+            // tolerates a missing per-plane socket as a zero-metric
+            // source, and `sy mon doctor` (Step 21) is the surface
+            // for raising the alarm. Refusing to start the daemon
+            // just because the metrics socket failed would be a
+            // disproportionate response.
+            tracing::warn!(
+                target: "sy::knowledge::daemon",
+                error = %format!("{e:#}"),
+                "aiplane mon-exporter failed to bind; continuing without metrics socket"
+            );
+            None
+        }
+    };
+
+    // sy-mon Step 20: expose the knowledge plane at
+    // `$XDG_RUNTIME_DIR/sy/knowledge/metrics.sock`. The knowledge
+    // daemon and the aiplane plane share one OS process — sy-core's
+    // `mon_exporter::install` sets a *process-global* `metrics`
+    // recorder, so a second `install` call would fail with
+    // `AlreadyInstalled` and unlink its socket. Instead, expose the
+    // knowledge plane as a symlink onto the aiplane UDS that was
+    // bound above: every metric emitted from anywhere in this process
+    // (including `knowledge::*` call sites) flows through the same
+    // global recorder, so the exposition body at either path is
+    // identical. The aggregator (Step 12) `connect()`s through the
+    // symlink and `sy mon doctor` (Step 21) sees a healthy
+    // `knowledge` plane.
+    #[cfg(feature = "mon-exporter")]
+    let _knowledge_mon_exporter_symlink =
+        match install_knowledge_metrics_symlink(_aiplane_mon_exporter.as_ref().map(|g| g.path())) {
+            Ok(Some(p)) => {
+                tracing::info!(
+                    target: "sy::knowledge::daemon",
+                    path = %p.display(),
+                    "knowledge mon-exporter symlink installed"
+                );
+                Some(p)
+            }
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(
+                    target: "sy::knowledge::daemon",
+                    error = %format!("{e:#}"),
+                    "knowledge mon-exporter symlink failed; continuing without metrics socket"
+                );
+                None
+            }
+        };
 
     let (daemon_tx, daemon_rx) = mpsc::channel::<DaemonOp>();
 
@@ -931,6 +1042,49 @@ fn run_full_resync(
         active_manifests,
     );
     Ok(())
+}
+
+/// sy-mon Step 20: create `$XDG_RUNTIME_DIR/sy/knowledge/metrics.sock`
+/// as a symlink pointing at the aiplane mon-exporter socket bound in
+/// the same process. Returns the symlink path on success, `None` when
+/// the aiplane bind itself didn't happen (e.g. `XDG_RUNTIME_DIR` unset
+/// in a stripped-down dev shell), and `Err` only when the path is
+/// computable but the symlink call fails (EACCES on the runtime dir
+/// or `sym_target` is itself missing).
+///
+/// The symlink is best-effort cleaned up on daemon shutdown by the
+/// caller binding the return value into a guard — but it lives under
+/// `$XDG_RUNTIME_DIR/sy/knowledge/`, which is a tmpfs subtree, so a
+/// stale symlink across a reboot is harmless.
+#[cfg(feature = "mon-exporter")]
+fn install_knowledge_metrics_symlink(sym_target: Option<&Path>) -> Result<Option<PathBuf>> {
+    let Some(target) = sym_target else {
+        return Ok(None);
+    };
+    let link = match crate::mon_exporter::socket_path_for("knowledge") {
+        Ok(p) => p,
+        Err(_) => return Ok(None),
+    };
+    if let Some(parent) = link.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("mkdir -p {}", parent.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(parent) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o700);
+                let _ = std::fs::set_permissions(parent, perms);
+            }
+        }
+    }
+    // Replace any stale link/file from a previous run; we want the
+    // current daemon's UDS, not a dangling pointer.
+    let _ = std::fs::remove_file(&link);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, &link)
+        .with_context(|| format!("symlink {} -> {}", link.display(), target.display()))?;
+    Ok(Some(link))
 }
 
 fn throughput(chunks: usize, ms: u128) -> Option<f32> {

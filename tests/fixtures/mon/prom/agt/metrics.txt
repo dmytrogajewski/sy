@@ -1,0 +1,3 @@
+# HELP sy_policy_denials_total Sandbox policy denials.
+# TYPE sy_policy_denials_total counter
+sy_policy_denials_total{tool="net"} 0

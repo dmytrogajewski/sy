@@ -61,7 +61,15 @@ fn waybar_out() -> Result<()> {
         "powersave" => "powersave",
         _ => "balanced",
     };
-    let tooltip = format!("power profile: {active}\\nclick: power menu");
+    // Pull the onboarding "learning Xd Yh" line off the sy-power
+    // tile into this (perf) tooltip when the orchestrator is still
+    // in the rules-baseline window. None once onboarding is
+    // complete — the line drops cleanly. Filesystem-only, no IPC.
+    let learning = crate::power::status::live_onboarding_hint();
+    let tooltip = match learning {
+        Some(hint) => format!("power profile: {active}\\nsy: {hint}\\nclick: power menu"),
+        None => format!("power profile: {active}\\nclick: power menu"),
+    };
     let mut out = std::io::stdout().lock();
     writeln!(
         out,

@@ -1,0 +1,3 @@
+# HELP sy_ipc_errors_total IPC error responses.
+# TYPE sy_ipc_errors_total counter
+sy_ipc_errors_total{endpoint="aiplane",kind="protocol"} 0

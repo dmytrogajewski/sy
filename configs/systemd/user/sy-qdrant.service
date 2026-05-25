@@ -28,6 +28,15 @@ Environment=QDRANT__SERVICE__HOST=127.0.0.1
 Environment=QDRANT__STORAGE__STORAGE_PATH=%h/.local/share/sy/knowledge/qdrant
 Environment=QDRANT__STORAGE__SNAPSHOTS_PATH=%h/.local/share/sy/knowledge/qdrant/snapshots
 Environment=QDRANT__TELEMETRY_DISABLED=true
+# BUG-20260524-2203: scrub the storage tree before qdrant boots.
+# Without this, one segment with an empty / unparseable JSON file
+# (left over from a SIGKILL / OOM mid-atomicwrite) panics qdrant
+# inside `Collection::load`, systemd burns through StartLimitBurst
+# in under a second, and the knowledge plane plus the NPU embedder
+# it hosts both stay dark until a human runs `find -size 0` by
+# hand. `sy knowledge repair-qdrant` is idempotent and exits 0 on a
+# clean tree, so this is safe to run unconditionally.
+ExecStartPre=%h/.local/bin/sy knowledge repair-qdrant --quiet
 ExecStart=%h/.local/bin/qdrant
 Restart=on-failure
 

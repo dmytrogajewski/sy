@@ -16,6 +16,7 @@ use serde_json::json;
 use super::{
     chunk, embed, exit, extract, ipc, manifest,
     qdrant::{self, Point, PointPayload},
+    repair,
     runctx::RunCtx,
     sources::{self, SourceMode},
     state, status,
@@ -641,6 +642,41 @@ pub fn mcp_disable(apply: bool, json_out: bool) -> Result<()> {
     }
     let only: Vec<String> = MCP_DETECTOR_IDS.iter().map(|s| s.to_string()).collect();
     crate::auto::configure(apply, json_out, &only, &[], false)
+}
+
+/// `sy knowledge repair-qdrant` — pre-flight scrub of the qdrant
+/// storage tree. Wired as `ExecStartPre=` on `sy-qdrant.service` and
+/// also called from `daemon::run()` before the in-process supervisor
+/// spawns its own qdrant. Exits 0 whether or not anything was fixed
+/// (idempotent). BUG-20260524-2203.
+pub fn repair_qdrant(json_out: bool, quiet: bool) -> Result<()> {
+    let storage = state::qdrant_storage_dir()?;
+    let report = repair::quarantine_corrupt_segments(&storage)?;
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    if quiet && report.quarantined.is_empty() && report.swept_atomicwrite == 0 {
+        return Ok(());
+    }
+    println!(
+        "sy knowledge repair-qdrant: storage={} shards_scanned={} quarantined={} swept_atomicwrite={}",
+        storage.display(),
+        report.shards_scanned,
+        report.quarantined.len(),
+        report.swept_atomicwrite,
+    );
+    for q in &report.quarantined {
+        println!(
+            "  quarantined {}/{}:{} -> {}  ({})",
+            q.collection,
+            q.shard,
+            q.segment_id,
+            q.new_path.display(),
+            q.reason,
+        );
+    }
+    Ok(())
 }
 
 pub fn mcp_status_cmd(json_out: bool) -> Result<()> {

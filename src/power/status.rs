@@ -404,6 +404,44 @@ fn onboarding_hours_remainder(onboarding: &OnboardingStatus) -> i64 {
     total_hours % 24
 }
 
+/// "learning Xd Yh" hint for callers outside the `custom/sy-power`
+/// pill — currently the `custom/pwr` (perf) tooltip in `src/pwr.rs`.
+/// Returns `None` once onboarding is complete so the tooltip drops
+/// the line cleanly without per-caller arithmetic. Pure-fn so a unit
+/// test can pin both branches without filesystem state.
+pub fn onboarding_hint(onboarding: &OnboardingStatus, cfg: &PowerConfig) -> Option<String> {
+    if !onboarding.active {
+        return None;
+    }
+    let target = cfg.onboarding.days as i64;
+    let collected = onboarding.days_collected as i64;
+    let days_left = (target - collected).max(0);
+    let hours_left = onboarding_hours_remainder(onboarding);
+    Some(format!("learning {days_left}d {hours_left}h"))
+}
+
+/// Convenience wrapper: read the config + compute onboarding from
+/// the live filesystem state, then defer to [`onboarding_hint`].
+/// Returns `None` on any IO / parse failure so a caller in `pwr` can
+/// fall back to a tooltip without the hint instead of breaking the
+/// bar. Filesystem-only: no IPC to `sy-powerd`, so the cost is one
+/// directory read + one TOML parse.
+pub fn live_onboarding_hint() -> Option<String> {
+    let cfg_path = if let Ok(root) = std::env::var("SY_ROOT") {
+        std::path::PathBuf::from(root).join("configs/sy/power.toml")
+    } else {
+        std::path::PathBuf::from("configs/sy/power.toml")
+    };
+    let cfg = PowerConfig::load(&cfg_path).ok()?;
+    let state_dir = crate::power::power_state_dir_for_daemon();
+    let onboarding = crate::power::onboarding::compute_onboarding_status(
+        &state_dir,
+        &crate::power::clock::SystemClock,
+        cfg.onboarding.days,
+    );
+    onboarding_hint(&onboarding, &cfg)
+}
+
 /// Daemon-down soft-error envelope. The Step 32 implementation
 /// guidance pins this shape — waybar keeps polling at the 1 s
 /// interval, so the CLI must emit a parseable JSON object instead
@@ -948,6 +986,32 @@ mod tests {
             text.contains(DAYS_REMAINING_HINT),
             "onboarding text must include days remaining {DAYS_REMAINING_HINT:?}: {text}",
         );
+    }
+
+    /// `onboarding_hint` returns Some("learning Xd Yh") only while
+    /// `OnboardingStatus.active` is true. Pins the contract the perf
+    /// (`custom/pwr`) tooltip relies on so the line drops cleanly
+    /// once onboarding is over.
+    #[test]
+    fn onboarding_hint_renders_only_while_active() {
+        let cfg = PowerConfig::default();
+        let onb_active = OnboardingStatus {
+            active: true,
+            days_collected: 3,
+            ready_at: chrono::Utc::now() + chrono::Duration::days(11),
+        };
+        let hint = onboarding_hint(&onb_active, &cfg).expect("active hint");
+        assert!(
+            hint.starts_with("learning ") && hint.contains("11d"),
+            "active hint should mention the 11d remainder: {hint}"
+        );
+
+        let onb_done = OnboardingStatus {
+            active: false,
+            days_collected: cfg.onboarding.days,
+            ready_at: chrono::Utc::now(),
+        };
+        assert_eq!(onboarding_hint(&onb_done, &cfg), None);
     }
 
     /// Step 32: precedence test — `shield_state == Meeting` must

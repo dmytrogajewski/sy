@@ -53,6 +53,53 @@ metrics.workspace = true
 # tokio runtime), which keeps the dep set minimal and lets the
 # thread-based knowledge daemon use it without bolting on a runtime.
 sd-notify.workspace = true
+# sy-mon Step 7 (SPEC §3 SCOPE item 3 "Ring buffer"): mmap-backed
+# N×M f32 grid for `sy mon collect`'s history file. `memmap2` gives
+# us the `MmapMut` view over the data region; `nix::fcntl::flock`
+# gives us cross-process exclusion on the ring file. Both deps are
+# already transitive in the workspace (memmap2 via iced/cosmic-text,
+# nix via libsystemd), so declaring them here only pins versions —
+# no new compile-tree weight.
+memmap2.workspace = true
+# `nix::fcntl::{Flock, FlockArg}` sit behind the `fs` feature
+# (module-level `feature!` block in nix 0.29). Enable just that
+# one feature; everything else (process / signal / net / …) stays
+# out of the compile tree.
+nix = { workspace = true, features = ["fs"] }
+# sy-mon Step 13: `mon::snapshot::LatestSnapshot` wraps an
+# `Arc<ArcSwap<SystemSnapshot>>` so the aggregator's tick task can
+# publish a fresh snapshot lock-free while the IPC handlers
+# (`system.mon.snapshot` / `subscribe`) read it. Already a workspace
+# dep (sy-power Step 24 hot-swap path); declaring it here only pins
+# the dep to this crate's compile graph.
+arc-swap.workspace = true
+# sy-mon Step 9 (SPEC §3 SCOPE item 1 "`mon-exporter` feature on
+# every plane"): optional dep behind the `mon-exporter` feature
+# below. The crate's `uds-listener` feature pulls in hyper — this is
+# the "second HTTP stack" SPEC §6 calls out, mitigated by gating the
+# whole module on a feature so default sy-core builds (and unit
+# tests without `--features mon-exporter`) don't link it. Wired via
+# `obs::mon_exporter::install(path)`; no plane is wired yet (that's
+# Steps 10 + 20).
+metrics-exporter-prometheus = { workspace = true, optional = true }
+# `tokio` is required by `metrics-exporter-prometheus`'s
+# `uds-listener` feature (its `UnixListener::bind`) and by our
+# `UdsGuard` Drop / accept-task scaffolding. The feature pulls in
+# the `rt` + `net` slices; `macros` is optional but matches the
+# rest of the workspace tokio surface.
+tokio = { workspace = true, optional = true }
+
+[features]
+# sy-mon Step 9: enables `obs::mon_exporter::install(path)` and the
+# hyper-backed Prometheus UDS exposition surface from
+# `metrics-exporter-prometheus`. Off by default — the module is
+# `#[cfg(feature = "mon-exporter")]` so the default build path
+# doesn't link hyper. Step 10 turns this on for the aiplane daemon;
+# Step 20 rolls it to remaining planes. The feature only adds an
+# exposition surface; the metric call sites in
+# `crates/sy-core/src/metrics.rs::CORE_METRICS` already emit
+# unconditionally (no-op against the noop recorder until install).
+mon-exporter = ["dep:metrics-exporter-prometheus", "dep:tokio"]
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -60,3 +107,11 @@ tempfile.workspace = true
 # recorder, drive emissions, and snapshot the resulting counter /
 # gauge / histogram bag without leaking global state.
 metrics-util.workspace = true
+# sy-mon Step 9 tests: the `install_creates_socket` test connects
+# to the UDS the exporter binds and reads the HTTP/1.1 response.
+# `tokio` is already enabled via the `mon-exporter` feature when
+# tests opt in (`cargo test --features mon-exporter`), but
+# `macros` (`#[tokio::test]`) sits behind an additional feature
+# slice that the optional dep above doesn't expose by default.
+# Pull a dev-only copy with the full feature set the tests need.
+tokio = { workspace = true }

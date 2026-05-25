@@ -26,7 +26,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "ne
 toml = "0.8"
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
-iced = { version = "0.14", features = ["tokio", "wgpu", "image"] }
+iced = { version = "0.14", features = ["tokio", "wgpu", "image", "canvas"] }
 iced_layershell = "0.17"
 # Stack-bar thumbnail pipeline. Decoders pinned to the formats
 # cliphist surfaces in its binary-data preview (`parse_image_ext` in
@@ -240,6 +240,47 @@ resvg = { version = "0.45", default-features = false }
 # cost. Pinned to the workspace `1` line — the API surface
 # (`ZlibEncoder` + `write_all`) has been stable since 1.0.
 flate2 = "1"
+# sy-mon Step 7 (SPEC §3 SCOPE item 3 "Ring buffer"): mmap-backed
+# N×M f32 grid for the `sy mon collect` history file. memmap2 is
+# already a transitive of `iced` (via cosmic-text → fontdb), so the
+# explicit workspace dep just pins the version we link against
+# without widening the compile tree. `nix` is already a transitive
+# of `libsystemd`; declaring it here gives sy-core access to
+# `fcntl::{flock, FlockArg}` for cross-process exclusion on the
+# ring file. The `fcntl` symbols are unconditional in nix 0.29's
+# top-level module, so no feature flag is required.
+memmap2 = "0.9"
+nix = "0.29"
+# sy-mon Step 9 (SPEC §3 SCOPE item 1 "`mon-exporter` feature on every
+# plane"): the Prometheus UDS exposition surface every daemon binds
+# under `$XDG_RUNTIME_DIR/sy/<plane>/metrics.sock`. The `uds-listener`
+# feature pulls in the crate's hyper-based HTTP/1.1 listener — this is
+# the "second HTTP stack" risk called out in SPEC §6, mitigated by the
+# `mon-exporter` cargo feature gate below so debug/CLI builds without
+# the gate don't link hyper at all. `default-features = false` drops
+# the TCP `http-listener` and `push-gateway` paths sy will never use
+# (single-host, UDS-only). Held at the workspace level so Step 10
+# (aiplane daemon) and Step 20 (remaining planes) can opt in with
+# `metrics-exporter-prometheus.workspace = true`.
+metrics-exporter-prometheus = { version = "0.18", default-features = false, features = ["uds-listener"] }
+# sy-mon Step 12 (SPEC §3 SCOPE item 3 "scrapes every plane UDS" + §4
+# Dependencies row). `sy mon collect` reads each plane's
+# `metrics.sock` exposition and folds the parsed samples into a
+# `SystemSnapshot`. Apache-2.0, ~200 LoC, used only by the aggregator
+# tick — never in hot paths. Pinned to the latest published 0.2 line
+# (0.2.5 on 2026-05-22); SPEC §6 mitigation for "`prometheus-parse`
+# lightly maintained" is an in-tree fork should upstream stall.
+prometheus-parse = "0.2"
+# sy-mon Step 18 (SPEC §3 SCOPE §4 "filter overlay" — regex on metric
+# name). The popup's `/` overlay compiles the typed pattern into a
+# `regex::Regex` and the per-panel projections filter their metric
+# label lists through it. Already transitively present in the lockfile
+# (via `tracing-subscriber`'s `env-filter` feature); the explicit
+# workspace dep just pins the version we link against and keeps the
+# binary's filter overlay independent of that transitive's feature
+# set. Confined to the binary's `src/mon/` tree — sy-core's
+# `SystemSnapshot` doesn't touch regex.
+regex = "1"
 
 [package]
 name = "sy"
@@ -264,7 +305,13 @@ name = "sy"
 path = "src/main.rs"
 
 [features]
-default = ["bar-iced"]
+# sy-mon Step 10 (DoD bullet 3): the aiplane plane's metrics socket is
+# bound out of the box in release builds. `mon-exporter` forwards to
+# `sy-core/mon-exporter`, which gates the shared `obs::mon_exporter`
+# module on the hyper-backed `metrics-exporter-prometheus uds-listener`
+# feature. `--no-default-features` opts out — the daemon then skips the
+# bind entirely (see `src/knowledge/daemon.rs`'s `#[cfg]` guard).
+default = ["bar-iced", "mon-exporter"]
 # Enables the iced + iced_layershell GUI for `sy stack bar`. On by default
 # so a plain `cargo build --release` produces a working stack bar — niri
 # spawn-at-startup is fire-and-forget and silently swallows a missing-feature
@@ -277,6 +324,15 @@ bar-iced = ["dep:iced", "dep:iced_layershell"]
 # `cargo test --features test-dbus` once `power-profiles-daemon`
 # has been masked.
 test-dbus = []
+# sy-mon Step 9 (SPEC §3 SCOPE item 1 + §6 risk "second HTTP stack"):
+# enable the Prometheus UDS exposition surface on every plane that
+# depends on `sy-core`. Off by default so `--no-default-features`
+# builds (and tests without the feature) don't link hyper. The `sy`
+# binary forwards to `sy-core/mon-exporter`; each plane daemon calls
+# `sy_core::obs::mon_exporter::install(path)` when this feature is on
+# (Steps 10 + 20). Pure rollout switch — no behavioural change at the
+# workspace root until a daemon binds.
+mon-exporter = ["sy-core/mon-exporter"]
 
 [dependencies]
 anyhow.workspace = true
@@ -399,6 +455,17 @@ resvg.workspace = true
 # embedded under PDF `/FlateDecode`. Transitively present via burn /
 # png so the dep adds no compile cost.
 flate2.workspace = true
+# sy-mon Step 12: `sy mon collect` scrapes each plane's UDS
+# `metrics.sock`, parses the Prometheus exposition body, and folds
+# the samples into `SystemSnapshot`. Used in `src/mon/collect/`
+# only; not pulled into `sy-core` (intermediate representation,
+# never serialised on the wire).
+prometheus-parse.workspace = true
+# sy-mon Step 18: in-popup filter overlay. The `/` keybind compiles
+# the typed pattern into a `regex::Regex`; per-panel projections
+# (currently `view/aiplane.rs`) drop metric labels that don't match.
+# Bin-only dep — `sy-core::mon::snapshot` stays regex-free.
+regex.workspace = true
 
 [[example]]
 name = "gen_warmup_gru"

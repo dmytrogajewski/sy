@@ -21,6 +21,15 @@ here.
 
 ### Added
 
+- `sy mon` — on-demand Wayland layer-shell health dashboard backed by
+  a 1 Hz `sy-mon-collect.service` aggregator. `Super+m` toggles the
+  popup; `sy mon snapshot --json` returns a `SystemSnapshot` over an
+  `$XDG_RUNTIME_DIR/sy/mon.sock` IPC socket; `sy mon doctor` folds
+  into `sy doctor`; `sy mon mcp` advertises `system.mon.snapshot` and
+  `system.mon.history` to MCP-capable agents; `sy mon waybar` emits
+  a green/yellow/red waybar custom-module tile that opens the popup
+  on click. Wire shape documented in `docs/agents/mon-schema.md`;
+  remote-scrape recipe in `docs/admin/mon-remote.md`.
 - A `prep_npu_workload.py` helper under `scripts/` exports
   `intfloat/multilingual-e5-base` to ONNX, BF16-quantises it with AMD
   Quark, and runs a one-shot VitisAI compile so the NPU artifact under

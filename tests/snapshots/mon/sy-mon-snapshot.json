@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "captured_at_ms": 0,
+  "cpu": {
+    "per_core_util_pct": [],
+    "freq_mhz": [],
+    "temp_c": 0.0,
+    "load_avg": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "mem": {
+    "total_mib": 0,
+    "used_mib": 0,
+    "swap_used_mib": 0
+  },
+  "gpu": [],
+  "npu": {
+    "vendor": "",
+    "util_pct": 0,
+    "active": false,
+    "fw_version": "",
+    "power_w": 0.0,
+    "holders": []
+  },
+  "net": [],
+  "disk": [],
+  "aiplane": {
+    "queue_depth": {},
+    "warm": {},
+    "latency_p99_ms": {},
+    "errors_total": 0
+  },
+  "knowledge": {
+    "collections": 0,
+    "docs_indexed": 0,
+    "embed_throughput_docs_per_s": 0.0,
+    "search_qps": 0.0
+  },
+  "agents": {
+    "running": 0,
+    "rss_total_mib": 0,
+    "policy_denials_recent": 0
+  },
+  "power": {
+    "current_arm": "",
+    "dwell_pct": {},
+    "regret_cum": 0.0
+  },
+  "supervisor": {
+    "planes": []
+  },
+  "errors": []
+}

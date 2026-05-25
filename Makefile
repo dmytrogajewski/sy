@@ -24,7 +24,7 @@ test-npu:
 	cargo test --workspace --all-targets --features test-npu
 
 lint:
-	./scripts/check_main_rs_loc.sh 1060
+	./scripts/check_main_rs_loc.sh 1066
 	cargo clippy --workspace --all-targets -- -D warnings
 
 fmt:

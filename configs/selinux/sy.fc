@@ -1,0 +1,27 @@
+# File-context spec for sy plane UDS sockets under $XDG_RUNTIME_DIR.
+# Consumed by `semodule_package -f` (raw kernel file_contexts format —
+# no m4 / refpolicy macros). The install script applies the labels with
+# `restorecon -RvF /run/user/<uid>/sy/` once a user session is active.
+#
+# sy-mon Step 10 (SPEC §3 SCOPE item 1 + §4 Security): each sy plane
+# daemon binds a Prometheus exposition surface at
+# `$XDG_RUNTIME_DIR/sy/<plane>/metrics.sock`. `user_runtime_t` is the
+# standard kernel-shipped type for user-session $XDG_RUNTIME_DIR
+# contents on Fedora 43, matching the type tmpfiles.d /run/user/<uid>
+# already gets.
+#
+# Step 20 extends this file with the remaining plane sockets. The
+# `knowledge` entry covers a symlink installed by the knowledge daemon
+# (the daemon and the aiplane plane share one process, so the
+# knowledge socket is a symlink onto the aiplane UDS). The
+# `supervisor` socket is bound by `sy-mon-collect`. Wallpaper has no
+# entry because `sy wallpaper` is a one-shot CLI, not a long-lived
+# plane daemon (`KNOWN_PLANES` in `src/mon/collect/tick.rs` reflects
+# this).
+
+/run/user/[0-9]+/sy/aiplane/metrics\.sock     --  system_u:object_r:user_runtime_t:s0
+/run/user/[0-9]+/sy/knowledge/metrics\.sock   -l  system_u:object_r:user_runtime_t:s0
+/run/user/[0-9]+/sy/agt/metrics\.sock         --  system_u:object_r:user_runtime_t:s0
+/run/user/[0-9]+/sy/power/metrics\.sock       --  system_u:object_r:user_runtime_t:s0
+/run/user/[0-9]+/sy/stack-bar/metrics\.sock   --  system_u:object_r:user_runtime_t:s0
+/run/user/[0-9]+/sy/supervisor/metrics\.sock  --  system_u:object_r:user_runtime_t:s0

@@ -11,7 +11,14 @@
 
     "modules-left":   ["niri/workspaces", "niri/language"],
     "modules-center": ["niri/window"],
-    "modules-right":  ["cpu", "memory", "custom/sy-gpu", "custom/sy-npu", "custom/sy-disk", "custom/sy-silent", "custom/sy-vol", "custom/sy-bl", "custom/sy-knowledge", "custom/agents", "custom/bt", "network", "custom/notif", "clock", "custom/sy-syauth", "custom/sy-power", "custom/pwr", "custom/sy-bat"],
+    // `custom/sy-mon` and `custom/sy-power` definitions live further
+    // down for operators who pull them in manually — both are
+    // deliberately off the rail. Per-plane tiles
+    // (cpu/memory/sy-gpu/sy-npu/sy-disk/sy-bat/…) already cover
+    // sy-mon's ground; the power orchestrator's onboarding hint
+    // (`sy: learning Xd Yh`) now surfaces on hover of the `custom/pwr`
+    // (perf) tile's tooltip instead of as its own permanent slot.
+    "modules-right":  ["cpu", "memory", "custom/sy-gpu", "custom/sy-npu", "custom/sy-disk", "custom/sy-silent", "custom/sy-vol", "custom/sy-bl", "custom/sy-knowledge", "custom/agents", "custom/bt", "network", "custom/notif", "clock", "custom/sy-syauth", "custom/pwr", "custom/sy-bat"],
 
     "niri/workspaces": {
         "format": "{value}",
@@ -206,5 +213,22 @@
         "exec": "{{ home }}/.local/bin/sy bat --waybar",
         "return-type": "json",
         "interval": 30
+    },
+
+    // sy-mon ROADMAP Step 22: one-shot tile sourced from the 1 Hz
+    // aggregator's `system.mon.snapshot` over UDS. interval=2 keeps the
+    // tile fresh without polling faster than the aggregator's own tick;
+    // on-click invokes the bare `sy mon` (Step 19 toggle path) so a
+    // first click opens the popup and a second dismisses. Module body
+    // also lives in configs/waybar/modules/sy-mon.json for operators
+    // who pull individual modules into a custom config.
+    "custom/sy-mon": {
+        "exec":        "{{ home }}/.local/bin/sy mon waybar",
+        "return-type": "json",
+        "interval":    2,
+        "tooltip":     true,
+        "on-click":    "{{ home }}/.local/bin/sy mon"
     }
 }
+
+

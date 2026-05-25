@@ -65,6 +65,29 @@ async fn run() -> Result<()> {
     }
     eprintln!("sy-agentd: listening on {}", sock.display());
 
+    // sy-mon Step 20: bind the agt plane's Prometheus UDS exposition
+    // surface at $XDG_RUNTIME_DIR/sy/agt/metrics.sock alongside the
+    // IPC socket. The shared installer in `sy_core::obs::mon_exporter`
+    // needs an active tokio runtime — we are already inside one here,
+    // so install directly and hold the guard for the daemon's
+    // lifetime (the `_` binding keeps it alive until `run()` returns
+    // or the process exits via the SIGTERM handler below). Bind
+    // failure is non-fatal: the aggregator (Step 12) tolerates a
+    // missing per-plane socket and `sy mon doctor` (Step 21) is the
+    // alarm surface.
+    #[cfg(feature = "mon-exporter")]
+    let _mon_exporter = match install_mon_exporter().await {
+        Ok(g) => Some(g),
+        Err(e) => {
+            tracing::warn!(
+                target: "sy::agt::daemon",
+                error = %format!("{e:#}"),
+                "agt mon-exporter failed to bind; continuing without metrics socket"
+            );
+            None
+        }
+    };
+
     // SPEC §4.5 / arch-supervision Step 4: announce `READY=1` after
     // the listener is bound so `systemctl --user status sy-agentd`
     // flips from `activating` to `active (running)`. On non-systemd
@@ -391,6 +414,36 @@ async fn handle_client(stream: UnixStream, bridge: Arc<AgtBridge>) {
             let _ = resp_sink.send(resp).await;
         }
     }
+}
+
+/// sy-mon Step 20: install the agt plane's Prometheus UDS exporter at
+/// `$XDG_RUNTIME_DIR/sy/agt/metrics.sock`. Runs inside the daemon's
+/// existing tokio runtime so the shared installer's accept task can
+/// `tokio::spawn` onto it. Returns the `UdsGuard` that the daemon
+/// holds for its lifetime — Drop unlinks the socket on shutdown.
+#[cfg(feature = "mon-exporter")]
+async fn install_mon_exporter() -> anyhow::Result<sy_core::obs::mon_exporter::UdsGuard> {
+    let path = crate::mon_exporter::socket_path_for("agt")?;
+    let guard = sy_core::obs::mon_exporter::install(path.clone())
+        .map_err(|e| anyhow!("install agt mon-exporter at {}: {e}", path.display()))?;
+    // SPEC §4 Security: tighten the socket file to 0600. Best-effort —
+    // the parent directory's 0700 already restricts to the user, and
+    // a chmod failure shouldn't kill daemon startup.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(guard.path()) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            let _ = std::fs::set_permissions(guard.path(), perms);
+        }
+    }
+    tracing::info!(
+        target: "sy::agt::daemon",
+        path = %guard.path().display(),
+        "agt mon-exporter bound"
+    );
+    Ok(guard)
 }
 
 fn ok_response(request_id: Ulid, result: Value) -> Response {
