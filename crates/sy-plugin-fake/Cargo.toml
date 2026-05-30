@@ -1,0 +1,18 @@
+[package]
+name = "sy-plugin-fake"
+version.workspace = true
+edition.workspace = true
+publish = false
+license = "MIT"
+description = "In-tree fake plugin fixture for sy-file-manager plugin runtime conformance tests (SPEC §3.3 item 17). Speaks the SPEC §4.2 wire end-to-end (initialize/preview/ping/shutdown) and exposes env-var-controlled triggers so the conformance harness can exercise cap-violation, rlimit-breach, and signature-mismatch scenarios."
+
+# Path-only deps per the Step 10 brief (no new crates.io pulls). All
+# three are already pinned at the workspace level.
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true }
+
+[[bin]]
+name = "sy-plugin-fake"
+path = "src/main.rs"

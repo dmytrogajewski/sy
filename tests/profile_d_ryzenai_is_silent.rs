@@ -21,8 +21,7 @@ fn repo_root() -> PathBuf {
 
 fn snippet() -> String {
     let path = repo_root().join("configs/profile.d/ryzenai.sh");
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
 #[test]
@@ -42,8 +41,7 @@ fn ryzenai_profile_d_sources_xrt_silently_and_dedupes_path() {
     );
 
     assert!(
-        body.contains("case \":$PATH:\"")
-            && body.contains("RYZEN_AI_INSTALLATION_PATH"),
+        body.contains("case \":$PATH:\"") && body.contains("RYZEN_AI_INSTALLATION_PATH"),
         "must dedupe the venv $PATH prepend with a `case` guard so \
          $PATH doesn't bloat by one venv entry per nested shell; \
          got:\n{body}"

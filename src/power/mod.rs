@@ -45,6 +45,7 @@ pub const EXIT_DAEMON_UNREACHABLE: i32 = 4;
 pub mod activity;
 pub mod apply;
 pub mod bandit;
+pub mod checkpoint;
 pub mod cli;
 pub mod clock;
 pub mod config;

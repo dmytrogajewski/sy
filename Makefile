@@ -9,7 +9,7 @@
 #   - `make lint` is the gate before any commit. The Stop hook
 #     (.claude/hooks/stop-verify.sh) re-runs the lint subset.
 
-.PHONY: build release test test-npu lint fmt fmt-check audit bench install install-system-npu install-system-syauth-selinux yazi-plugins docs-lint help
+.PHONY: build release test test-npu lint fmt fmt-check audit bench install install-system-npu install-system-syauth-selinux docs-lint help
 
 build:
 	cargo build --workspace
@@ -24,7 +24,7 @@ test-npu:
 	cargo test --workspace --all-targets --features test-npu
 
 lint:
-	./scripts/check_main_rs_loc.sh 1066
+	./scripts/check_main_rs_loc.sh 1097
 	cargo clippy --workspace --all-targets -- -D warnings
 
 fmt:
@@ -59,9 +59,6 @@ install-system-npu:
 # /var/lib/syauth/last.log from xdm_t / sudo_t. Idempotent.
 install-system-syauth-selinux:
 	./scripts/install-system-syauth-selinux.sh
-
-yazi-plugins:
-	./scripts/yazi-plugins.sh
 
 # Mirror of .github/workflows/docs.yml so contributors can run the
 # four-gate docs lint locally before pushing.
@@ -121,6 +118,5 @@ help:
 	@echo "  install-system-syauth-selinux — sudo build + load syauth SELinux module"
 	@echo "                       so pam_syauth.so can append /var/lib/syauth/last.log"
 	@echo "                       from xdm_t (gdm) / sudo_t (one-time per host)"
-	@echo "  yazi-plugins— ya pkg install + clone non-pkg yazi plugins (idempotent)"
 	@echo "  docs-lint   — markdownlint + cspell + lychee + vale (advisory);"
 	@echo "                mirror of .github/workflows/docs.yml"

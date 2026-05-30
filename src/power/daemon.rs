@@ -45,6 +45,9 @@ use crate::power::apply::{
     PlatformProfileActuator,
 };
 use crate::power::bandit::{compute_reward, for_snapshot_features_with_activity, Arm, Clucb};
+use crate::power::checkpoint::{
+    self, DaemonCheckpoint, CHECKPOINT_INTERVAL_TICKS, CHECKPOINT_SCHEMA,
+};
 use crate::power::clock::Clock;
 use crate::power::config::PowerConfig;
 use crate::power::drift::{DriftDetector, DriftSignal, DriftStatus};
@@ -138,35 +141,115 @@ pub trait RetrainTrigger: Send + Sync {
 /// `tokio::task::spawn_blocking` worker so the 1 Hz tick keeps its
 /// cadence. The `telemetry_path` + `out_path` are captured by clone
 /// at construction time so the spawned closure owns its arguments.
+/// `model_status` is the shared slot the dispatcher publishes the
+/// last retrain's coverage / recall verdict to (Step T3 /
+/// BUG-20260525-2352) so `sy power status --json` can surface a
+/// skipped train without re-tailing `journalctl`.
 pub struct SpawnBlockingRetrainTrigger {
     pub telemetry_path: PathBuf,
     pub out_path: PathBuf,
+    pub model_status: LatestModelStatus,
 }
 
 impl RetrainTrigger for SpawnBlockingRetrainTrigger {
     fn dispatch(&self, cause: RetrainCause) {
         let telemetry = self.telemetry_path.clone();
         let out = self.out_path.clone();
+        let model_status = self.model_status.clone();
         tokio::task::spawn_blocking(move || {
             match crate::power::trainer::retrain_gru(&telemetry, &out) {
-                Ok(report) => tracing::info!(
-                    target: "sy::power::daemon",
-                    rows = report.rows_used,
-                    final_loss = report.final_loss,
-                    accuracy = report.validation_accuracy,
-                    wall_ms = report.wall_time_ms as u64,
-                    version_sha = %report.version_sha,
-                    cause = ?cause,
-                    "trainer retrain completed",
-                ),
-                Err(e) => tracing::warn!(
-                    target: "sy::power::daemon",
-                    error = %e,
-                    cause = ?cause,
-                    "trainer retrain failed",
-                ),
+                Ok(report) => {
+                    tracing::info!(
+                        target: "sy::power::daemon",
+                        rows = report.rows_used,
+                        final_loss = report.final_loss,
+                        accuracy = report.validation_accuracy,
+                        wall_ms = report.wall_time_ms as u64,
+                        version_sha = %report.version_sha,
+                        cause = ?cause,
+                        "trainer retrain completed",
+                    );
+                    publish_model_status(&model_status, crate::power::ipc::ModelStatus::default());
+                }
+                Err(e) => {
+                    log_and_publish_retrain_error(&model_status, cause, &e);
+                }
             }
         });
+    }
+}
+
+/// Map a [`crate::power::trainer::TrainerError`] to a `tracing::warn!`
+/// line + a [`crate::power::ipc::ModelStatus`] published on the shared
+/// slot. The per-class-coverage and per-class-recall errors carry
+/// structured fields (missing classes / recall message) so
+/// `sy power explain` and the operator's `journalctl` can attribute
+/// the skipped train without re-parsing the human-readable error
+/// string.
+fn log_and_publish_retrain_error(
+    slot: &LatestModelStatus,
+    cause: RetrainCause,
+    err: &crate::power::trainer::TrainerError,
+) {
+    use crate::power::ipc::ModelStatus;
+    use crate::power::trainer::TrainerError;
+    match err {
+        TrainerError::InsufficientClassCoverage {
+            missing,
+            counts,
+            required,
+        } => {
+            let missing_strs: Vec<String> = missing.iter().map(|s| (*s).to_string()).collect();
+            tracing::warn!(
+                target: "sy::power::daemon",
+                error = %err,
+                cause = ?cause,
+                missing_classes = ?missing_strs,
+                class_counts = ?counts,
+                required = *required,
+                "trainer retrain skipped: insufficient per-class coverage",
+            );
+            publish_model_status(
+                slot,
+                ModelStatus {
+                    missing_classes: missing_strs,
+                },
+            );
+        }
+        TrainerError::ValidationFailed(msg) if msg.starts_with("per-class recall floor") => {
+            tracing::warn!(
+                target: "sy::power::daemon",
+                error = %err,
+                cause = ?cause,
+                recall = %msg,
+                "trainer retrain skipped: per-class recall floor",
+            );
+            publish_model_status(slot, ModelStatus::default());
+        }
+        _ => {
+            tracing::warn!(
+                target: "sy::power::daemon",
+                error = %err,
+                cause = ?cause,
+                "trainer retrain failed",
+            );
+            publish_model_status(slot, ModelStatus::default());
+        }
+    }
+}
+
+/// Best-effort publish of a [`crate::power::ipc::ModelStatus`] to the
+/// shared slot. A poisoned lock is logged + dropped — the next
+/// successful publish overwrites the stale state, so we never block
+/// the trainer worker on a panicked IPC handler.
+fn publish_model_status(slot: &LatestModelStatus, status: crate::power::ipc::ModelStatus) {
+    match slot.write() {
+        Ok(mut g) => *g = Some(status),
+        Err(e) => tracing::warn!(
+            target: "sy::power::daemon",
+            error = %e,
+            "model_status slot poisoned; dropping update",
+        ),
     }
 }
 
@@ -370,6 +453,23 @@ pub type LatestDriftStatus = Arc<RwLock<DriftStatus>>;
 /// [`new_latest_snapshot`].
 pub fn new_latest_drift_status() -> LatestDriftStatus {
     Arc::new(RwLock::new(DriftStatus::default()))
+}
+
+/// Shared "latest model health" slot (Step T3 / BUG-20260525-2352).
+/// Written by [`SpawnBlockingRetrainTrigger::dispatch`] after every
+/// retrain attempt — `Some(ModelStatus { missing_classes: [..] })` on
+/// the per-class-coverage gate, `Some(ModelStatus::default())` on
+/// other errors or success, `None` only before the first retrain ever
+/// fires. Read by the IPC handler to populate
+/// [`crate::power::ipc::StatusResponse::model`].
+pub type LatestModelStatus = Arc<RwLock<Option<crate::power::ipc::ModelStatus>>>;
+
+/// Build an empty latest-model-status holder. Mirrors
+/// [`new_latest_drift_status`] — the slot starts `None` so
+/// `sy power status --json | jq .model.missing_classes` returns
+/// `null` until the trainer has reported.
+pub fn new_latest_model_status() -> LatestModelStatus {
+    Arc::new(RwLock::new(None))
 }
 
 /// Desktop-side notifier for the SPEC §5 "sy-powerd is retraining:
@@ -672,11 +772,35 @@ fn short_npu_reason<E: std::fmt::Display>(err: &E) -> String {
 /// Append a `<lever>: <outcome>` or `<lever>: skipped (<err>)` token
 /// to the reason chain. Mirrors the NPU branch above but flattens the
 /// `Result` into one line of code for the four sysfs-backed levers.
+///
+/// BUG-20260525-2350: when the EPP actuator returns the structured
+/// `NoPolicyWritable` variant, the WARN line also carries
+/// `failed_policies=<n>` + a comma-joined `failed_paths=…` field so
+/// the operator can run `systemd-tmpfiles --create` against exactly
+/// the leaves that need it without grep-and-trim.
 fn log_apply(lever: &str, res: anyhow::Result<Applied>, reasons: &mut Vec<String>) {
     match res {
         Ok(o) => reasons.push(format!("{lever}: {}", outcome_summary(&o))),
         Err(e) => {
-            tracing::warn!(target: "sy::power::daemon", lever, error = %e, "actuator failed");
+            if let Some(apply::epp::EppError::NoPolicyWritable { failed }) =
+                e.downcast_ref::<apply::epp::EppError>()
+            {
+                let failed_paths = failed
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                tracing::warn!(
+                    target: "sy::power::daemon",
+                    lever,
+                    error = %e,
+                    failed_policies = failed.len(),
+                    failed_paths = %failed_paths,
+                    "actuator failed",
+                );
+            } else {
+                tracing::warn!(target: "sy::power::daemon", lever, error = %e, "actuator failed");
+            }
             reasons.push(format!("{lever}: skipped ({e})"));
         }
     }
@@ -1203,6 +1327,7 @@ async fn run_async() -> anyhow::Result<()> {
     let pin = new_pin_slot();
     let last_entry = new_latest_audit_entry();
     let drift_latest = new_latest_drift_status();
+    let model_latest = new_latest_model_status();
     let cfg = PowerConfig::load(&power_config_path()).unwrap_or_default();
     let thrash = Arc::new(ThrashTracker::new());
     let npu_actuator = Arc::new(production_npu_actuator());
@@ -1213,6 +1338,7 @@ async fn run_async() -> anyhow::Result<()> {
     let accept_pin = Arc::clone(&pin);
     let accept_last_entry = Arc::clone(&last_entry);
     let accept_drift = Arc::clone(&drift_latest);
+    let accept_model = Arc::clone(&model_latest);
     let accept_arms = cfg.arms.clone();
     tokio::spawn(async move {
         loop {
@@ -1222,11 +1348,13 @@ async fn run_async() -> anyhow::Result<()> {
                     let pin = Arc::clone(&accept_pin);
                     let last_entry = Arc::clone(&accept_last_entry);
                     let drift = Arc::clone(&accept_drift);
+                    let model = Arc::clone(&accept_model);
                     let arms = accept_arms.clone();
                     tokio::spawn(async move {
-                        if let Err(e) =
-                            handle_connection_full(stream, latest, pin, last_entry, drift, arms)
-                                .await
+                        if let Err(e) = handle_connection_full(
+                            stream, latest, pin, last_entry, drift, model, arms,
+                        )
+                        .await
                         {
                             tracing::debug!(
                                 target: "sy::power::daemon",
@@ -1267,11 +1395,15 @@ async fn run_async() -> anyhow::Result<()> {
     let _ppd_shim =
         super::ppd_shim::spawn_system_bus_shim(Arc::clone(&pin), cfg.arms.clone(), !with_ppd);
 
-    // SIGTERM / SIGINT: emit `STOPPING=1`, write vendor defaults,
-    // drop the socket, exit. The crash-safe guard's `Drop` would do
-    // the same on a normal return, but `std::process::exit` skips
-    // destructors — so we call the helper explicitly here.
-    let shutdown_sock = sock.clone();
+    // SIGTERM / SIGINT: signal the tick loop to break, then the loop
+    // itself emits `STOPPING=1`, persists the checkpoint, writes
+    // vendor defaults, drops the socket, and returns. We use
+    // `tokio::sync::Notify` over the prior `std::process::exit(0)`
+    // because the tick loop owns the `&mut bandit_state` /
+    // `&mut activity_state` it needs to snapshot — process-exit from
+    // a sibling task would skip the save (BUG-20260525-2353).
+    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
+    let shutdown_signal = Arc::clone(&shutdown_notify);
     tokio::spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
         let mut term = signal(SignalKind::terminate()).expect("install SIGTERM");
@@ -1280,10 +1412,7 @@ async fn run_async() -> anyhow::Result<()> {
             _ = term.recv() => {},
             _ = intr.recv() => {},
         }
-        sy_core::notify::stopping();
-        apply::crash_safe_exit_defaults(Path::new("/sys"));
-        let _ = std::fs::remove_file(&shutdown_sock);
-        std::process::exit(0);
+        shutdown_signal.notify_waiters();
     });
 
     let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -1306,9 +1435,73 @@ async fn run_async() -> anyhow::Result<()> {
     let retrain_trigger = SpawnBlockingRetrainTrigger {
         telemetry_path: state_root.clone(),
         out_path: state_root.join("forecast.onnx"),
+        model_status: Arc::clone(&model_latest),
     };
+
+    // T4: rehydrate the bandit posterior + classifier weights from
+    // `~/.local/state/sy/power/checkpoint.json` if a matching
+    // checkpoint exists. Schema or arms-hash mismatch surfaces as
+    // `Ok(None)` and the file is rotated to `.stale-<ts>` by
+    // `checkpoint::load` — the daemon then continues with the fresh
+    // zero-init state. A genuine io error (permission denied, disk
+    // failure) is logged + dropped so the daemon still boots.
+    let ck_path = state_root.join("checkpoint.json");
+    let ck_arms_hash = checkpoint::arms_hash(&cfg.arms);
+    match checkpoint::load(&ck_path, ck_arms_hash) {
+        Ok(Some(ck)) => {
+            let bandit_arms = ck.bandit.arms.len();
+            let classifier_classes = ck.classifier_class_count();
+            let saved_at = ck.saved_at;
+            bandit_state.bandit.restore(ck.bandit);
+            activity_state.classifier.restore(ck.classifier);
+            tracing::info!(
+                target: "sy::power::daemon",
+                bandit_arms,
+                classifier_classes,
+                saved_at = %saved_at,
+                path = %ck_path.display(),
+                "checkpoint hydrated",
+            );
+        }
+        Ok(None) => {
+            tracing::info!(
+                target: "sy::power::daemon",
+                path = %ck_path.display(),
+                "no usable checkpoint; bandit + classifier start from zero",
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "sy::power::daemon",
+                error = %e,
+                path = %ck_path.display(),
+                "checkpoint load failed; continuing with fresh state",
+            );
+        }
+    }
+
+    let mut tick_count: u64 = 0;
+    let shutdown_wait = Arc::clone(&shutdown_notify);
     loop {
-        interval.tick().await;
+        // Race the next 1 Hz tick against the shutdown notify. On
+        // shutdown, persist the checkpoint inside the same task that
+        // owns the live bandit/classifier state, then break to the
+        // graceful-exit path below.
+        let shutdown_fut = shutdown_wait.notified();
+        tokio::pin!(shutdown_fut);
+        tokio::select! {
+            _ = &mut shutdown_fut => {
+                save_checkpoint_best_effort(
+                    &bandit_state.bandit,
+                    &activity_state.classifier,
+                    ck_arms_hash,
+                    &ck_path,
+                );
+                break;
+            }
+            _ = interval.tick() => {}
+        }
+        tick_count = tick_count.wrapping_add(1);
         onboarding_state.status = Some(crate::power::onboarding::compute_onboarding_status(
             &state_root,
             &clock,
@@ -1342,6 +1535,50 @@ async fn run_async() -> anyhow::Result<()> {
         ) {
             tracing::warn!(target: "sy::power::daemon", error = %e, "tick append failed");
         }
+        if tick_count.is_multiple_of(CHECKPOINT_INTERVAL_TICKS) {
+            save_checkpoint_best_effort(
+                &bandit_state.bandit,
+                &activity_state.classifier,
+                ck_arms_hash,
+                &ck_path,
+            );
+        }
+    }
+
+    // Graceful shutdown: emit STOPPING, restore vendor defaults,
+    // drop the IPC socket. CrashSafeGuard's Drop would normally do
+    // this on an Err return; with the explicit shutdown path we want
+    // the same effect on a clean Ok(()) too.
+    sy_core::notify::stopping();
+    apply::crash_safe_exit_defaults(Path::new("/sys"));
+    let _ = std::fs::remove_file(&sock);
+    Ok(())
+}
+
+/// Persist the bandit + classifier state to `path` and log a `warn`
+/// on failure. Save is fire-and-best-effort (per BUG-20260525-2353
+/// "Persistence MUST NOT block the tick loop") so a disk-full or
+/// read-only-fs error never kills the daemon.
+fn save_checkpoint_best_effort(
+    bandit: &Clucb,
+    classifier: &OnlineClassifier,
+    arms_hash: u64,
+    path: &Path,
+) {
+    let ck = DaemonCheckpoint {
+        schema: CHECKPOINT_SCHEMA,
+        arms_hash,
+        bandit: bandit.snapshot(),
+        classifier: classifier.snapshot(),
+        saved_at: chrono::Utc::now(),
+    };
+    if let Err(e) = checkpoint::save(&ck, path) {
+        tracing::warn!(
+            target: "sy::power::daemon",
+            error = %e,
+            path = %path.display(),
+            "checkpoint save failed; will retry next interval",
+        );
     }
 }
 
@@ -1459,6 +1696,7 @@ async fn handle_connection_full(
     pin: LatestPin,
     last_entry: LatestAuditEntry,
     drift: LatestDriftStatus,
+    model: LatestModelStatus,
     arms: Vec<Arm>,
 ) -> anyhow::Result<()> {
     use crate::power::ipc::{read_frame, write_frame, ProfileAck, StatusRequest, StatusResponse};
@@ -1473,9 +1711,11 @@ async fn handle_connection_full(
                 Some(s) => {
                     let entry = last_entry.read().ok().and_then(|g| g.clone());
                     let drift_status = drift.read().ok().map(|g| g.clone()).unwrap_or_default();
+                    let model_status = model.read().ok().and_then(|g| g.clone());
                     let mut resp = StatusResponse::from_snapshot(s);
                     resp.last_audit = entry;
                     resp.drift = drift_status;
+                    resp.model = model_status;
                     write_frame(&mut stream, &resp).await?;
                 }
                 None => {
@@ -3041,6 +3281,47 @@ mod tests {
     /// small real interval so the captured timestamps are strictly
     /// monotonic — the systemd watchdog tolerates jitter, but the
     /// assertion targets ordering + count, not absolute timing.
+    /// BUG-20260525-2350: when the EPP actuator returns
+    /// `NoPolicyWritable`, the daemon's WARN line must carry the
+    /// per-policy failed-paths list as a structured field so the
+    /// operator can run `systemd-tmpfiles --create` against exactly
+    /// the leaves that need it. The reason chain token also includes
+    /// the count so `sy power show` / `sy power explain` can render
+    /// the degradation summary without re-parsing the WARN.
+    #[test]
+    #[tracing_test::traced_test]
+    fn log_apply_surfaces_no_policy_writable_failed_paths() {
+        use crate::power::apply::epp::EppError;
+        use std::path::PathBuf;
+        let failed = vec![
+            PathBuf::from("/sys/devices/system/cpu/cpufreq/policy12/energy_performance_preference"),
+            PathBuf::from("/sys/devices/system/cpu/cpufreq/policy23/energy_performance_preference"),
+        ];
+        let err: anyhow::Error = EppError::NoPolicyWritable {
+            failed: failed.clone(),
+        }
+        .into();
+        let mut reasons: Vec<String> = Vec::new();
+        log_apply("epp", Err(err), &mut reasons);
+        assert!(
+            logs_contain("failed_policies=2"),
+            "WARN must carry the structured failed-policy count",
+        );
+        for p in &failed {
+            let needle = p.display().to_string();
+            assert!(
+                logs_contain(&needle),
+                "WARN must name the failed leaf {needle}, got logs without it",
+            );
+        }
+        assert_eq!(reasons.len(), 1, "exactly one reason-chain token per call");
+        assert!(
+            reasons[0].starts_with("epp: skipped"),
+            "reason chain still records the skip: {:?}",
+            reasons[0],
+        );
+    }
+
     #[test]
     fn watchdog_ping_under_half_interval() {
         const PINGS: usize = 3;

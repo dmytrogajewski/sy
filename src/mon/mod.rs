@@ -20,22 +20,25 @@ pub mod mcp;
 // unit-testable without an IPC round-trip.
 pub mod waybar;
 
-// Step 15: iced Canvas widgets + theme. Gated on `bar-iced` because
+// Step 15: iced Canvas widgets + theme. Gated on `gui-iced` because
 // both modules pull in `iced::Color` / `iced::widget::canvas::Frame`
-// and reference `crate::stack::bar::theme` (itself bar-iced-gated).
-#[cfg(feature = "bar-iced")]
+// and reference `crate::stack::bar::theme` (itself gui-iced-gated).
+// Step 23 renamed the feature from `bar-iced` to `gui-iced` so the
+// `sy file` xdg-toplevel can ride the same dep gates; the
+// `bar-iced` alias is preserved in `Cargo.toml` for one release.
+#[cfg(feature = "gui-iced")]
 pub mod theme;
-#[cfg(feature = "bar-iced")]
+#[cfg(feature = "gui-iced")]
 pub mod widgets;
 
 // Step 16: popup app (iced + iced_layershell). Same gating as the
 // widget tree above — depends on iced + iced_layershell and consumes
 // `mon::theme` + `mon::widgets`.
-#[cfg(feature = "bar-iced")]
+#[cfg(feature = "gui-iced")]
 pub mod app;
-#[cfg(feature = "bar-iced")]
+#[cfg(feature = "gui-iced")]
 pub mod state;
-#[cfg(feature = "bar-iced")]
+#[cfg(feature = "gui-iced")]
 pub mod view;
 
 /// Domain error carrying a stable CLIG exit code. The `sy mon snapshot`

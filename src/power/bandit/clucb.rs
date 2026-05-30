@@ -27,7 +27,30 @@
 //! `tests::propose_ranked_p99_under_100us` keeps the closed-form
 //! solver within the SPEC's 100 µs budget.
 
+use serde::{Deserialize, Serialize};
+
 use crate::power::snapshot::FEATURE_LEN;
+
+/// Serde mirror of [`Clucb`]'s private state. Built by
+/// [`Clucb::snapshot`] and consumed by [`Clucb::restore`]; the
+/// checkpoint module ([`crate::power::checkpoint`]) is the only
+/// production caller. Field-for-field mirror so a serde round-trip is
+/// lossless — `arms` is included so the checkpoint loader can refuse
+/// a stale on-disk state whose arm vocabulary has drifted from
+/// `power.toml`. `d` (context dimension) is similarly mirrored so a
+/// re-config of [`FEATURE_LEN`] cleanly invalidates the checkpoint
+/// rather than silently truncating.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClucbState {
+    pub arms: Vec<String>,
+    pub alpha: f32,
+    pub a_mats: Vec<Vec<f32>>,
+    pub b_vecs: Vec<Vec<f32>>,
+    pub update_counts: Vec<u64>,
+    pub d: usize,
+    pub baseline_mean: f32,
+    pub baseline_decay: f32,
+}
 
 /// Tikhonov ridge parameter `λ` for the Gram matrix prior `λ·I`. The
 /// value matches the LinUCB convention (Li 2010 §3.1); larger λ shrinks
@@ -117,6 +140,39 @@ impl Clucb {
     /// can watch the conservative anchor stabilise.
     pub fn baseline_mean(&self) -> f32 {
         self.baseline_mean
+    }
+
+    /// Snapshot every accumulator into a serde-round-trippable
+    /// [`ClucbState`]. The checkpoint module ([`crate::power::checkpoint`])
+    /// is the only production caller — see BUG-20260525-2353.
+    pub fn snapshot(&self) -> ClucbState {
+        ClucbState {
+            arms: self.arms.clone(),
+            alpha: self.alpha,
+            a_mats: self.a_mats.clone(),
+            b_vecs: self.b_vecs.clone(),
+            update_counts: self.update_counts.clone(),
+            d: self.d,
+            baseline_mean: self.baseline_mean,
+            baseline_decay: self.baseline_decay,
+        }
+    }
+
+    /// Overwrite every accumulator from a [`ClucbState`] loaded off
+    /// disk. Public surface intentionally limited to
+    /// deserialise-then-overwrite — no other mutation path. Mismatched
+    /// arm vocabulary or context dimension is the caller's
+    /// responsibility to detect before calling (the checkpoint loader
+    /// rejects the stale file via the arms-hash gate).
+    pub fn restore(&mut self, state: ClucbState) {
+        self.arms = state.arms;
+        self.alpha = state.alpha;
+        self.a_mats = state.a_mats;
+        self.b_vecs = state.b_vecs;
+        self.update_counts = state.update_counts;
+        self.d = state.d;
+        self.baseline_mean = state.baseline_mean;
+        self.baseline_decay = state.baseline_decay;
     }
 
     /// Context dimension this CLUCB was constructed against. Step 29

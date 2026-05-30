@@ -89,10 +89,25 @@ pub fn init(mode: Mode) -> Result<WorkerGuard> {
         Mode::Daemon { name } => format!("sy-{name}"),
         Mode::Cli => String::new(),
     };
-    let json_layer = tracing_subscriber::fmt::layer()
-        .with_writer(writer)
-        .event_format(OtelFormatter::new(service_name))
-        .boxed();
+    // The OTel JSON layer is a *daemon* sink — it writes the 11-field
+    // schema to the rolling file appender so `journalctl … -o json`
+    // and log shippers can parse it. In `Mode::Cli` the `writer` is
+    // stderr, so adding the JSON layer there would double-emit every
+    // event (once human-readable via `stderr_layer`, once as JSON).
+    // CLI sessions are read by human eyes, so the JSON layer is
+    // daemon-only; the `service_name` / `writer` only matter there.
+    let json_layer = match mode {
+        Mode::Daemon { .. } => Some(
+            tracing_subscriber::fmt::layer()
+                .with_writer(writer)
+                .event_format(OtelFormatter::new(service_name))
+                .boxed(),
+        ),
+        Mode::Cli => {
+            let _ = (writer, service_name);
+            None
+        }
+    };
     let journald_layer = match mode {
         Mode::Daemon { name } => Some(
             tracing_journald::layer()
@@ -103,7 +118,19 @@ pub fn init(mode: Mode) -> Result<WorkerGuard> {
         Mode::Cli => None,
     };
 
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // Default filter: `info` for sy's own crates, but silence the
+    // noisy GPU / windowing stack (wgpu, iced, winit, naga,
+    // cosmic-text) at `warn` so an interactive `sy file` GUI launched
+    // from a terminal doesn't dump adapter enumerations + per-frame
+    // chatter. `RUST_LOG`, when set, overrides this entirely.
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(
+            "info,\
+             wgpu_hal=error,wgpu_core=error,iced_wgpu=warn,iced_winit=warn,\
+             naga=warn,winit=warn,cosmic_text=warn,sctk=warn,\
+             smithay_client_toolkit=warn",
+        )
+    });
 
     // `tracing` enforces one subscriber per process. When `main` runs
     // `Mode::Cli` before dispatching to a daemon subcommand, the

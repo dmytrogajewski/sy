@@ -144,6 +144,24 @@ const WINDOW_LEN: usize = 8;
 /// rules-baseline warmup model.
 const MIN_TRAINING_ROWS: usize = 32;
 
+/// Per-class row floor for the trainer's coverage gate (Step T3 /
+/// BUG-20260525-2352). The hand-rolled SGD assigns a separate softmax
+/// head to every class; without exemplars a head's weights drift to
+/// zero and the validation accuracy hides the deficit behind the
+/// dominant class's argmax wins. 16 rows is sized to give the per-class
+/// FTRL head a non-trivial gradient signal across [`EPOCHS`] passes
+/// while staying low enough that a sparsely-distributed class
+/// (e.g. `Call` once the rules baseline lets it through) is not
+/// preemptively rejected.
+const MIN_ROWS_PER_CLASS: usize = 16;
+
+/// Per-class recall floor enforced by [`run_validation`] (Step T3 /
+/// BUG-20260525-2352). Half the trivially-attainable "majority class"
+/// baseline — a model that scores recall < 0.5 on a class with training
+/// exemplars is worse than coin-flip, so the trainer refuses to ship it
+/// and the daemon stays on the previous (or warmup) model.
+const MIN_PER_CLASS_RECALL: f32 = 0.5;
+
 /// Validation split — last 20% of the labelled windows form the
 /// held-out set for [`TrainerReport::validation_accuracy`].
 const VALIDATION_FRACTION: f32 = 0.2;
@@ -211,6 +229,16 @@ pub enum TrainerError {
     /// keep the rules-baseline warmup model and surface the gap on
     /// `sy power status`.
     InsufficientData { required: usize, found: usize },
+    /// One or more activity classes have fewer than
+    /// [`MIN_ROWS_PER_CLASS`] labelled rows. Surfaced by the Step T3
+    /// coverage gate so the daemon stays on the rules-baseline /
+    /// warmup model and `sy power status` can surface the missing
+    /// classes for operator visibility.
+    InsufficientClassCoverage {
+        counts: [usize; FORECAST_CLASS_COUNT],
+        missing: Vec<&'static str>,
+        required: usize,
+    },
     /// Forward / backward pass diverged (NaN loss, etc.). Rare on
     /// the tiny model but surfaced rather than masked.
     TrainFailed(String),
@@ -232,6 +260,14 @@ impl std::fmt::Display for TrainerError {
             Self::InsufficientData { required, found } => write!(
                 f,
                 "trainer: insufficient labelled rows: need {required}, found {found}"
+            ),
+            Self::InsufficientClassCoverage {
+                counts,
+                missing,
+                required,
+            } => write!(
+                f,
+                "trainer: insufficient per-class coverage: missing {missing:?} (need ≥ {required} rows each; counts={counts:?})",
             ),
             Self::TrainFailed(e) => write!(f, "trainer: training diverged: {e}"),
             Self::ExportFailed(e) => write!(f, "trainer: ONNX export failed: {e}"),
@@ -341,6 +377,20 @@ pub fn retrain_with_sink(
             found: rows.len(),
         });
     }
+    let counts = class_counts(&rows);
+    let missing: Vec<&'static str> = ACTIVITY_CLASSES
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| counts[*idx] < MIN_ROWS_PER_CLASS)
+        .map(|(_, name)| *name)
+        .collect();
+    if !missing.is_empty() {
+        return Err(TrainerError::InsufficientClassCoverage {
+            counts,
+            missing,
+            required: MIN_ROWS_PER_CLASS,
+        });
+    }
     let windows = build_windows(&rows);
     if windows.len() < MIN_TRAINING_ROWS {
         return Err(TrainerError::InsufficientData {
@@ -418,6 +468,20 @@ fn read_labelled_rows(path: &Path) -> Result<Vec<LabelledRow>, TrainerError> {
         });
     }
     Ok(out)
+}
+
+/// Count labelled rows per activity class. Drives the Step T3
+/// coverage gate so the daemon can surface the gap on
+/// `sy power status` instead of training a softmax head whose missing
+/// classes silently collapse to zero gradient.
+fn class_counts(rows: &[LabelledRow]) -> [usize; FORECAST_CLASS_COUNT] {
+    let mut counts = [0usize; FORECAST_CLASS_COUNT];
+    for row in rows {
+        if row.class_idx < FORECAST_CLASS_COUNT {
+            counts[row.class_idx] += 1;
+        }
+    }
+    counts
 }
 
 /// Project a canonical arm name onto the five-class taxonomy
@@ -850,6 +914,8 @@ fn run_validation(model: &Model, windows: &[LabelledWindow]) -> Result<f32, Stri
         return Ok(0.0);
     }
     let mut hits = 0usize;
+    let mut class_hits = [0usize; FORECAST_CLASS_COUNT];
+    let mut class_totals = [0usize; FORECAST_CLASS_COUNT];
     for w in windows {
         let last = w.seq[WINDOW_LEN - 1];
         let probs = crate::power::forecast::gru::infer(model, &last)
@@ -865,8 +931,32 @@ fn run_validation(model: &Model, windows: &[LabelledWindow]) -> Result<f32, Stri
             })
             .map(|(i, _)| i)
             .unwrap_or(0);
+        if w.class_idx < FORECAST_CLASS_COUNT {
+            class_totals[w.class_idx] += 1;
+            if argmax == w.class_idx {
+                class_hits[w.class_idx] += 1;
+            }
+        }
         if argmax == w.class_idx {
             hits += 1;
+        }
+    }
+    // Per-class recall floor (Step T3 / BUG-20260525-2352). Only
+    // checks classes that actually appear in the validation set —
+    // unobserved classes are already blocked by the
+    // `InsufficientClassCoverage` gate upstream, and re-flagging them
+    // here would deadlock fixtures that intentionally probe the
+    // recall path in isolation.
+    for (idx, total) in class_totals.iter().enumerate() {
+        if *total == 0 {
+            continue;
+        }
+        let recall = class_hits[idx] as f32 / *total as f32;
+        if recall < MIN_PER_CLASS_RECALL {
+            return Err(format!(
+                "per-class recall floor: class {} recall = {recall:.3} < {MIN_PER_CLASS_RECALL}",
+                ACTIVITY_CLASSES[idx],
+            ));
         }
     }
     Ok(hits as f32 / windows.len() as f32)
@@ -1287,21 +1377,35 @@ mod tests {
     }
 
     /// Write the SYNTH_ROWS-line NDJSON corpus to `dir/telemetry.ndjson`
-    /// with the documented (first 100 idle, middle 100 build, last
-    /// 100 call) transition.
+    /// with all five activity classes round-robin-interleaved (Step T3
+    /// coverage gate). Round-robin guarantees both the training split
+    /// (first 80%) and the held-out validation split (last 20%) see
+    /// every class, so the new per-class recall floor doesn't reject
+    /// the trainer when an entire class only appeared at the tail end
+    /// of a temporally-ordered corpus.
     fn write_synth_corpus(dir: &Path) -> PathBuf {
         let path = dir.join("telemetry.ndjson");
         let mut f = fs::File::create(&path).expect("create synthetic NDJSON");
-        for i in 0..SYNTH_ROWS {
-            let class = if i < SYNTH_ROWS / 3 {
-                "idle"
-            } else if i < 2 * SYNTH_ROWS / 3 {
-                "build"
-            } else {
-                "call"
-            };
-            let feats = perturb(class_centroid(class), i as i64);
-            writeln!(f, "{}", synth_line(feats, class, i as i64)).expect("write line");
+        let arms = ["idle", "browse", "call", "code", "build"];
+        for seq in 0..SYNTH_ROWS {
+            let arm = arms[seq % arms.len()];
+            let mut feats = class_centroid(arm);
+            // `browse` / `code` aren't in `class_centroid`'s table —
+            // synthesize distinct centroids so the trainer can
+            // separate every class.
+            match arm {
+                "browse" => {
+                    feats[3] = 0.85;
+                    feats[6] = 0.5;
+                }
+                "code" => {
+                    feats[10] = 0.9;
+                    feats[11] = 0.4;
+                }
+                _ => {}
+            }
+            let feats = perturb(feats, seq as i64);
+            writeln!(f, "{}", synth_line(feats, arm, seq as i64)).expect("write line");
         }
         path
     }
@@ -1495,6 +1599,161 @@ mod tests {
             }
             other => panic!("expected InsufficientData, got {other:?}"),
         }
+    }
+
+    /// Step T3 DoD: when the corpus is missing entire classes, the
+    /// trainer refuses to ship a model AND names the missing classes
+    /// plus the required per-class floor. Synthetic 200-row corpus
+    /// with only `browse` / `idle` / `code` arms (zero `call`,
+    /// zero `build`).
+    #[test]
+    fn rejects_when_class_has_zero_rows() {
+        let tmp = TempDir::new().expect("tempdir");
+        let in_path = tmp.path().join("telemetry.ndjson");
+        let mut f = fs::File::create(&in_path).expect("create file");
+        let arms = ["browse", "idle", "code"];
+        for i in 0..200usize {
+            let arm = arms[i % arms.len()];
+            let feats = perturb(class_centroid("idle"), i as i64);
+            writeln!(f, "{}", synth_line(feats, arm, i as i64)).expect("write line");
+        }
+        let out_path = tmp.path().join("model.onnx");
+        let err = retrain_gru(&in_path, &out_path).expect_err("missing classes must reject");
+        match err {
+            TrainerError::InsufficientClassCoverage {
+                missing, required, ..
+            } => {
+                assert_eq!(required, MIN_ROWS_PER_CLASS);
+                assert!(
+                    missing.contains(&"call"),
+                    "expected `call` in missing list, got {missing:?}",
+                );
+                assert!(
+                    missing.contains(&"build"),
+                    "expected `build` in missing list, got {missing:?}",
+                );
+            }
+            other => panic!("expected InsufficientClassCoverage, got {other:?}"),
+        }
+    }
+
+    /// Step T3 DoD: the coverage gate enforces a per-class ROW count,
+    /// not just class presence. A corpus with 100 browse rows + 5 code
+    /// rows + zero call/build/idle must reject — `code` is below the
+    /// row floor, and the other three are absent entirely.
+    #[test]
+    fn rejects_when_class_has_too_few_rows() {
+        let tmp = TempDir::new().expect("tempdir");
+        let in_path = tmp.path().join("telemetry.ndjson");
+        let mut f = fs::File::create(&in_path).expect("create file");
+        for i in 0..100usize {
+            let feats = perturb(class_centroid("idle"), i as i64);
+            writeln!(f, "{}", synth_line(feats, "browse", i as i64)).expect("write browse");
+        }
+        for i in 0..5usize {
+            let feats = perturb(class_centroid("build"), (100 + i) as i64);
+            writeln!(f, "{}", synth_line(feats, "code", (100 + i) as i64)).expect("write code");
+        }
+        let out_path = tmp.path().join("model.onnx");
+        let err = retrain_gru(&in_path, &out_path).expect_err("under-floor class must reject");
+        match err {
+            TrainerError::InsufficientClassCoverage {
+                missing, counts, ..
+            } => {
+                assert!(
+                    missing.contains(&"code"),
+                    "code (5 < 16) must be in missing list, got {missing:?}",
+                );
+                let code_idx = ACTIVITY_CLASSES
+                    .iter()
+                    .position(|c| *c == "code")
+                    .expect("code class");
+                assert_eq!(counts[code_idx], 5, "counts must reflect actual row count");
+            }
+            other => panic!("expected InsufficientClassCoverage, got {other:?}"),
+        }
+    }
+
+    /// Step T3 DoD: when an observed class scores recall below
+    /// [`MIN_PER_CLASS_RECALL`] on the held-out set, the validation
+    /// gate rejects the model — even if argmax accuracy passes. The
+    /// trainer builds the validation set directly so we can pin a
+    /// fixture where every "code" window's argmax is "browse".
+    #[test]
+    fn rejects_when_per_class_recall_below_floor() {
+        // Two classes: one with high accuracy (browse, all-zero
+        // features) and one with zero recall (code, same all-zero
+        // features but different label). The trainer fits "always
+        // browse"; recall on code is 0.0.
+        let browse_idx = ACTIVITY_CLASSES
+            .iter()
+            .position(|c| *c == "browse")
+            .unwrap();
+        let code_idx = ACTIVITY_CLASSES.iter().position(|c| *c == "code").unwrap();
+        let mut windows: Vec<LabelledWindow> = Vec::new();
+        for _ in 0..40 {
+            windows.push(LabelledWindow {
+                seq: [[0.0; FEATURE_LEN]; WINDOW_LEN],
+                class_idx: browse_idx,
+            });
+        }
+        for _ in 0..20 {
+            windows.push(LabelledWindow {
+                seq: [[0.0; FEATURE_LEN]; WINDOW_LEN],
+                class_idx: code_idx,
+            });
+        }
+        let trained = train_gru(&windows).expect("train_gru on noise-only");
+        let bytes = export_onnx(&trained.weights).expect("export_onnx");
+        let model = Model::from_onnx_bytes(&bytes).expect("tract decodes");
+        let err = run_validation(&model, &windows).expect_err("recall floor must reject");
+        assert!(
+            err.contains("code recall"),
+            "expected error to name code recall, got {err}",
+        );
+    }
+
+    /// Step T3 DoD: a corpus that ticks every coverage box trains
+    /// cleanly through the new gates. 200 rows balanced across all 5
+    /// classes with linearly-separable centroids — well above the
+    /// per-class floor and far enough above the recall floor that a
+    /// converged GRU sails through both checks.
+    #[test]
+    fn accepts_when_all_observed_classes_meet_floor() {
+        let tmp = TempDir::new().expect("tempdir");
+        let in_path = tmp.path().join("telemetry.ndjson");
+        let mut f = fs::File::create(&in_path).expect("create file");
+        let arms = ["idle", "browse", "call", "code", "build"];
+        for i in 0..200usize {
+            let arm = arms[i % arms.len()];
+            // Use the arm name itself as a centroid key so each class
+            // gets a distinct feature signature. `browse` / `code`
+            // aren't in `class_centroid`'s table — synthesize a
+            // distinct centroid here so the trainer can separate
+            // them.
+            let mut feats = class_centroid(arm);
+            match arm {
+                "browse" => {
+                    feats[3] = 0.85;
+                    feats[6] = 0.5;
+                }
+                "code" => {
+                    feats[10] = 0.9;
+                    feats[11] = 0.4;
+                }
+                _ => {}
+            }
+            let feats = perturb(feats, i as i64);
+            writeln!(f, "{}", synth_line(feats, arm, i as i64)).expect("write row");
+        }
+        let out_path = tmp.path().join("model.onnx");
+        let report = retrain_gru(&in_path, &out_path).expect("balanced corpus must train cleanly");
+        assert_eq!(report.epochs, EPOCHS);
+        assert!(
+            report.validation_accuracy >= 0.8,
+            "expected accuracy ≥ 0.8 on a balanced separable corpus, got {}",
+            report.validation_accuracy,
+        );
     }
 
     /// Mapping smoke-test — covers every branch of `arm_to_class_idx`

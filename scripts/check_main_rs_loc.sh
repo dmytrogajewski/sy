@@ -43,9 +43,30 @@
 # render loop + a four-line `if waybar_touched && !dry {
 # waybar::reload(); }` trailer so `sy apply` is the single deploy
 # verb per CLAUDE.md "no snowflakes" (SIGUSR2 plumbing itself
-# lives in `src/waybar.rs`). Running total: 1066. Pass a lower
-# value as $1 when later zones extract logic out of main.rs and
-# the budget should ratchet.
+# lives in `src/waybar.rs`). Running total: 1066. Plus 5 lines for
+# the yazi bootstrap follow-up landed `mod yazi_install;` + a
+# `println!("yazi:")` header + the `yazi_install::ensure_yazi(root,
+# dry)?;` call inside `apply`. sy-file-manager Step 36 retired that
+# bootstrap (the productivised yazi rice is gone now that `sy file`
+# is the canonical path) and the five lines were subtracted again.
+# Net for this zone: 0. Running total: 1066. Plus
+# 10 lines for the sy-file-manager roadmap Step 1 `mod plugin;`
+# declaration (gated `#[cfg(test)]` until the Step 2+ non-test
+# consumers in the bin land; the seven-line comment documents the
+# gate so Step 2 can drop it without surprise); heavy lifting lives
+# in `src/plugin/manifest.rs`. Running total: 1076. Plus 8 lines for
+# the sy-file-manager roadmap Step 8 `Cmd::Plugin` clap variant
+# (six-line docstring + nested `#[command(subcommand)]` block) +
+# dispatch arm; the gate flips off from `#[cfg(test)] mod plugin;`
+# to plain `mod plugin;` (net +1 — the `#[cfg(test)]` attribute went
+# away but the rewritten comment grew by one line). Heavy lifting
+# lives in `src/plugin/cli.rs`. Running total: 1084. Plus 13 lines
+# for the sy-file-manager roadmap Step 13 `mod file;` declaration +
+# `Cmd::File { path, cmd }` clap variant (six-line docstring + two
+# positional/`#[command(subcommand)]` fields) + dispatch arm; heavy
+# lifting lives in `src/file/cli.rs::dispatch`. Running total: 1097.
+# Pass a lower value as $1 when later zones extract logic out of
+# main.rs and the budget should ratchet.
 #
 # Exit: 0 on under-budget, 1 on over-budget, 2 on usage error.
 set -euo pipefail

@@ -130,6 +130,28 @@ pub struct StatusResponse {
     /// compatible.
     #[serde(default)]
     pub drift: DriftStatus,
+    /// Step T3 (BUG-20260525-2352) model-health block. Populated by
+    /// the daemon when the most recent retrain attempt aborted with
+    /// per-class-coverage / per-class-recall gates so
+    /// `sy power status --json | jq .model.missing_classes` surfaces
+    /// the gap. `None` means "last retrain succeeded or hasn't fired".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelStatus>,
+}
+
+/// Step T3 model-health surface carried on [`StatusResponse::model`].
+/// Currently a single field — the trainer's last-known missing-classes
+/// list — but kept in its own struct so future health signals
+/// (training wall-time, validation accuracy, version-sha) can be added
+/// without re-bumping the wire schema.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelStatus {
+    /// Names of activity classes that fell below the trainer's
+    /// per-class row floor on the last retrain attempt. Empty when the
+    /// last attempt failed for a different reason; absent (`None` on
+    /// [`StatusResponse::model`]) when no retrain has ever fired.
+    #[serde(default)]
+    pub missing_classes: Vec<String>,
 }
 
 impl StatusResponse {
@@ -146,6 +168,7 @@ impl StatusResponse {
             snapshot: value,
             last_audit: None,
             drift: DriftStatus::default(),
+            model: None,
         }
     }
 }

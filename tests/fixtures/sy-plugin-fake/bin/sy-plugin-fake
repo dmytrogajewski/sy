@@ -1,0 +1,60 @@
+#!/bin/bash
+# Minimal in-tree fake plugin for Step 8 of the sy-file-manager
+# roadmap. Speaks the SPEC §4.2 wire (Content-Length framed JSON-RPC),
+# handshakes once, then for every subsequent request echoes the
+# `params` object back as `result` (or a `ping` shape for the
+# `ping` method). Step 10 will land the full conformance fixture;
+# this stub exists so `sy plugin exec` can drive a one-shot request
+# end-to-end today.
+emit() {
+  local body="$1"
+  printf 'Content-Length: %d\r\n\r\n%s' "${#body}" "$body"
+}
+FRAME=""
+read_frame() {
+  local len=0 line
+  while IFS= read -r line; do
+    line="${line%$'\r'}"
+    [ -z "$line" ] && break
+    case "$line" in
+      Content-Length:*)
+        len="${line#Content-Length: }"
+        len="${len// /}"
+        ;;
+    esac
+  done || { FRAME=""; return 1; }
+  if [ "$len" -gt 0 ]; then
+    FRAME=$(dd bs=1 count="$len" 2>/dev/null)
+  else
+    FRAME=""
+  fi
+  return 0
+}
+read_frame
+case "$FRAME" in
+  *'"method":"initialize"'*)
+    emit '{"jsonrpc":"2.0","id":1,"result":{"name":"fake","version":"0","api":"1","capabilities":[{"kind":"previewer","mime":"text/markdown"}],"offers":["preview","ping"]}}'
+    ;;
+esac
+while read_frame; do
+  [ -z "$FRAME" ] && break
+  case "$FRAME" in
+    *'"method":"shutdown"'*)
+      id=$(printf '%s' "$FRAME" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+      emit "{\"jsonrpc\":\"2.0\",\"id\":${id},\"result\":null}"
+      read_frame
+      break
+      ;;
+    *'"method":"ping"'*)
+      id=$(printf '%s' "$FRAME" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+      ts=$(printf '%s' "$FRAME" | sed -n 's/.*"ts":\([0-9]*\).*/\1/p')
+      [ -z "$ts" ] && ts=0
+      emit "{\"jsonrpc\":\"2.0\",\"id\":${id},\"result\":{\"ts\":${ts}}}"
+      ;;
+    *)
+      id=$(printf '%s' "$FRAME" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+      emit "{\"jsonrpc\":\"2.0\",\"id\":${id},\"result\":{\"echo\":true}}"
+      ;;
+  esac
+done
+exit 0

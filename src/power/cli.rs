@@ -1638,6 +1638,7 @@ mod tests {
                 ddm_warning: false,
                 last_alarm_at: Some(chrono::Utc::now()),
             },
+            model: None,
         };
         let err = status_drift_exit(&resp).expect("alarm must produce a PowerError");
         let pe = err
@@ -1659,6 +1660,7 @@ mod tests {
             snapshot: serde_json::json!({}),
             last_audit: None,
             drift: DriftStatus::default(),
+            model: None,
         };
         assert!(status_drift_exit(&resp).is_none());
     }

@@ -1,0 +1,35 @@
+# `sy file` defaults — SPEC §3.3 item 17 ("Theming / configs").
+# Roadmap Step 34 productivises this file alongside `file-keymap.toml`
+# and `file-theme.toml`. `sy apply` walks `configs/sy/**` and renders
+# every UTF-8 file through minijinja, so the home var and the theme's
+# colour / ui tables are addressable via the standard `home` /
+# `colors.<key>` / `ui.<key>` bindings.
+
+[file]
+# Sort entries newest-first by mtime. SPEC §3.3 item 5 ("Quick filters
+# / sort"). Operators rebind via `o` in the command bar.
+sort = "mtime-desc"
+
+# Hidden files (dotfiles) hidden by default — SPEC §3.3 item 5.
+# Toggle with `.` in the command bar.
+show_hidden = false
+
+# JetBrainsMono Nerd Font glyph map for entry icons (SPEC §3.3 item 3
+# — `widgets::icons`). The font itself is provisioned by `sy apply`
+# via the systemd tmpfiles path; the doctor probe verifies presence.
+icons = "nerd-font"
+
+# Preview byte clamp — built-in text previewer reads the head of each
+# entry up to this byte count. Step 26 wires the journey-J3 budget
+# against this clamp. 64 KiB is the SPEC §3.3 item 8 default.
+preview_clamp_bytes = 65536
+
+# Knowledge-search affordance (`:k <query>`) toggle. When false the
+# command bar's `:k` palette dispatch short-circuits to a "knowledge
+# disabled" hint. SPEC §3.3 item 7 + journey-J4.
+knowledge_enabled = true
+
+# Home dir under which `~` resolves in the IPC `file.open` op. The
+# `home` minijinja var is expanded by `sy apply` so the rendered
+# file carries an absolute path; the daemon reads it once at boot.
+home_dir = "{{ home }}"

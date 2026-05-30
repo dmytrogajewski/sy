@@ -26,6 +26,7 @@ mod crash;
 mod disk;
 mod doctor;
 mod fido;
+mod file;
 mod gpu;
 mod ipc_cli;
 mod knowledge;
@@ -35,6 +36,14 @@ mod mon_exporter;
 mod net;
 mod notif;
 mod npu;
+// Roadmap Step 8 lifts the `#[cfg(test)]` gate: `Cmd::Plugin` below
+// is the first non-test bin consumer of the plugin runtime. The
+// dispatcher in `plugin::cli::dispatch` reaches every other plugin
+// submodule (`manifest`, `registry`, `proc`, `sandbox`, `host_fns`,
+// `capability`, `rpc`, `transport`) at runtime, so the workspace's
+// `clippy::dead_code = "deny"` gate stays clean without a per-module
+// per-module dead-code suppression.
+mod plugin;
 mod popup;
 mod power;
 mod pwr;
@@ -316,6 +325,17 @@ enum Cmd {
         #[command(subcommand)]
         cmd: crash::CrashCmd,
     },
+    /// `sy file` — niri-tiled iced file manager
+    /// (sy-file-manager roadmap Step 13; see SPEC §3.1).
+    /// Step 13 ships the carrier (`sy file [PATH]` prints `scaffold`,
+    /// `sy file doctor [--json]` returns the not-implemented marker);
+    /// Steps 14-22 fill in state, fs, IPC; Steps 23-29 land the GUI.
+    File {
+        /// Path to open (journey-J1's `sy file ~` shape).
+        path: Option<PathBuf>,
+        #[command(subcommand)]
+        cmd: Option<file::cli::FileCmd>,
+    },
     /// `sy mon` — on-demand system-health dashboard (sy-mon SPEC §3).
     /// Subcommands: `collect` (Step 11/13 aggregator), `snapshot`
     /// (Step 14 CLI consumer), `mcp` (Step 14 stdio MCP server),
@@ -325,6 +345,15 @@ enum Cmd {
     Mon {
         #[command(subcommand)]
         cmd: Option<mon::cli::MonCmd>,
+    },
+    /// `sy plugin` — discover / inspect / drive `sy file` plugins
+    /// (sy-file-manager roadmap Step 8; see plugin SPEC §4.5).
+    /// Subcommands: list, enable, disable, doctor, exec, cat-manifest,
+    /// validate, reload. Exit codes per SPEC §4.5 table
+    /// (0 ok / 2 usage / 8 plugin unhealthy).
+    Plugin {
+        #[command(subcommand)]
+        cmd: plugin::cli::PluginCmd,
     },
     /// `systemctl --user` / `journalctl --user` wrapper per SPEC §4.7
     /// (arch-supervision Step 3). Subcommands: start|stop|restart|
@@ -509,8 +538,10 @@ fn run() -> Result<()> {
         Cmd::Ipc { sub } => ipc_cli::dispatch(sub),
         Cmd::Doctor { json, only } => doctor::dispatch(doctor::DoctorOpts { json, only }),
         Cmd::Crash { cmd } => crash::dispatch(cmd),
+        Cmd::File { path, cmd } => file::cli::dispatch(path, cmd),
         Cmd::Service { cmd } => supervision::service::dispatch(cmd),
         Cmd::Mon { cmd } => mon::cli::dispatch(cmd.unwrap_or(mon::cli::default_subcommand())),
+        Cmd::Plugin { cmd } => plugin::cli::dispatch(cmd),
     }
 }
 

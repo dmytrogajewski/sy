@@ -40,24 +40,24 @@ pub enum MonCmd {
     /// Headless render probe — walks every Step 15 Canvas widget
     /// through a mock recorder and prints a one-line op-count summary.
     /// Hidden because it's a doctor surface (not a user workflow);
-    /// gated on `bar-iced` so `--no-default-features` builds still
+    /// gated on `gui-iced` so `--no-default-features` builds still
     /// link. Doubles as the in-tree consumer that keeps the widget
     /// public surface from tripping `dead_code` until Step 16 wires
     /// the popup view tree.
-    #[cfg(feature = "bar-iced")]
+    #[cfg(feature = "gui-iced")]
     #[command(hide = true)]
     Probe,
     /// Open the `sy mon` popup process (iced + iced_layershell). Same
     /// code path as the bare `sy mon` invocation per SPEC §3 SCOPE
     /// item 3; Step 19 reroutes both through `popup::toggle("mon")`
     /// so the keybinding from niri gets idempotent toggle behaviour.
-    #[cfg(feature = "bar-iced")]
+    #[cfg(feature = "gui-iced")]
     Open,
     /// Close any running `sy mon` popup. Reads the PID file at
     /// `/tmp/sy-popup-mon.pid` and SIGTERMs the process. Idempotent:
     /// no popup → success exit. Step 19 folds this into
     /// `popup::toggle` so a second `Mod+M` press dismisses.
-    #[cfg(feature = "bar-iced")]
+    #[cfg(feature = "gui-iced")]
     Close,
     /// Validate the sy-mon dashboard plumbing. Runs `mon.collect.running`,
     /// `mon.metrics_socket.<plane>` (one per known plane), and
@@ -158,16 +158,16 @@ fn xdg_runtime_dir() -> Result<PathBuf> {
 /// Default subcommand when the user invokes the bare `sy mon`. Per
 /// SPEC §3 SCOPE item 3 + Step 19, this is the popup — the same code
 /// path `Mod+M` ships through `popup::toggle("mon")`. Under
-/// `--no-default-features` (no `bar-iced`) we route to `snapshot
+/// `--no-default-features` (no `gui-iced`) we route to `snapshot
 /// --json` as a graceful fallback so headless invocations don't
 /// fail on a missing subcommand; clap shows `--help` if even that
 /// path is missing.
-#[cfg(feature = "bar-iced")]
+#[cfg(feature = "gui-iced")]
 pub fn default_subcommand() -> MonCmd {
     MonCmd::Open
 }
 
-#[cfg(not(feature = "bar-iced"))]
+#[cfg(not(feature = "gui-iced"))]
 pub fn default_subcommand() -> MonCmd {
     MonCmd::Snapshot(SnapshotOpts { json: true })
 }
@@ -188,14 +188,14 @@ pub fn dispatch(cmd: MonCmd) -> Result<()> {
         }
         MonCmd::Snapshot(opts) => run_snapshot(opts),
         MonCmd::Mcp => super::mcp::run(),
-        #[cfg(feature = "bar-iced")]
+        #[cfg(feature = "gui-iced")]
         MonCmd::Probe => {
             super::widgets::probe::run();
             Ok(())
         }
-        #[cfg(feature = "bar-iced")]
+        #[cfg(feature = "gui-iced")]
         MonCmd::Open => super::app::run(),
-        #[cfg(feature = "bar-iced")]
+        #[cfg(feature = "gui-iced")]
         MonCmd::Close => super::app::close(),
         MonCmd::Doctor(opts) => super::doctor::dispatch(opts.json),
         MonCmd::Waybar => super::waybar::run(),

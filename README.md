@@ -106,8 +106,7 @@ configs/
 ├── mako/config
 ├── fuzzel/fuzzel.ini
 ├── foot/foot.ini
-├── swaylock/config
-└── yazi/{package.toml,theme.toml,yazi.toml,keymap.toml,init.lua}
+└── swaylock/config
 ```
 
 Stack:
@@ -120,7 +119,7 @@ Stack:
 | Launcher         | fuzzel          | `dnf`                           |
 | Terminal         | foot            | `dnf`                           |
 | Notifications    | mako            | `dnf`                           |
-| File manager     | yazi (+ `ya`)   | `cargo install yazi-build`      |
+| File manager     | `sy file` (iced) | productivised under `configs/sy/file*.toml`; opens via `Mod+E` / `sy file --ipc` |
 | Lock             | swaylock        | `dnf`                           |
 | Idle             | swayidle        | `dnf` (DPMS via `niri msg`)     |
 | Night light      | wlsunset        | `dnf`                           |
@@ -166,7 +165,7 @@ the PAM module's control flags and arguments are in
 │   └── …                     # bat, bright, bt, cal, gpu, npu, net, … (bar tiles)
 ├── configs/                  # declarative config (rendered by `sy apply`)
 │   ├── systemd/{system,user}/*.service|*.target
-│   ├── niri/ waybar/ mako/ fuzzel/ foot/ swaylock/ yazi/
+│   ├── niri/ waybar/ mako/ fuzzel/ foot/ swaylock/
 │   ├── sy/{power,intent_whitelist}.toml
 │   ├── dbus-1/ policy/ selinux/ udev/ modprobe.d/ grub/ dracut/
 │   └── …
@@ -200,8 +199,6 @@ unzip -q -o /tmp/JBM.zip -d ~/.local/share/fonts/JetBrainsMono '*.ttf'
 rm /tmp/JBM.zip
 fc-cache -f
 
-cargo install --locked --force yazi-build
-rm -f ~/.cargo/bin/yazi-build
 GOBIN=~/.local/bin go install go.senan.xyz/cliphist@latest
 ```
 
@@ -222,9 +219,12 @@ cargo build --release
 niri msg action load-config-file
 killall -SIGUSR2 waybar
 makoctl reload
-
-./scripts/yazi-plugins.sh               # yazi plugins + flavor (idempotent)
 ```
+
+`sy file` (the in-tree iced file manager) is the primary file
+manager — see the [`Stack`](#planes) row above and
+[`docs/how-to/run-sy-file.md`](docs/how-to/run-sy-file.md) for the
+first-session recipe.
 
 Override target dir with `--target` or `$XDG_CONFIG_HOME`. Override
 repo root with `--root` or `$SY_ROOT`. The active theme lives in
@@ -368,7 +368,7 @@ Mod key is **Super** (Mod4). Full list below.
 | Keys                              | Action                                   |
 |-----------------------------------|------------------------------------------|
 | `Super+Return`                    | Terminal (foot)                          |
-| `Super+n`                         | File manager (yazi in foot)              |
+| `Mod+E` / `Mod+Shift+E` / `Mod+Slash` | `sy file` (the new iced file manager) |
 | `Super+d` / `Super+Shift+d`       | Launcher / dmenu mode                    |
 | `Super+c`                         | Clipboard history (cliphist + fuzzel)    |
 | `Super+Escape`                    | Lock screen                              |
@@ -445,14 +445,10 @@ The palette lives in `themes/<name>.toml` and is injected into every
   `niri/language` (XKB layout indicator). Needs waybar 0.11+.
 - **Idle & DPMS**: swayidle uses `niri msg action power-off-monitors`
   / `power-on-monitors` for DPMS.
-- **Yazi**: `configs/yazi/` ships the full config — `yazi.toml`
-  (previewers + git fetcher), `keymap.toml` (plugin keybindings),
-  `init.lua` (guarded `:setup()` calls), `theme.toml` (flavor pin) and
-  `package.toml` (32 `ya pkg` deps + the gruvbox flavor). Plugins not
-  reachable via `ya pkg` (dual-pane, easyjump, searchjump, whoosh)
-  are git-cloned by `scripts/yazi-plugins.sh`. Run that script after
-  `sy apply` (or `make yazi-plugins`); it is idempotent and safe to
-  re-run on upgrade.
+- **File manager**: `sy file` is the productivised path; first-session
+  recipe in [`docs/how-to/run-sy-file.md`](docs/how-to/run-sy-file.md)
+  and the plugin-author path in
+  [`docs/how-to/write-a-sy-plugin.md`](docs/how-to/write-a-sy-plugin.md).
 
 ## Contributing
 

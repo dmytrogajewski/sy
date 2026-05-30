@@ -1,0 +1,48 @@
+# Productivised sy-plugin-md manifest (no snowflakes — CLAUDE.md).
+#
+# `sy apply` (Phase B Step 35) drops this file under the host's
+# plugin search root. The `exec` path points at the canonical
+# install location for the release binary.
+api = "1"
+
+[plugin]
+id = "sy-plugin-md"
+name = "Markdown Previewer"
+version = "0.1.0"
+description = "Renders Markdown to PNG via pulldown-cmark + cosmic-text + tiny-skia"
+authors = ["Dmitriy Gajewski <dmytrogajewski@gmail.com>"]
+license = "MIT"
+homepage = "https://github.com/dmytrogajewski/sy"
+api_min = "1"
+api_max = "1"
+
+[plugin.binary]
+exec = "~/.local/bin/sy-plugin-md"
+
+[[capability]]
+kind = "previewer"
+mime = "text/markdown"
+[[capability]]
+kind = "previewer"
+url = "*.md"
+[[capability]]
+kind = "previewer"
+url = "*.markdown"
+
+[needs]
+fs_read = ["arg.path"]
+fs_write = []
+preview = []
+knowledge = []
+network = []
+exec = []
+
+[limits]
+memory_mb = 256
+cpu_seconds = 30
+nofile = 256
+spawn_timeout_ms = 2000
+shutdown_timeout_ms = 1000
+
+[env]
+RUST_LOG = "info"

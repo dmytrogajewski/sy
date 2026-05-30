@@ -361,10 +361,7 @@ mod tests {
     #[test]
     fn two_words_caps_at_two_tokens() {
         assert_eq!(two_words("Galaxy S25 Ultra"), "Galaxy S25");
-        assert_eq!(
-            two_words("S25 Ultra пользователя Dmytro"),
-            "S25 Ultra"
-        );
+        assert_eq!(two_words("S25 Ultra пользователя Dmytro"), "S25 Ultra");
     }
 
     #[test]

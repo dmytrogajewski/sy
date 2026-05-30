@@ -89,6 +89,16 @@ pub fn build_status_value(
             .map(|_| RULES_BASELINE_VERSION.to_string())
             .unwrap_or_else(|| RULES_BASELINE_VERSION.to_string())
     };
+    // Step T3 (BUG-20260525-2352): `model.missing_classes` is the
+    // operator's affordance for noticing the trainer refused to ship
+    // a degenerate model. `null` means the last retrain succeeded or
+    // hasn't fired; a populated list names the classes whose row
+    // counts fell below the trainer's per-class floor.
+    let missing_classes = resp
+        .model
+        .as_ref()
+        .map(|m| json!(m.missing_classes))
+        .unwrap_or(Value::Null);
     json!({
         "schema": STATUS_SCHEMA,
         "ts": ts,
@@ -102,6 +112,7 @@ pub fn build_status_value(
             "version_sha": model_version,
             "loaded_at": null,
             "params": 0,
+            "missing_classes": missing_classes,
         },
         "shield_state": shield_state.as_str(),
         "activity_label": STUB_ACTIVITY_LABEL,
@@ -655,6 +666,7 @@ mod tests {
             snapshot: serde_json::json!({}),
             last_audit: None,
             drift: crate::power::drift::DriftStatus::default(),
+            model: None,
         }
     }
 
@@ -729,6 +741,7 @@ mod tests {
                 },
             }),
             drift: crate::power::drift::DriftStatus::default(),
+            model: None,
         };
         let v = build_status_value(&resp, &cfg, ShieldState::CoolAc, &default_onboarding());
         assert!((v["sensors"]["package_power_w_5tap"].as_f64().unwrap() - 27.4).abs() < 1e-3);
@@ -776,6 +789,7 @@ mod tests {
             snapshot: serde_json::json!({}),
             last_audit: Some(entry),
             drift: crate::power::drift::DriftStatus::default(),
+            model: None,
         };
         let v = build_status_value(&resp, &cfg, ShieldState::CoolAc, &default_onboarding());
         assert_eq!(v["applied_policy"]["arm"].as_str(), Some("build"));
@@ -1094,6 +1108,7 @@ mod tests {
             snapshot: serde_json::json!({}),
             last_audit: Some(entry),
             drift: crate::power::drift::DriftStatus::default(),
+            model: None,
         };
         let onb = OnboardingStatus {
             active: false,
@@ -1106,6 +1121,42 @@ mod tests {
         assert!(
             tip.contains("build"),
             "tooltip must mention applied arm 'build': {tip}",
+        );
+    }
+
+    /// Step T3 DoD: when the daemon's last retrain attempt errored
+    /// with `InsufficientClassCoverage`, `sy power status --json` must
+    /// surface the missing-classes list on `model.missing_classes` so
+    /// the operator can attribute the skipped train without digging
+    /// through `journalctl`.
+    #[test]
+    fn status_model_block_surfaces_missing_classes() {
+        let cfg = PowerConfig::default();
+        let mut resp = empty_response();
+        resp.model = Some(crate::power::ipc::ModelStatus {
+            missing_classes: vec!["call".to_string(), "build".to_string()],
+        });
+        let v = build_status_value(&resp, &cfg, ShieldState::CoolAc, &default_onboarding());
+        let missing = v["model"]["missing_classes"]
+            .as_array()
+            .expect("missing_classes array");
+        assert_eq!(missing.len(), 2);
+        assert_eq!(missing[0], "call");
+        assert_eq!(missing[1], "build");
+    }
+
+    /// Step T3 DoD: when no retrain has reported a coverage gap, the
+    /// `model.missing_classes` slot is `null`, not an empty array —
+    /// the documented "hasn't fired or last train succeeded" shape.
+    #[test]
+    fn status_model_missing_classes_null_when_no_gap() {
+        let cfg = PowerConfig::default();
+        let resp = empty_response();
+        let v = build_status_value(&resp, &cfg, ShieldState::CoolAc, &default_onboarding());
+        assert!(
+            v["model"]["missing_classes"].is_null(),
+            "expected null missing_classes, got {}",
+            v["model"]["missing_classes"],
         );
     }
 

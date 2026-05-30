@@ -1,0 +1,63 @@
+# sy file daemon (IPC + MCP host for the SPEC §4.3 op surface).
+#
+# Step 22 of `specs/roadmaps/sy-file-manager/ROADMAP.md` productivises
+# the file plane under the same user-mode supervisor that owns the
+# knowledge / aiplane / agentd planes. Socket-activated via the
+# matching `sy-file.socket` so a never-touched file plane doesn't
+# burn RAM the way an eager daemon would.
+#
+# `Type=notify`: the daemon emits `READY=1` after the IPC socket is
+# bound + chmod'd 0600 (per `src/file/ipc.rs::serve`). The
+# `--systemd-notify` flag on `sy file ipc serve` is the trigger;
+# without it the daemon still serves IPC fine (`sy file ipc serve`
+# from a dev shell) but no notify byte gets emitted. `NotifyAccess=
+# main` restricts the notify socket to the daemon's own pid so a
+# misbehaving child can't spoof readiness.
+#
+# Ordering: `After=sy-knowledge.service` so the journey-J4 `:k`
+# knowledge search inline binds against an already-up knowledge plane
+# rather than racing it at boot. Knowledge isn't a hard dep — `sy
+# file` survives knowledge being down (Step 30's `file.search`
+# fallback path returns filename-only matches), so `Wants=`/`Requires=`
+# would be overkill; `After=` orders without coupling lifecycle.
+#
+# Manual recipe (rice-level):
+#
+#   sy apply --yes
+#   systemctl --user daemon-reload
+#   systemctl --user start sy-file.socket
+#   systemctl --user status sy-file.service
+#   # First IPC dial triggers activation:
+#   sy file ipc state
+#
+# Source: specs/research/sy-file-manager/SPEC.md §4.5.
+
+[Unit]
+Description=sy file plane daemon (IPC + MCP host for sy file)
+Documentation=https://github.com/dmytrogajewski/sy
+After=sy-knowledge.service
+PartOf=sy.target
+Requires=sy-file.socket
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=%h/.local/bin/sy file ipc serve --systemd-notify
+
+# Background-priority — interactive UI threads (waybar / niri /
+# focused agent) come first. The file plane is bursty (one copy job at
+# a time, hover previews) so it tolerates nice+10 without user-visible
+# latency on the journey beats.
+Nice=10
+
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=10s
+KillMode=mixed
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sy-file
+
+[Install]
+WantedBy=sy.target

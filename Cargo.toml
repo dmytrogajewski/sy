@@ -5,7 +5,7 @@
 # vocabulary crate, lockstep-versioned, `publish = false`, with
 # `sy-core` kept deliberately minimal so it never becomes a hub-
 # rebuild bottleneck.
-members = [".", "crates/sy-core", "crates/sy-ipc", "crates/sy-testutils"]
+members = [".", "crates/sy-core", "crates/sy-ipc", "crates/sy-testutils", "crates/sy-plugin-fake", "crates/sy-plugin-pdk", "crates/sy-plugin-md"]
 resolver = "2"
 
 [workspace.package]
@@ -80,6 +80,13 @@ tempfile = "3"
 # (SPEC §4.2 framing); `bytes` for BytesMut buffers exposed by the codec;
 # `ulid` for canonical Crockford-base32 request_id (SPEC §4.2 example).
 tokio-util = { version = "0.7", default-features = false, features = ["codec"] }
+# sy-file-manager Step 16 (`fs::copy`): `wrappers::ReceiverStream`
+# adapts the `mpsc::channel<OpEvent>` the copy executor feeds into the
+# `impl Stream<Item = OpEvent>` the `pub async fn copy(...)` contract
+# exposes (SPEC §3.2 row 4 progress beat). `default-features = false`
+# drops the `sync` feature we don't use; we only need the
+# `Receiver` ↔ `Stream` shim.
+tokio-stream = { version = "0.1", default-features = false }
 bytes = "1"
 ulid = { version = "1", features = ["serde"] }
 # IPC v1 Step 2 (Server/Client). `rustix/process` for `geteuid()`
@@ -149,7 +156,7 @@ sd-notify = "0.5"
 # already pinned in `Cargo.lock` (transitive via iced's `mundy`), so
 # declaring it here adds no version skew. The `blocking` subset keeps
 # the channel synchronous + matches Step 4's `PsiChannel` shape.
-zbus = { version = "5", default-features = false, features = ["blocking-api"] }
+zbus = { version = "5", default-features = false, features = ["blocking-api", "tokio"] }
 # sy-power Step 7 (SPEC §2 "12-signal panel" — cgroup ancestry intent
 # channel). `intent::cgroup` walks `/proc/<pid>/cgroup` ancestry to
 # match new processes against an allow-list and emits
@@ -281,6 +288,80 @@ prometheus-parse = "0.2"
 # set. Confined to the binary's `src/mon/` tree — sy-core's
 # `SystemSnapshot` doesn't touch regex.
 regex = "1"
+# sy-file-manager Step 9 (SPEC §3.2 row 10 — `sy plugin install` minisign
+# verify). Pure-Rust, zero-dependency verifier (no FFI). The bin pulls
+# the verifier in production; tests pair it with the `minisign` crate
+# (bin dev-dep) which provides the matching signer so fixtures sign +
+# verify hermetically inside the test process.
+minisign-verify = "0.2"
+# sy-file-manager Step 12 (SPEC §3.3 item 18 — `sy-plugin-md` canary).
+# Pure-Rust markdown → PNG pipeline. `pulldown-cmark` is a pull-style
+# CommonMark parser (zero-dep beyond `unicase`); `cosmic-text` 0.15 is
+# already a transitive of `iced`'s text shaper (pinning to the version
+# the workspace already links against avoids a second cosmic-text in
+# the dep tree); `tiny-skia` 0.11 is already a transitive of `resvg`
+# (same rationale). `png` is pulled via `tiny-skia`'s `Pixmap::encode_png`
+# so we don't depend on the `png` crate directly. The plugin runs as a
+# child process under the sandbox supervisor; no GUI, no `iced`.
+pulldown-cmark = { version = "0.10", default-features = false }
+cosmic-text = "0.15"
+tiny-skia = "0.11"
+# sy-file-manager Step 18 (SPEC §3.3 item 5 + §3.4 anti-goal "data
+# loss" — freedesktop Trash spec round-trip). Pure-Rust implementation
+# of the XDG trash protocol so other DEs (Nautilus, Dolphin,
+# gnome-shell, `gio trash --list`) can see and restore our trashes.
+# The crate's `home_trash()` honours `$XDG_DATA_HOME`, which is the
+# hook the tests use to redirect to a hermetic tempdir without
+# clobbering the operator's real trash. `default-features = false`
+# drops the Windows-only COM init flags but keeps `chrono`, which is
+# load-bearing: without it, `freedesktop.rs::move_to_trash` skips the
+# `DeletionDate=YYYY-MM-DDThh:mm:ss` line in the `.trashinfo` file,
+# which the `trash_preserves_freedesktop_trashinfo` test (and other
+# DEs like `gio trash --list`) parse for the "deleted at" column.
+trash = { version = "5", default-features = false, features = ["chrono"] }
+# sy-file-manager Step 19 (SPEC §3.3 item 11 — live updates + MIME
+# detection ladder). `tree_magic_mini` is the sniff-side magic-number
+# matcher we fall back to when the extension lookup misses or returns
+# `application/octet-stream`; `xdg-mime` reads `/usr/share/mime/` to
+# satisfy the extension-first path of the ladder. Both are pure-Rust;
+# `tree_magic_mini` ships the freedesktop magic table inline so no
+# system DB is required for the sniff side. The `xdg-mime` lookup is
+# best-effort — on a stripped container without `/usr/share/mime/`
+# the ladder degrades to `application/octet-stream` (documented in
+# `fs::mime`'s module doc).
+tree_magic_mini = "3"
+xdg-mime = "0.4"
+# sy-file-manager Step 25 (SPEC §3.3 item 7 — `/` in-pane fuzzy filter via
+# `nucleo`). `nucleo::Matcher` + `nucleo::Config::DEFAULT.match_paths`
+# powers `src/file/search/filename.rs::matches` and the Step 25 commandbar
+# verb completion. Helix's fuzzy matcher: MPL-2.0, ~30 KB binary impact
+# (no worker-thread runtime is used; we drive the low-level `Matcher`
+# directly on `Utf32Str` views). Workspace dep so future planes
+# (`sy knowledge` selector UX, `sy plugin list` filter) can reuse it
+# without a second matcher in the tree.
+nucleo = "0.5"
+# sy-file-manager Step 26 (SPEC §3.3 item 8 — text/* built-in
+# previewer). `syntect` ships the Sublime-grammar syntax highlighter
+# we use to colour the first 64 KiB of any text/* file the previewer
+# dispatcher routes to. `default-features = false` + `default-fancy`
+# swaps the C `onig` regex backend (oniguruma FFI) for the pure-Rust
+# `fancy-regex` engine — no system library required, no
+# cross-compilation hazard, hermetic build. The bundled
+# `.sublime-syntax` files + `base16-ocean.dark` theme are pulled in
+# via `default-syntaxes` / `default-themes` so the first-use
+# OnceLock warmup needs no on-disk assets. The dep is bin-only:
+# gated behind the `gui-iced` feature (Step 26's previewer modules
+# only compile when iced is in the tree), so
+# `--no-default-features` builds drop it entirely.
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+# sy-file-manager Step 31 (SPEC §3.3 item 15 — `recently-used.xbel` +
+# bookmarks). `quick-xml` is the freedesktop XBEL writer/reader we use
+# from `src/file/bookmarks.rs` to stamp `<bookmark>` entries on
+# `file.open` (the production daemon hook) and to round-trip-parse the
+# resulting document for the `bookmarks::tests::xbel_written_on_open`
+# DoD. Already a transitive of the iced text stack so this just pins
+# the workspace version we link against; no new compile-tree weight.
+quick-xml = "0.36"
 
 [package]
 name = "sy"
@@ -311,12 +392,19 @@ path = "src/main.rs"
 # module on the hyper-backed `metrics-exporter-prometheus uds-listener`
 # feature. `--no-default-features` opts out — the daemon then skips the
 # bind entirely (see `src/knowledge/daemon.rs`'s `#[cfg]` guard).
-default = ["bar-iced", "mon-exporter"]
-# Enables the iced + iced_layershell GUI for `sy stack bar`. On by default
-# so a plain `cargo build --release` produces a working stack bar — niri
-# spawn-at-startup is fire-and-forget and silently swallows a missing-feature
-# stub. Disable with `--no-default-features` if you need a CLI/MCP-only build.
-bar-iced = ["dep:iced", "dep:iced_layershell"]
+default = ["gui-iced", "mon-exporter", "file-iouring"]
+# Enables the iced + iced_layershell GUI shared by `sy stack bar`, the
+# `sy mon` popup, and the `sy file` xdg-toplevel manager (Step 23+). On
+# by default so a plain `cargo build --release` produces a working GUI —
+# niri spawn-at-startup is fire-and-forget and silently swallows a
+# missing-feature stub. Disable with `--no-default-features` if you need
+# a CLI/MCP-only build.
+gui-iced = ["dep:iced", "dep:iced_layershell", "dep:syntect"]
+# Backwards-compat alias from the pre-Step-23 era when this feature was
+# `sy stack bar`-only. Kept for one release cycle so external builds
+# pinning `--features bar-iced` keep working; new call sites should use
+# `gui-iced` directly.
+bar-iced = ["gui-iced"]
 # sy-power Step 36 (Phase R7): integration tests that round-trip
 # against a real `net.hadess.PowerProfiles` shim on the system bus.
 # Gated because CI lacks a system D-Bus + polkit grant for the
@@ -333,6 +421,14 @@ test-dbus = []
 # (Steps 10 + 20). Pure rollout switch — no behavioural change at the
 # workspace root until a daemon binds.
 mon-exporter = ["sy-core/mon-exporter"]
+# sy-file-manager Step 17 (SPEC §3.2 row 4 — bulk-copy win): switch
+# `fs::copy` onto `tokio-uring` when the batch crosses the threshold
+# (>100 files OR >256 MiB). Default-on on Linux; the runtime degrades
+# gracefully to the Step-16 byte-stream path when
+# `tokio_uring::Runtime::new()` returns Err (old kernels, sandbox
+# without io_uring). Drop the feature (e.g. on non-Linux cross builds)
+# and the dep + io_uring dispatch fall out entirely.
+file-iouring = ["dep:tokio-uring"]
 
 [dependencies]
 anyhow.workspace = true
@@ -371,6 +467,21 @@ toml_edit.workspace = true
 sy-core = { path = "crates/sy-core" }
 sy-ipc = { path = "crates/sy-ipc" }
 tokio-util.workspace = true
+# sy-file-manager Step 16 (`fs::copy`): `Stream<Item = OpEvent>` shim
+# over the executor-owned `mpsc::channel`. See workspace dep block.
+tokio-stream.workspace = true
+# sy-file-manager Step 2 (plugin runtime transport): `BytesMut`-based
+# encode/decode buffer for `JsonRpcCodec` in `src/plugin/transport.rs`.
+# Same `bytes` version the workspace already pins for sy-ipc's codec.
+bytes.workspace = true
+# sy-file-manager Step 3 (plugin runtime sandbox): `setrlimit` wrapper
+# for `RLIMIT_AS / RLIMIT_CPU / RLIMIT_NOFILE` applied inside the
+# `pre_exec` closure of `src/plugin/sandbox.rs::build_command`. The
+# crate is already a workspace dep (sy-core/mon ring uses the
+# unconditional `fcntl` surface); the bin target additionally needs
+# the gated `resource` feature for `nix::sys::resource::Resource` and
+# `setrlimit`, which sy-core never touches.
+nix = { workspace = true, features = ["resource"] }
 # arch-observability Step 2: the supervisor / worker / knowledge
 # daemon emit structured `tracing` events directly (instead of the
 # legacy `eprintln!("…")` lines). `sy-core::obs::init` installs the
@@ -466,6 +577,49 @@ prometheus-parse.workspace = true
 # (currently `view/aiplane.rs`) drop metric labels that don't match.
 # Bin-only dep — `sy-core::mon::snapshot` stays regex-free.
 regex.workspace = true
+# sy-file-manager Step 9: minisign signature verification at install +
+# (one-warn) bypass advertisement at spawn. Pure Rust + zero deps;
+# see workspace dep block for rationale.
+minisign-verify.workspace = true
+# sy-file-manager Step 18 (SPEC §3.3 item 5 — freedesktop trash). The
+# `fs::trash` module wraps `trash::delete_all`, `trash::os_limited::
+# list`, and `trash::os_limited::restore_all` behind `spawn_blocking`
+# so `pub async fn trash/list/restore` can drive the sync `trash`
+# crate from the daemon's tokio runtime.
+trash.workspace = true
+# sy-file-manager Step 19 (SPEC §3.3 item 11 — live updates + MIME
+# detection ladder). `fs::watch` builds the notify-rs Stream surface
+# the iced UI consumes per visible pane; `fs::mime` is the
+# extension-first / sniff-fallback `mime_for(path)` the previewer
+# routing reads. See the workspace dep block above for rationale.
+tree_magic_mini.workspace = true
+xdg-mime.workspace = true
+# sy-file-manager Step 25 (SPEC §3.3 item 7 — `/` fuzzy filter +
+# `:` command palette completion). Drives `src/file/search/filename.rs`
+# and the Step 25 commandbar verb-prefix completion.
+nucleo.workspace = true
+# sy-file-manager Step 26 (SPEC §3.3 item 8 — text/* built-in
+# previewer). Optional + gated behind `gui-iced` via the feature
+# flag below — `syntect` only feeds `src/file/view/preview/text.rs`,
+# which itself requires the iced widget tree. `--no-default-features`
+# builds (CLI/MCP only) drop the dep entirely.
+syntect = { workspace = true, optional = true }
+# sy-file-manager Step 31 (SPEC §3.3 item 15 — bookmarks + XBEL).
+# `src/file/bookmarks.rs` round-trips the freedesktop `recently-used.xbel`
+# document via `quick-xml`'s `Writer` / `Reader`. Not gated — the
+# `--no-default-features` (CLI / MCP-only) builds still want bookmarks
+# (the `file.open` IPC op writes to the XBEL log).
+quick-xml.workspace = true
+
+# sy-file-manager Step 17 (SPEC §3.2 row 4 — bulk-copy `tokio-uring`
+# path). Linux-only target so cross-builds (macOS / Windows / non-Linux
+# CI) never even see the dep; the `file-iouring` feature in the
+# `[features]` block above is the runtime flip, the target gate keeps
+# the dep-graph clean for portable builds. 0.5 is the latest published
+# line; SPEC §3.2 row 4 + Step 17 risks note pin to a known-good
+# version so workspace Rust upgrades don't drift the API.
+[target.'cfg(target_os = "linux")'.dependencies]
+tokio-uring = { version = "0.5", optional = true }
 
 [[example]]
 name = "gen_warmup_gru"
@@ -484,6 +638,22 @@ metrics-util.workspace = true
 # `warn_on_npu_eagain_emits_structured_field` and
 # `info_workload_completed_carries_latency` tests.
 tracing-test = "0.2"
+# sy-file-manager Step 9 fixture signer. The `minisign` crate ships
+# the signing side of the protocol that `minisign-verify` (production)
+# consumes. Used only by `tests/sy_plugin_install.rs` and the
+# `step09_*` E2E in `tests/sy_file_journey_e2e.rs` to mint signed
+# fixtures hermetically inside the test process — no pre-baked
+# keypair on disk, no network. 0.9 is the latest published line.
+minisign = "0.9"
+# sy-file-manager Step 12 E2E (`tests/sy_file_journey_e2e.rs::step12_*`):
+# the journey test decodes the PNG payload returned by `sy plugin exec
+# sy-plugin-md preview` and runs an inline aHash perceptual diff
+# against the committed golden. `tiny-skia` is already in the
+# workspace dep tree (transitive of `plotters`/`resvg`); declaring it
+# here as a dev-dep just gives the integration-test binary access to
+# `Pixmap::decode_png` without re-implementing a PNG decoder. Bin-only
+# dev surface — sy's production code never decodes PNGs.
+tiny-skia.workspace = true
 
 [profile.release]
 lto = "thin"
