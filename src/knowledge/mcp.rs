@@ -9,13 +9,22 @@
 
 use std::io::{BufRead, BufReader, Write};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::{cli, qdrant, runctx::RunCtx, sources, state};
+use super::{cli, ipc, qdrant, runctx::RunCtx, sources, state, status};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
+
+/// Hardening bounds for tool responses. Whatever this MCP returns is appended
+/// to the calling agent's context and lives on its heap for the whole session,
+/// so every response must be size-bounded regardless of what the caller asks
+/// for. Without these, a single large-`limit` search (or a loop of searches)
+/// could dump unbounded text into the agent and balloon its memory.
+const MAX_LIMIT: u64 = 20;
+const MAX_CANDIDATES: u64 = 64;
+const MAX_CHUNK_CHARS: usize = 2000;
 
 #[derive(Debug, Deserialize)]
 struct Req {
@@ -99,7 +108,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "knowledge_search",
-            "description": "Semantic search over the user's indexed files. Two-stage by default: embed → qdrant top-`candidates` → bge-reranker-v2-m3 cross-encoder → top-`limit`. Set `rerank=false` for the low-latency embed-only path.",
+            "description": "Semantic search over the user's indexed files. Two-stage by default: embed → qdrant top-`candidates` → bge-reranker-v2-m3 cross-encoder → top-`limit`. Set `rerank=false` for the low-latency embed-only path. Responses are size-bounded: `limit` is capped at 20, `candidates` at 64, and each `chunk_text` is clipped to ~2000 chars (with `truncated:true` and the original `chunk_chars` set) — re-read `file_path` for the full chunk when needed.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -119,7 +128,7 @@ fn tools() -> Value {
         },
         {
             "name": "knowledge_index",
-            "description": "Trigger an incremental index pass (returns when complete). Optional `source` restricts to one path.",
+            "description": "Trigger an incremental index pass. When the knowledge daemon is running this enqueues the pass on it and returns immediately (`queued:true`); otherwise it runs inline and returns the report when complete (`queued:false`). Optional `source` restricts to one path and always runs inline.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "source": { "type": "string" } }
@@ -151,7 +160,11 @@ fn tool_search(args: &Value) -> Result<String> {
         .get("query")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing query"))?;
-    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(8)
+        .min(MAX_LIMIT) as usize;
     let prefix = args
         .get("source")
         .and_then(|v| v.as_str())
@@ -160,7 +173,8 @@ fn tool_search(args: &Value) -> Result<String> {
     let candidates = args
         .get("candidates")
         .and_then(|v| v.as_u64())
-        .unwrap_or(30) as usize;
+        .unwrap_or(30)
+        .min(MAX_CANDIDATES) as usize;
     // Delegate to the shared helper. The daemon owns the NPU, so
     // when it's up we round-trip a single Search/SearchRerank request
     // and avoid loading a second ORT session in this process. If the
@@ -177,21 +191,43 @@ fn tool_search(args: &Value) -> Result<String> {
     let arr: Vec<_> = hits
         .iter()
         .map(|h| {
+            let (text, truncated) = truncate_chars(&h.chunk_text, MAX_CHUNK_CHARS);
             let mut row = json!({
                 "score": h.score,
                 "file_path": h.file_path,
                 "chunk_index": h.chunk_index,
-                "chunk_text": h.chunk_text,
+                "chunk_text": text,
             });
+            let obj = row.as_object_mut().unwrap();
+            if truncated {
+                // Signal that the chunk was clipped so the agent knows to
+                // re-read `file_path` if it needs the rest, rather than
+                // assuming it has the full chunk.
+                obj.insert("truncated".into(), json!(true));
+                obj.insert("chunk_chars".into(), json!(h.chunk_text.chars().count()));
+            }
             if let Some(es) = h.embed_score {
-                row.as_object_mut()
-                    .unwrap()
-                    .insert("embed_score".into(), json!(es));
+                obj.insert("embed_score".into(), json!(es));
             }
             row
         })
         .collect();
     Ok(serde_json::to_string(&arr)?)
+}
+
+/// Bound a chunk to `max` chars on a char boundary, returning the (possibly
+/// clipped) text and whether it was cut. The agent still gets `file_path` +
+/// `chunk_index` to re-read the full chunk on demand, so a single search can
+/// never dump an unbounded payload into its context.
+fn truncate_chars(s: &str, max: usize) -> (String, bool) {
+    match s.char_indices().nth(max) {
+        Some((byte_idx, _)) => {
+            let mut out = s[..byte_idx].to_string();
+            out.push('…');
+            (out, true)
+        }
+        None => (s.to_string(), false),
+    }
 }
 
 fn tool_list() -> Result<String> {
@@ -231,6 +267,30 @@ fn tool_index(args: &Value) -> Result<String> {
         .get("source")
         .and_then(|v| v.as_str())
         .and_then(|s| sources::expand(s).ok());
+
+    // When the daemon is up, hand the pass off to it instead of embedding
+    // inline. Running our own embedder here forks a second ORT session that
+    // contends for the single-context NPU (see `cli::sync`) and blocks this
+    // single-threaded MCP server for the entire pass — so a large index keeps
+    // one `tools/call` in flight for minutes while the server can serve
+    // nothing else. The daemon owns the NPU and indexes incrementally in the
+    // background; enqueue via IndexNow and return immediately. A `source`-
+    // scoped request has no daemon equivalent, so it still runs inline.
+    if src.is_none()
+        && status::load()
+            .ok()
+            .filter(|s| status::is_fresh(s) && s.daemon_running)
+            .is_some()
+    {
+        ipc::send(&ipc::Op::IndexNow).context("send IndexNow to daemon")?;
+        return Ok(json!({
+            "queued": true,
+            "daemon": true,
+            "note": "incremental index running on the knowledge daemon; poll `knowledge_list_sources` or `sy knowledge status` for progress",
+        })
+        .to_string());
+    }
+
     qdrant::ensure_collection()?;
     let mut idx = state::load().unwrap_or_default();
     let ctx = RunCtx::interactive();
@@ -238,6 +298,7 @@ fn tool_index(args: &Value) -> Result<String> {
     idx.last_sync_unix = state::now_secs();
     state::save(&idx)?;
     Ok(json!({
+        "queued": false,
         "scanned": report.scanned,
         "indexed": report.indexed,
         "skipped": report.skipped,
@@ -245,4 +306,43 @@ fn tool_index(args: &Value) -> Result<String> {
         "elapsed_ms": report.elapsed_ms,
     })
     .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_chars_leaves_short_text_untouched() {
+        let (out, cut) = truncate_chars("hello", 2000);
+        assert_eq!(out, "hello");
+        assert!(!cut);
+    }
+
+    #[test]
+    fn truncate_chars_clips_at_the_char_limit() {
+        let s = "a".repeat(2500);
+        let (out, cut) = truncate_chars(&s, MAX_CHUNK_CHARS);
+        assert!(cut);
+        // 2000 kept chars + the ellipsis marker.
+        assert_eq!(out.chars().count(), MAX_CHUNK_CHARS + 1);
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn truncate_chars_splits_on_a_char_boundary_for_multibyte() {
+        // Each 'é' is 2 bytes; a naive byte slice at the limit would panic.
+        let s = "é".repeat(10);
+        let (out, cut) = truncate_chars(&s, 4);
+        assert!(cut);
+        assert_eq!(out.chars().filter(|&c| c == 'é').count(), 4);
+    }
+
+    #[test]
+    fn truncate_chars_exact_length_is_not_cut() {
+        let s = "x".repeat(MAX_CHUNK_CHARS);
+        let (out, cut) = truncate_chars(&s, MAX_CHUNK_CHARS);
+        assert!(!cut);
+        assert_eq!(out.chars().count(), MAX_CHUNK_CHARS);
+    }
 }
