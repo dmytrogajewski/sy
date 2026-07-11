@@ -66,7 +66,7 @@ pub const CHECKPOINT_SCHEMA: u32 = 1;
 pub const CHECKPOINT_INTERVAL_TICKS: u64 = 300;
 
 /// Full checkpoint payload. Round-trips through serde JSON; the
-/// daemon ([`crate::power::daemon::run_async`]) builds one from live
+/// daemon (`crate::power::daemon::run_async`) builds one from live
 /// state every [`CHECKPOINT_INTERVAL_TICKS`] ticks and on graceful
 /// shutdown.
 #[derive(Debug, Clone, Serialize, Deserialize)]

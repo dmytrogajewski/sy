@@ -355,7 +355,7 @@ pub struct InstallOpts {
     /// `net.hadess.PowerProfiles` (PPD keeps the name).
     pub with_ppd: bool,
     /// Step 37: where to look for an installed PPD systemd unit.
-    /// Production passes [`DEFAULT_PPD_UNIT_PATHS`]; tests inject
+    /// Production passes `DEFAULT_PPD_UNIT_PATHS`; tests inject
     /// tempdir paths so the detection branch is deterministic.
     pub ppd_unit_paths: Vec<PathBuf>,
     /// Step P3-1: injectable predicate the installer uses to decide

@@ -5,7 +5,7 @@
 //! Step 14 alongside the bandit arm enumeration.
 //!
 //! Step 1 ships the scaffold: every handler except `status` prints a
-//! one-line "unimplemented — see roadmap step <N>" diagnostic to
+//! one-line "unimplemented — see roadmap step `<N>`" diagnostic to
 //! stderr and exits 0. `status --json` emits the SPEC §4
 //! `sy.power.status/v1` schema with stub values so downstream
 //! consumers can lock against the contract today.
@@ -572,7 +572,7 @@ fn live_sensors() -> Sensors {
 }
 
 /// Step 15 + Step 16 dead-code probe — instantiate all five
-/// [`Actuator`] impls and invoke each one against the *current* sysfs
+/// [`crate::power::apply::Actuator`] impls and invoke each one against the *current* sysfs
 /// state. Every writer diffs before writing (see
 /// `apply::write_if_changed`), so this is a no-op when sysfs is in
 /// the expected shape. Errors are intentionally dropped: the daemon
@@ -651,7 +651,7 @@ fn probe_forecast(snap: &crate::power::snapshot::Snapshot) {
     }
 }
 
-/// Step 30 dead-code probe: construct the composite [`DriftDetector`]
+/// Step 30 dead-code probe: construct the composite [`crate::power::drift::DriftDetector`]
 /// and observe one sample on each sub-detector. The daemon (Step 31)
 /// is what actually feeds the live forecast and reward residuals; for
 /// the read-only `sy power status` path we only need the API surface
@@ -675,7 +675,7 @@ impl super::apply::npu::CommandRunner for NoopRunner {
         Ok(())
     }
     /// `sy power status` must NEVER shell out to `xrt-smi`, including
-    /// for the P1-1 probe — return an empty string so [`XrtSmiProbe`]
+    /// for the P1-1 probe — return an empty string so [`crate::power::apply::npu::XrtSmiProbe`]
     /// resolves to `None` and the dead-code probe stays read-only.
     fn run_capturing(&self, _cmd: &str, _args: &[&str]) -> Result<String> {
         Ok(String::new())

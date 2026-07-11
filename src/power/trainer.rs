@@ -285,7 +285,7 @@ impl From<std::io::Error> for TrainerError {
 }
 
 /// Sink used to publish the trained ONNX bytes. Production wires
-/// [`FileSink`]; tests inject [`TruncatingSink`] (or any other
+/// [`FileSink`]; tests inject `TruncatingSink` (or any other
 /// `dyn TrainerExportSink`) so the validation gate can be driven
 /// without racing against the real filesystem.
 pub trait TrainerExportSink {

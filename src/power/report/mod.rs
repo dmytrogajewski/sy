@@ -18,7 +18,7 @@
 //! of `&[AuditEntry]`. No clock reads, no I/O, no global state. The
 //! same input bytes therefore produce the same output bytes — which
 //! is what makes the determinism test
-//! ([`baseline::tests::counterfactual_replay_deterministic`])
+//! (`baseline::tests::counterfactual_replay_deterministic`)
 //! achievable and what lets `sy power status` re-use the bandit /
 //! shield extractors for its "last-1 h" tooltip without flake risk.
 

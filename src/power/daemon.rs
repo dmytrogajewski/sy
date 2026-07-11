@@ -432,7 +432,7 @@ pub struct DriftTickState {
     /// mean shows up as a steady stream of "errors". Pure online
     /// estimator (sum / n), no allocation.
     pub reward_mean: f32,
-    /// Number of reward samples folded into [`reward_mean`]. Cap-
+    /// Number of reward samples folded into `reward_mean`. Cap-
     /// less because the reward stream is at most ~1 Hz so even a year
     /// of continuous operation stays inside `u32::MAX`.
     pub reward_n: u32,
@@ -477,7 +477,7 @@ pub fn new_latest_model_status() -> LatestModelStatus {
 /// trait above (which fires `WATCHDOG=1` pings) so the two surfaces
 /// can be mocked independently. Production wires
 /// [`SystemDriftNotifier`] (shells `notify-send`); tests wire
-/// [`MockDriftNotifier`] to assert the SPEC §5 wording.
+/// `MockDriftNotifier` to assert the SPEC §5 wording.
 pub trait DriftNotifier: Send + Sync {
     /// Fire one desktop notification. The summary is the title; the
     /// body is the human-readable explanation. Implementations MUST
@@ -1687,7 +1687,7 @@ fn build_live_intent() -> Intent {
 /// audit-entry cache so `Status` responses populate `applied_policy`
 /// and `Profile{Set,Clear}` mutate the daemon's shared pin without
 /// blocking the tick loop. Validates pin names against `arms` so a
-/// caller-side typo is rejected with a structured [`ProfileAck`]
+/// caller-side typo is rejected with a structured [`crate::power::ipc::ProfileAck`]
 /// instead of leaving the daemon in a degenerate state.
 async fn handle_connection_full(
     mut stream: tokio::net::UnixStream,

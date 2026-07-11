@@ -17,7 +17,7 @@
 //!
 //! `xrt-smi` is shelled out via the [`CommandRunner`] trait so tests
 //! never touch the real binary; hermetic test fixtures inject
-//! [`MockRunner`] and assert call counts + arg shape.
+//! `MockRunner` and assert call counts + arg shape.
 
 use std::fmt;
 use std::path::Path;
@@ -64,7 +64,7 @@ impl std::error::Error for NpuError {}
 
 /// Abstract shell-out so tests can assert call counts + arg shape
 /// without invoking the real binary. The production impl is
-/// [`SystemRunner`]; tests build [`MockRunner`].
+/// [`SystemRunner`]; tests build `MockRunner`.
 pub trait CommandRunner: Send + Sync {
     /// Run `cmd args…`. Returns `Ok(())` on exit code 0;
     /// `Err(NpuError::XrtSmiFailed)` on non-zero with captured stderr.

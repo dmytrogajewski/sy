@@ -72,7 +72,7 @@ pub struct Clucb {
     /// Per-arm response vectors, length `d` each.
     b_vecs: Vec<Vec<f32>>,
     /// Per-arm count of accepted `update()` calls. Exposed via
-    /// [`Clucb::arm_update_count`] so the Step 22 daemon's
+    /// `Clucb::arm_update_count` so the Step 22 daemon's
     /// `reward_update_lags_one_tick` test can assert the bandit's
     /// posterior is updated exactly once per *completed* tick (a tick
     /// can register a reward only after the next tick produces an
@@ -187,8 +187,8 @@ impl Clucb {
     }
 
     /// Compute UCB scores for every arm at `context` and return them
-    /// sorted descending by score. Output length equals
-    /// [`Clucb::arm_count`]; ties are broken by the arms' original
+    /// sorted descending by score. Output length equals the number of
+    /// `arms`; ties are broken by the arms' original
     /// order (stable sort).
     pub fn propose_ranked(&self, context: &[f32]) -> Vec<(String, f32)> {
         let mut scored: Vec<(String, f32)> = self

@@ -49,7 +49,7 @@ pub const SCHEMA_ID: &str = "sy.power.audit/v1";
 /// Sized so 24 h × 1 Hz of audit entries fits with realistic headroom
 /// for bursty reason chains and `top3` payloads. At ~700–1000 B/entry
 /// (post BUG-20260522-0037 NPU reason trim), 86,400 entries occupy
-/// ~58–82 MiB; 200 MiB clears the [`cli::MIN_ENTRIES_FOR_THICK_REPORT`]
+/// ~58–82 MiB; 200 MiB clears the `cli::MIN_ENTRIES_FOR_THICK_REPORT`
 /// threshold without the file capping mid-day. The previous 50 MiB
 /// value capped the daily file at ~40K entries, making the 24-h
 /// thick-report threshold unreachable.
@@ -196,7 +196,7 @@ impl std::fmt::Display for LogError {
 impl std::error::Error for LogError {}
 
 /// Free-space probe abstraction. Production wires [`StatvfsProbe`];
-/// tests wire [`MockFreeSpace`] so the disk-full path is hermetic.
+/// tests wire `MockFreeSpace` so the disk-full path is hermetic.
 pub trait FreeSpaceProbe: Send + Sync {
     /// Bytes available to a non-root writer at `path`. Returns 0 if
     /// the probe fails — that maps cleanly onto "refuse the write".

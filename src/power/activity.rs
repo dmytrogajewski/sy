@@ -91,7 +91,7 @@ impl ActivityLabel {
 /// One per-class FTRL state. Three `FEATURE_LEN`-wide vectors per
 /// class: `z` (negative gradient accumulator), `n` (squared-gradient
 /// accumulator), `w` (the current weight, derived lazily from `z`/`n`
-/// inside [`predict`]).
+/// inside `predict`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct FtrlClass {
     z: [f32; FEATURE_LEN],
@@ -120,7 +120,7 @@ impl ClassifierState {
     }
 }
 
-/// Per-class FTRL accumulators in their on-disk shape. Vec<f32> for
+/// Per-class FTRL accumulators in their on-disk shape. `Vec<f32>` for
 /// serde portability (arrays serialise fine but the Vec form is
 /// trivially extensible if [`FEATURE_LEN`] ever changes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,7 +194,7 @@ fn sigmoid(z: f32) -> f32 {
 
 /// Online one-vs-rest FTRL-Proximal classifier over the 12-channel
 /// `Snapshot::features` vec. Five binary models share a single
-/// `OnlineClassifier`; [`classify`] picks the argmax of the sigmoid
+/// `OnlineClassifier`; [`Self::classify`] picks the argmax of the sigmoid
 /// scores.
 #[derive(Debug, Clone)]
 pub struct OnlineClassifier {

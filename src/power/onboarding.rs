@@ -23,7 +23,7 @@
 //!
 //! The function is pure with respect to its arguments — `state_root`
 //! is a path the caller supplies, `clock` is a `&dyn Clock`. Tests
-//! pass tempdirs + a [`MockClock`](crate::power::clock::MockClock) so
+//! pass tempdirs + a `MockClock` so
 //! every assertion is hermetic.
 
 use std::fs::File;
