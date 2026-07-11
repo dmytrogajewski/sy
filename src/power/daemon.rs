@@ -1328,7 +1328,7 @@ async fn run_async() -> anyhow::Result<()> {
     let last_entry = new_latest_audit_entry();
     let drift_latest = new_latest_drift_status();
     let model_latest = new_latest_model_status();
-    let cfg = PowerConfig::load(&power_config_path()).unwrap_or_default();
+    let cfg = PowerConfig::load(&super::power_config_path()).unwrap_or_default();
     let thrash = Arc::new(ThrashTracker::new());
     let npu_actuator = Arc::new(production_npu_actuator());
 
@@ -1582,15 +1582,6 @@ fn save_checkpoint_best_effort(
     }
 }
 
-/// Where the daemon looks for `power.toml`. Mirrors `cli::config_path`
-/// but kept local so the daemon and the CLI stay decoupled.
-fn power_config_path() -> PathBuf {
-    if let Ok(root) = std::env::var("SY_ROOT") {
-        return PathBuf::from(root).join("configs/sy/power.toml");
-    }
-    PathBuf::from("configs/sy/power.toml")
-}
-
 /// Production cgroup scope path. Mirrors `apply/cgroup.rs`'s module
 /// docstring: the daemon is a `--user` service, so its scope lives
 /// under `app.slice/sy-powerd.service`. A non-existent path is fine —
@@ -1657,7 +1648,15 @@ fn build_live_intent() -> Intent {
         NiriChannel, NotifyChannel, PsiChannel, PsiKind, ScreenCastChannel, TimeChannel,
     };
     let psi_cpu = PsiChannel::new(Path::new("/proc/pressure/cpu"), PsiKind::Cpu).ok();
-    let logind = LogindChannel::new(Path::new("configs/sy/intent_whitelist.toml")).ok();
+    // Resolve the intent whitelist next to the active power.toml so the
+    // systemd `--user` service (cwd `$HOME`) finds the installed config,
+    // not a cwd-relative miss (BUG-20260608-2341). Matches the CLI's
+    // `build_live_status_value` derivation.
+    let whitelist_path = super::power_config_path()
+        .parent()
+        .map(|d| d.join("intent_whitelist.toml"))
+        .unwrap_or_else(|| PathBuf::from("configs/sy/intent_whitelist.toml"));
+    let logind = LogindChannel::new(&whitelist_path).ok();
     let niri = NiriChannel::new().ok();
     let pool = std::sync::Arc::new(crate::aiplane::session::SessionPool::new());
     let reg = crate::aiplane::registry::Registry::new(pool);

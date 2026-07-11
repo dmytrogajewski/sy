@@ -543,14 +543,12 @@ fn load_config_or_default() -> PowerConfig {
     }
 }
 
-/// Where `sy power` looks for its config. Resolves relative to the
-/// repo root via `SY_ROOT` (matches the rest of `sy`); falls back to
-/// the in-tree `configs/sy/power.toml` for dev runs.
+/// Where `sy power` looks for its config. Precedence (`SY_ROOT` →
+/// cwd-if-present → installed `$XDG_CONFIG_HOME/sy/power.toml`) lives in
+/// the shared [`super::power_config_path`] so the CLI, the daemon, and
+/// the status surface agree on resolution (BUG-20260608-2341).
 fn config_path() -> std::path::PathBuf {
-    if let Ok(root) = std::env::var("SY_ROOT") {
-        return std::path::PathBuf::from(root).join("configs/sy/power.toml");
-    }
-    std::path::PathBuf::from("configs/sy/power.toml")
+    super::power_config_path()
 }
 
 /// Sysfs root for the CLI-side anti-dead-code probes (`status` and
@@ -1248,6 +1246,7 @@ fn apply_opts(dry_run: bool, yes: bool, with_ppd: bool) -> super::apply::Install
         dry_run,
         state_root: xdg_state_home(),
         user_unit_root: xdg_config_home().join("systemd/user"),
+        config_root: xdg_config_home(),
         polkit_root: PathBuf::from("/etc/polkit-1/rules.d"),
         grub_root: PathBuf::from("/etc/default/grub.d"),
         grub_cfg_file: PathBuf::from("/etc/default/grub"),

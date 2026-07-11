@@ -438,11 +438,7 @@ pub fn onboarding_hint(onboarding: &OnboardingStatus, cfg: &PowerConfig) -> Opti
 /// bar. Filesystem-only: no IPC to `sy-powerd`, so the cost is one
 /// directory read + one TOML parse.
 pub fn live_onboarding_hint() -> Option<String> {
-    let cfg_path = if let Ok(root) = std::env::var("SY_ROOT") {
-        std::path::PathBuf::from(root).join("configs/sy/power.toml")
-    } else {
-        std::path::PathBuf::from("configs/sy/power.toml")
-    };
+    let cfg_path = crate::power::power_config_path();
     let cfg = PowerConfig::load(&cfg_path).ok()?;
     let state_dir = crate::power::power_state_dir_for_daemon();
     let onboarding = crate::power::onboarding::compute_onboarding_status(

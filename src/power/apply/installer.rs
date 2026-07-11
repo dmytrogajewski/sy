@@ -81,6 +81,15 @@ const CPUFREQ_ONESHOT_UNIT: &str =
 /// --subsystem-match=drm` so the rule takes effect without reboot.
 const UDEV_RULE: &str = include_str!("../../../configs/udev/rules.d/99-sy-power.rules");
 
+/// BUG-20260608-2341: the daemon reads `power.toml` from the installed
+/// XDG config dir when run as the `--user` service (cwd `$HOME`), so it
+/// must be materialised on disk — otherwise the cwd-relative lookup
+/// misses and the bandit starts with an empty arm table. Embedded
+/// alongside the intent whitelist so a release binary reproduces the
+/// config without the repo checked out.
+const POWER_CONFIG: &str = include_str!("../../../configs/sy/power.toml");
+const INTENT_WHITELIST: &str = include_str!("../../../configs/sy/intent_whitelist.toml");
+
 /// Basename of the user systemd unit we install. The full source
 /// lives under `configs/systemd/user/`; we only need the leaf when
 /// computing the destination path.
@@ -120,6 +129,13 @@ const CPUFREQ_ONESHOT_BASENAME: &str = "sy-power-cpufreq.service";
 /// our perm overrides aren't clobbered by an earlier-loaded vendor
 /// rule on the same matching device.
 const UDEV_RULE_BASENAME: &str = "99-sy-power.rules";
+
+/// BUG-20260608-2341: subdir under `<config_root>` (`~/.config`) that the
+/// daemon's loader (`power::power_config_xdg_path`) reads from, plus the
+/// two config leaves installed there.
+const CONFIG_SUBDIR: &str = "sy";
+const POWER_CONFIG_BASENAME: &str = "power.toml";
+const INTENT_WHITELIST_BASENAME: &str = "intent_whitelist.toml";
 
 /// `GRUB_CMDLINE_LINUX` variable name we scan for in `grub_cfg_file`.
 /// Used both by the conflict detector ("already enables
@@ -282,6 +298,10 @@ pub struct InstallOpts {
     /// `~/.config/systemd/user` in production. The unit lands at
     /// `<user_unit_root>/sy-powerd.service`.
     pub user_unit_root: PathBuf,
+    /// `~/.config` in production — the XDG config base under which the
+    /// daemon reads `sy/power.toml` + `sy/intent_whitelist.toml`
+    /// (BUG-20260608-2341). Tests redirect to a tempdir.
+    pub config_root: PathBuf,
     /// `/etc/polkit-1/rules.d/` in production. Unwritable on
     /// unprivileged installs ⇒ we warn instead of erroring out.
     pub polkit_root: PathBuf,
@@ -356,6 +376,7 @@ pub fn install(opts: &InstallOpts) -> Result<Vec<ChangeRecord>> {
     let mut out: Vec<ChangeRecord> = Vec::new();
     install_telemetry_dir(opts, &mut out)?;
     install_user_unit(opts, &mut out)?;
+    install_power_config(opts, &mut out)?;
     install_polkit_rule(opts, &mut out)?;
     install_kernel_cmdline_param(opts, &mut out)?;
     install_dbus_policy(opts, &mut out)?;
@@ -402,6 +423,28 @@ fn install_telemetry_dir(opts: &InstallOpts, out: &mut Vec<ChangeRecord>) -> Res
 fn install_user_unit(opts: &InstallOpts, out: &mut Vec<ChangeRecord>) -> Result<()> {
     let dest = opts.user_unit_root.join(UNIT_BASENAME);
     write_if_changed(&dest, SY_POWERD_UNIT, opts.dry_run, out)
+}
+
+/// BUG-20260608-2341: write the embedded `power.toml` + intent whitelist
+/// into `<config_root>/sy/` — the XDG location the daemon reads when run
+/// as the `--user` service (cwd `$HOME`, so the cwd-relative lookup
+/// misses). The config base is user-owned, so unlike the polkit / dbus
+/// roots this always writes; idempotent via `write_if_changed`, so a
+/// re-apply against an unchanged config is `AlreadyMatches`.
+fn install_power_config(opts: &InstallOpts, out: &mut Vec<ChangeRecord>) -> Result<()> {
+    let dir = opts.config_root.join(CONFIG_SUBDIR);
+    write_if_changed(
+        &dir.join(POWER_CONFIG_BASENAME),
+        POWER_CONFIG,
+        opts.dry_run,
+        out,
+    )?;
+    write_if_changed(
+        &dir.join(INTENT_WHITELIST_BASENAME),
+        INTENT_WHITELIST,
+        opts.dry_run,
+        out,
+    )
 }
 
 /// Step 3: write the embedded polkit rule. The production polkit
@@ -952,6 +995,7 @@ mod tests {
             dry_run,
             state_root: td.path().join("state"),
             user_unit_root: td.path().join("config/systemd/user"),
+            config_root: td.path().join("config"),
             polkit_root: td.path().join("polkit"),
             grub_root: td.path().join("grub.d"),
             grub_cfg_file: td.path().join("default-grub"),
@@ -1058,6 +1102,7 @@ mod tests {
             dry_run: false,
             state_root: td.path().join("state"),
             user_unit_root: td.path().join("config/systemd/user"),
+            config_root: td.path().join("config"),
             polkit_root: td.path().join("polkit"),
             grub_root: td.path().join("grub.d"),
             grub_cfg_file: td.path().join("default-grub"),
@@ -1162,6 +1207,7 @@ mod tests {
             dry_run: false,
             state_root: td.path().join("state"),
             user_unit_root: td.path().join("config/systemd/user"),
+            config_root: td.path().join("config"),
             polkit_root: polkit_root.clone(),
             grub_root: td.path().join("grub.d"),
             grub_cfg_file: td.path().join("default-grub"),
@@ -1195,6 +1241,47 @@ mod tests {
                 ChangeRecord::Warning(msg) if msg.contains("polkit destination")
             )),
             "must NOT emit polkit unwritable warning when content matches: {records:?}",
+        );
+    }
+
+    /// BUG-20260608-2341: a clean install must materialise the daemon's
+    /// config at `<config_root>/sy/power.toml` so the `--user` service
+    /// (cwd `$HOME`) loads the real arm table instead of empty defaults.
+    /// Asserts the file lands, parses, and carries a non-empty arm set —
+    /// the exact thing the missing-config bug left unset.
+    #[test]
+    fn installs_power_config_with_nonempty_arms() {
+        let td = TempDir::new().expect("tempdir");
+        let opts = opts_for(&td, /* dry_run = */ false);
+
+        let records = install(&opts).expect("install");
+
+        let dest = opts.config_root.join("sy").join(POWER_CONFIG_BASENAME);
+        assert!(
+            dest.is_file(),
+            "power.toml must be installed at {}",
+            dest.display(),
+        );
+        let cfg = crate::power::config::PowerConfig::load(&dest)
+            .expect("installed power.toml must parse");
+        assert!(
+            !cfg.arms.is_empty(),
+            "installed config must carry a non-empty arm table",
+        );
+        assert!(
+            records.iter().any(|r| matches!(
+                r,
+                ChangeRecord::Created(p) if p.ends_with(POWER_CONFIG_BASENAME)
+            )),
+            "expected Created(power.toml) record, got {records:?}",
+        );
+        // The intent whitelist ships alongside it.
+        assert!(
+            opts.config_root
+                .join("sy")
+                .join(INTENT_WHITELIST_BASENAME)
+                .is_file(),
+            "intent_whitelist.toml must be installed next to power.toml",
         );
     }
 
@@ -1243,6 +1330,7 @@ mod tests {
             dry_run: false,
             state_root: td.path().join("state"),
             user_unit_root: td.path().join("config/systemd/user"),
+            config_root: td.path().join("config"),
             polkit_root: td.path().join("polkit"),
             grub_root: td.path().join("grub.d"),
             grub_cfg_file: td.path().join("default-grub"),
@@ -1345,6 +1433,7 @@ mod tests {
             dry_run: false,
             state_root: td.path().join("state"),
             user_unit_root: td.path().join("config/systemd/user"),
+            config_root: td.path().join("config"),
             polkit_root: td.path().join("polkit"),
             grub_root: td.path().join("grub.d"),
             grub_cfg_file: td.path().join("default-grub"),
@@ -1403,6 +1492,7 @@ mod tests {
             dry_run: false,
             state_root: td.path().join("state"),
             user_unit_root: td.path().join("config/systemd/user"),
+            config_root: td.path().join("config"),
             polkit_root: blocker,
             grub_root: td.path().join("grub.d"),
             grub_cfg_file: td.path().join("default-grub"),
@@ -1447,6 +1537,7 @@ mod tests {
             dry_run: false,
             state_root: td.path().join("state"),
             user_unit_root: td.path().join("config/systemd/user"),
+            config_root: td.path().join("config"),
             polkit_root: td.path().join("polkit"),
             grub_root: td.path().join("grub.d"),
             grub_cfg_file: td.path().join("default-grub"),
@@ -1548,6 +1639,7 @@ mod tests {
             dry_run: false,
             state_root: td.path().join("state"),
             user_unit_root: td.path().join("config/systemd/user"),
+            config_root: td.path().join("config"),
             polkit_root: td.path().join("polkit"),
             grub_root: td.path().join("grub.d"),
             grub_cfg_file: td.path().join("default-grub"),
@@ -1623,6 +1715,7 @@ mod tests {
             dry_run: false,
             state_root: td.path().join("state"),
             user_unit_root: user_unit_root.clone(),
+            config_root: td.path().join("config"),
             polkit_root: td.path().join("polkit"),
             grub_root: td.path().join("grub.d"),
             grub_cfg_file: td.path().join("default-grub"),
@@ -1695,6 +1788,7 @@ mod tests {
             dry_run: false,
             state_root: td.path().join("state"),
             user_unit_root: td.path().join("config/systemd/user"),
+            config_root: td.path().join("config"),
             polkit_root: td.path().join("polkit"),
             grub_root: td.path().join("grub.d"),
             grub_cfg_file: td.path().join("default-grub"),
@@ -1942,6 +2036,7 @@ mod tests {
             dry_run: false,
             state_root: td.path().join("state"),
             user_unit_root: td.path().join("config/systemd/user"),
+            config_root: td.path().join("config"),
             polkit_root: td.path().join("polkit"),
             grub_root: td.path().join("grub.d"),
             grub_cfg_file: td.path().join("default-grub"),

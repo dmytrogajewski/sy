@@ -84,3 +84,91 @@ pub(crate) fn power_state_dir_for_daemon() -> std::path::PathBuf {
     }
     std::path::PathBuf::from("/tmp/sy/power")
 }
+
+/// Relative in-tree config path, shared by the cwd-dev branch and the
+/// no-`$HOME` last resort so the literal lives in exactly one place.
+const IN_TREE_POWER_CONFIG: &str = "configs/sy/power.toml";
+
+/// Resolve the active `power.toml`. Precedence follows CLAUDE.md
+/// (flags > env > config file > defaults):
+///
+/// 1. `$SY_ROOT/configs/sy/power.toml` — explicit repo override (dev /
+///    `sy --root`).
+/// 2. `./configs/sy/power.toml` *if it exists* — running from the repo
+///    checkout (tests, `cargo run` from the tree).
+/// 3. `$XDG_CONFIG_HOME/sy/power.toml` (else `$HOME/.config/sy/power.toml`)
+///    — the location `sy power apply` installs to. This is what the
+///    systemd `--user` service reads: its cwd is `$HOME`, so the
+///    cwd-relative branch (2) misses and it MUST fall through to the
+///    installed config rather than silently defaulting to an empty arm
+///    table (BUG-20260608-2341).
+pub(crate) fn power_config_path() -> std::path::PathBuf {
+    let cwd_exists = std::path::Path::new(IN_TREE_POWER_CONFIG).exists();
+    resolve_power_config_path(
+        std::env::var("SY_ROOT").ok().as_deref(),
+        cwd_exists,
+        power_config_xdg_path(),
+    )
+}
+
+/// Pure precedence logic behind [`power_config_path`], split out so the
+/// branch order is unit-testable without touching process env or cwd.
+fn resolve_power_config_path(
+    sy_root: Option<&str>,
+    cwd_exists: bool,
+    xdg: std::path::PathBuf,
+) -> std::path::PathBuf {
+    if let Some(root) = sy_root {
+        return std::path::PathBuf::from(root).join(IN_TREE_POWER_CONFIG);
+    }
+    if cwd_exists {
+        return std::path::PathBuf::from(IN_TREE_POWER_CONFIG);
+    }
+    xdg
+}
+
+/// Installed config location: `$XDG_CONFIG_HOME/sy/power.toml`, else
+/// `$HOME/.config/sy/power.toml`, else the in-tree relative path (only
+/// reached when neither env var is set, e.g. a stripped-down container).
+pub(crate) fn power_config_xdg_path() -> std::path::PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        return std::path::PathBuf::from(xdg).join("sy/power.toml");
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return std::path::PathBuf::from(home).join(".config/sy/power.toml");
+    }
+    std::path::PathBuf::from(IN_TREE_POWER_CONFIG)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// `$SY_ROOT` always wins, even when the cwd config exists — the
+    /// explicit dev override must beat the ambient checkout.
+    #[test]
+    fn resolve_power_config_path_prefers_sy_root() {
+        let got = resolve_power_config_path(Some("/repo"), true, PathBuf::from("/xdg/sy/power.toml"));
+        assert_eq!(got, PathBuf::from("/repo/configs/sy/power.toml"));
+    }
+
+    /// No `$SY_ROOT` but the cwd holds the in-tree config ⇒ use it
+    /// (running from the repo checkout / `cargo test`).
+    #[test]
+    fn resolve_power_config_path_uses_cwd_when_present() {
+        let got = resolve_power_config_path(None, true, PathBuf::from("/xdg/sy/power.toml"));
+        assert_eq!(got, PathBuf::from("configs/sy/power.toml"));
+    }
+
+    /// Regression for BUG-20260608-2341: no `$SY_ROOT`, cwd has no
+    /// `configs/` (the systemd `--user` service, cwd `$HOME`) ⇒ fall
+    /// through to the installed XDG config, NOT a nonexistent
+    /// cwd-relative path that silently defaults to empty arms.
+    #[test]
+    fn resolve_power_config_path_falls_back_to_xdg() {
+        let xdg = PathBuf::from("/home/u/.config/sy/power.toml");
+        let got = resolve_power_config_path(None, false, xdg.clone());
+        assert_eq!(got, xdg);
+    }
+}
