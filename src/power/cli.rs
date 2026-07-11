@@ -265,7 +265,7 @@ fn status(json_out: bool, waybar_out: bool) -> Result<()> {
     let sysfs = sysfs_root();
     let local_snap = snapshot::collect_tick(
         &live_sensors(),
-        &mut live_intent(Path::new("/proc/pressure")),
+        &mut probe_intent(Path::new("/proc/pressure")),
         &SystemClock,
         sysfs.as_path(),
     );
@@ -373,7 +373,7 @@ pub(crate) fn build_live_status_value() -> Result<serde_json::Value> {
     let cfg = load_config_or_default();
     let local_snap = snapshot::collect_tick(
         &live_sensors(),
-        &mut live_intent(Path::new("/proc/pressure")),
+        &mut probe_intent(Path::new("/proc/pressure")),
         &SystemClock,
         sysfs_root().as_path(),
     );
@@ -755,6 +755,35 @@ fn live_intent(psi_root: &Path) -> Intent {
         notify,
         time: TimeChannel::new(),
     }
+}
+
+/// Intent bundle for a one-shot `sy power status` probe.
+///
+/// In production (no `SY_SYSFS_ROOT` override) this dials the live
+/// D-Bus intent channels via [`live_intent`]. When `SY_SYSFS_ROOT` is
+/// set — the established signal that the probe is sandboxed away from
+/// the live host (CI, integration tests, containers) — it returns an
+/// isolated bundle with no live channels, so a call / screen-cast /
+/// media stream playing on the operator's desktop cannot flip
+/// `call_active` and tip the shield DFA into `Meeting`. Mirrors how
+/// every sysfs read already honours `SY_SYSFS_ROOT`: redirecting the
+/// host root isolates the *whole* probe, intent included.
+fn probe_intent(psi_root: &Path) -> Intent {
+    if std::env::var_os("SY_SYSFS_ROOT").is_some() {
+        return Intent {
+            psi_cpu: None,
+            logind: None,
+            niri: None,
+            aiplane: None,
+            mpris: None,
+            portal: None,
+            idle: None,
+            cgroup: None,
+            notify: None,
+            time: TimeChannel::new(),
+        };
+    }
+    live_intent(psi_root)
 }
 
 /// `sy power log [--since=<dur>] [--json]` — read end of the audit
