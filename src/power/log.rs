@@ -283,6 +283,14 @@ impl Logger {
         }
     }
 
+    /// Retention horizon in days. Read by the daemon's S3 startup
+    /// guard rail ([`crate::power::onboarding::retention_guard`]) so a
+    /// retention window shorter than the onboarding window surfaces a
+    /// loud WARN instead of silently starving the onboarding gate.
+    pub(crate) fn retention_days(&self) -> u32 {
+        self.retention_days
+    }
+
     /// Path the entry for `day` lands at. Public-in-crate so Step 12's
     /// tail reader can enumerate without re-deriving the format
     /// string.

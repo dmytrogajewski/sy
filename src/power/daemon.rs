@@ -1329,6 +1329,20 @@ async fn run_async() -> anyhow::Result<()> {
     let drift_latest = new_latest_drift_status();
     let model_latest = new_latest_model_status();
     let cfg = PowerConfig::load(&super::power_config_path()).unwrap_or_default();
+
+    // S3 guard rail (BUG-20260712-0139): a telemetry retention horizon
+    // shorter than the onboarding window used to structurally deadlock
+    // the onboarding gate — the retention sweep deleted the telemetry
+    // the day-14 gate needed. The persisted `first_telemetry_at` anchor
+    // now keeps `days_collected` honest regardless, but a short
+    // retention still starves the raw telemetry an operator (or the
+    // trainer) may want, so surface it loudly at startup.
+    if let Some(msg) =
+        crate::power::onboarding::retention_guard(logger.retention_days(), cfg.onboarding.days)
+    {
+        tracing::warn!(target: "sy::power::daemon", "{msg}");
+    }
+
     let thrash = Arc::new(ThrashTracker::new());
     let npu_actuator = Arc::new(production_npu_actuator());
 
@@ -1447,11 +1461,19 @@ async fn run_async() -> anyhow::Result<()> {
     // failure) is logged + dropped so the daemon still boots.
     let ck_path = state_root.join("checkpoint.json");
     let ck_arms_hash = checkpoint::arms_hash(&cfg.arms);
+    // S3 onboarding anchor (BUG-20260712-0139). Loaded from the
+    // checkpoint when present; `None` on a fresh host OR after an
+    // arms-hash rotation (`checkpoint::load` returns `Ok(None)` then,
+    // which resets the anchor by design). When `None`, the tick loop
+    // re-derives it from the oldest surviving NDJSON entry and persists
+    // it so `days_collected` stops sliding under the retention sweep.
+    let mut first_telemetry_at: Option<chrono::DateTime<chrono::Utc>> = None;
     match checkpoint::load(&ck_path, ck_arms_hash) {
         Ok(Some(ck)) => {
             let bandit_arms = ck.bandit.arms.len();
             let classifier_classes = ck.classifier_class_count();
             let saved_at = ck.saved_at;
+            first_telemetry_at = ck.first_telemetry_at;
             bandit_state.bandit.restore(ck.bandit);
             activity_state.classifier.restore(ck.classifier);
             tracing::info!(
@@ -1495,6 +1517,7 @@ async fn run_async() -> anyhow::Result<()> {
                     &bandit_state.bandit,
                     &activity_state.classifier,
                     ck_arms_hash,
+                    first_telemetry_at,
                     &ck_path,
                 );
                 break;
@@ -1502,10 +1525,19 @@ async fn run_async() -> anyhow::Result<()> {
             _ = interval.tick() => {}
         }
         tick_count = tick_count.wrapping_add(1);
+        // S3: freeze the onboarding anchor. Once resolved it never
+        // re-derives (the `is_none` guard), so the retention sweep
+        // deleting older telemetry can't slide `days_collected`. The
+        // newly-derived value is written to disk by the next
+        // `save_checkpoint_best_effort`.
+        if first_telemetry_at.is_none() {
+            first_telemetry_at = crate::power::onboarding::resolve_anchor(&state_root, None);
+        }
         onboarding_state.status = Some(crate::power::onboarding::compute_onboarding_status(
             &state_root,
             &clock,
             cfg.onboarding.days,
+            first_telemetry_at,
         ));
         let ctx = TickContext {
             sysfs_root: PathBuf::from("/sys"),
@@ -1540,6 +1572,7 @@ async fn run_async() -> anyhow::Result<()> {
                 &bandit_state.bandit,
                 &activity_state.classifier,
                 ck_arms_hash,
+                first_telemetry_at,
                 &ck_path,
             );
         }
@@ -1563,6 +1596,7 @@ fn save_checkpoint_best_effort(
     bandit: &Clucb,
     classifier: &OnlineClassifier,
     arms_hash: u64,
+    first_telemetry_at: Option<chrono::DateTime<chrono::Utc>>,
     path: &Path,
 ) {
     let ck = DaemonCheckpoint {
@@ -1571,6 +1605,7 @@ fn save_checkpoint_best_effort(
         bandit: bandit.snapshot(),
         classifier: classifier.snapshot(),
         saved_at: chrono::Utc::now(),
+        first_telemetry_at,
     };
     if let Err(e) = checkpoint::save(&ck, path) {
         tracing::warn!(

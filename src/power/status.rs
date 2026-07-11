@@ -441,10 +441,12 @@ pub fn live_onboarding_hint() -> Option<String> {
     let cfg_path = crate::power::power_config_path();
     let cfg = PowerConfig::load(&cfg_path).ok()?;
     let state_dir = crate::power::power_state_dir_for_daemon();
+    let anchor = crate::power::checkpoint::read_anchor(&state_dir.join("checkpoint.json"));
     let onboarding = crate::power::onboarding::compute_onboarding_status(
         &state_dir,
         &crate::power::clock::SystemClock,
         cfg.onboarding.days,
+        anchor,
     );
     onboarding_hint(&onboarding, &cfg)
 }

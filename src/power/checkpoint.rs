@@ -83,6 +83,23 @@ pub struct DaemonCheckpoint {
     /// Wall-clock at the moment [`save`] was called. Op-visible via
     /// `cat checkpoint.json | jq .saved_at`.
     pub saved_at: DateTime<Utc>,
+    /// Wall-clock at which telemetry collection first began, persisted
+    /// once and thereafter frozen. This is the onboarding anchor
+    /// [`crate::power::onboarding`] derives `days_collected` from — it
+    /// must NOT track the oldest *surviving* NDJSON file, because the
+    /// 7-day retention sweep deletes older telemetry and would pin
+    /// `days_collected` below the 14-day gate forever (the S3
+    /// onboarding-retention deadlock; see BUG-20260712-0139).
+    ///
+    /// `#[serde(default)]` ⇒ pre-S3 checkpoints load with `None`; the
+    /// daemon then re-derives the anchor from the oldest surviving
+    /// NDJSON entry on first run with the fix and persists it here so
+    /// it stops sliding. Intentionally reset to `None` when `arms_hash`
+    /// rotates: [`load`] returns `Ok(None)` on an arms-hash mismatch,
+    /// so the anchor re-derives from the oldest surviving entry — the
+    /// by-design progress reset noted in the BUG.
+    #[serde(default)]
+    pub first_telemetry_at: Option<DateTime<Utc>>,
 }
 
 impl DaemonCheckpoint {
@@ -157,6 +174,25 @@ pub fn load(path: &Path, expected_arms_hash: u64) -> io::Result<Option<DaemonChe
         return Ok(None);
     }
     Ok(Some(ck))
+}
+
+/// Best-effort read of the persisted `first_telemetry_at` onboarding
+/// anchor, ignoring schema / arms-hash drift. The read-only status
+/// paths (`sy power status`, the waybar tile) call this so their
+/// `days_collected` matches the daemon's — the anchor is arms- and
+/// schema-independent, so unlike [`load`] this deliberately does NOT
+/// gate on those fingerprints (a schema bump must not blank the
+/// operator's onboarding countdown). Returns `None` when the file is
+/// absent, unreadable, un-parseable, or carries no anchor.
+pub fn read_anchor(path: &Path) -> Option<DateTime<Utc>> {
+    #[derive(Deserialize)]
+    struct AnchorPeek {
+        #[serde(default)]
+        first_telemetry_at: Option<DateTime<Utc>>,
+    }
+    let bytes = fs::read(path).ok()?;
+    let peek: AnchorPeek = serde_json::from_slice(&bytes).ok()?;
+    peek.first_telemetry_at
 }
 
 /// Stable 64-bit fingerprint of an arms vector. The daemon recomputes
@@ -266,6 +302,7 @@ mod tests {
                 .with_ymd_and_hms(2026, 5, 26, 12, 0, 0)
                 .single()
                 .unwrap(),
+            first_telemetry_at: None,
         }
     }
 
@@ -498,6 +535,62 @@ mod tests {
             post_clf_json, pre_clf_json,
             "classifier FTRL weights must survive the restart",
         );
+    }
+
+    /// S3: the persisted `first_telemetry_at` anchor round-trips
+    /// through disk, so onboarding's `days_collected` no longer slides
+    /// when the NDJSON retention sweep deletes older telemetry. See
+    /// BUG-20260712-0139.
+    #[test]
+    fn round_trips_first_telemetry_anchor_through_disk() {
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("checkpoint.json");
+        let arms_h = 0xC0FFEE_u64;
+        let bandit = for_snapshot_features_with_activity(three_arms(), TEST_ALPHA);
+        let mut ck = make_checkpoint(&bandit, &OnlineClassifier::new(), arms_h);
+        let anchor = Utc.with_ymd_and_hms(2026, 7, 7, 9, 30, 0).single().unwrap();
+        ck.first_telemetry_at = Some(anchor);
+        save(&ck, &path).expect("save");
+        let loaded = load(&path, arms_h).expect("load").expect("Some");
+        assert_eq!(
+            loaded.first_telemetry_at,
+            Some(anchor),
+            "anchor must survive a save/load round-trip",
+        );
+    }
+
+    /// S3: [`read_anchor`] returns the persisted anchor without gating
+    /// on arms-hash or schema — the read-only `sy power status` path
+    /// must see the same countdown the daemon does even across a
+    /// schema bump or arms rotation.
+    #[test]
+    fn read_anchor_ignores_schema_and_arms_drift() {
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("checkpoint.json");
+        let bandit = for_snapshot_features_with_activity(three_arms(), TEST_ALPHA);
+        let mut ck = make_checkpoint(&bandit, &OnlineClassifier::new(), 0x1111);
+        let anchor = Utc.with_ymd_and_hms(2026, 7, 7, 0, 0, 0).single().unwrap();
+        ck.first_telemetry_at = Some(anchor);
+        ck.schema = CHECKPOINT_SCHEMA + 42; // would make `load` re-learn
+        save(&ck, &path).expect("save");
+        assert_eq!(
+            read_anchor(&path),
+            Some(anchor),
+            "read_anchor must surface the anchor despite schema drift",
+        );
+    }
+
+    /// S3: an absent or anchor-less checkpoint yields `None` from
+    /// [`read_anchor`] rather than an error — the fresh-host path.
+    #[test]
+    fn read_anchor_absent_or_missing_field_is_none() {
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("checkpoint.json");
+        assert_eq!(read_anchor(&path), None, "absent file ⇒ None");
+        let bandit = for_snapshot_features_with_activity(three_arms(), TEST_ALPHA);
+        let ck = make_checkpoint(&bandit, &OnlineClassifier::new(), 0x2222);
+        save(&ck, &path).expect("save");
+        assert_eq!(read_anchor(&path), None, "checkpoint with no anchor ⇒ None");
     }
 
     /// arms_hash is stable across reorderings of the underlying byte

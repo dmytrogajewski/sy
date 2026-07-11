@@ -337,6 +337,7 @@ fn status(json_out: bool, waybar_out: bool) -> Result<()> {
         &power_state_dir(),
         &SystemClock,
         cfg.onboarding.days,
+        super::checkpoint::read_anchor(&power_state_dir().join("checkpoint.json")),
     );
     if waybar_out {
         println!("{}", format_waybar(&resp, &cfg, shield_state, &onboarding));
@@ -384,6 +385,7 @@ pub(crate) fn build_live_status_value() -> Result<serde_json::Value> {
         &power_state_dir(),
         &SystemClock,
         cfg.onboarding.days,
+        super::checkpoint::read_anchor(&power_state_dir().join("checkpoint.json")),
     );
     Ok(super::status::build_status_value(
         &resp,
