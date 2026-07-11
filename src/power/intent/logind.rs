@@ -340,4 +340,26 @@ mod tests {
             .expect("missing file is non-fatal");
         assert!(wl.call.who.is_empty());
     }
+
+    /// Regression test for BUG-20260608-2244: `LogindChannel::new` opens
+    /// a `zbus::blocking` connection, and the powerd daemon constructs it
+    /// from `build_live_intent` while already driving a `current_thread`
+    /// tokio runtime. With zbus's `tokio` feature the blocking `block_on`
+    /// built its own runtime and aborted the process with "Cannot start a
+    /// runtime from within a runtime"; with the `async-io` backend it is
+    /// runtime-agnostic and safe. A live system bus is not required —
+    /// `Err(BusUnreachable)` (CI / minimal containers) is an acceptable,
+    /// non-panicking outcome; only a panic is the regression.
+    #[test]
+    fn new_does_not_panic_inside_tokio_runtime() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current-thread runtime");
+        rt.block_on(async {
+            // The result is intentionally discarded: success and
+            // BusUnreachable are both fine; a panic is the failure.
+            let _ = LogindChannel::new(Path::new("/nonexistent/intent_whitelist.toml"));
+        });
+    }
 }

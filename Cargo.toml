@@ -156,7 +156,15 @@ sd-notify = "0.5"
 # already pinned in `Cargo.lock` (transitive via iced's `mundy`), so
 # declaring it here adds no version skew. The `blocking` subset keeps
 # the channel synchronous + matches Step 4's `PsiChannel` shape.
-zbus = { version = "5", default-features = false, features = ["blocking-api", "tokio"] }
+#
+# Backend MUST stay `async-io` (zbus's default), NOT `tokio`: the power
+# daemon drives a `current_thread` tokio runtime, and the `tokio`-backed
+# `zbus::blocking::block_on` builds its own multi-thread runtime — which
+# aborts with "Cannot start a runtime from within a runtime" the moment
+# `LogindChannel`/`MprisChannel`/etc. touch the bus on the runtime thread
+# (BUG-20260608-2244). `async-io` block_on is runtime-agnostic and also
+# serves the one async user (`file::fs::mounts`) on its own reactor.
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 # sy-power Step 7 (SPEC §2 "12-signal panel" — cgroup ancestry intent
 # channel). `intent::cgroup` walks `/proc/<pid>/cgroup` ancestry to
 # match new processes against an allow-list and emits
