@@ -1257,9 +1257,10 @@ fn clear_drift_state(drift_state: &mut DriftTickState, slot: &LatestDriftStatus)
 /// shells out via `xrt-smi` through [`apply::SystemRunner`]. The
 /// daemon-in-thread tests construct their own with a no-op runner.
 pub fn production_npu_actuator() -> NpuActuator {
-    NpuActuator::new(
+    NpuActuator::new_cached(
         Box::new(apply::SystemRunner::new()),
         Box::new(apply::SystemTimeSource::new()),
+        &super::power_state_dir_for_daemon(),
     )
 }
 

@@ -97,8 +97,22 @@ fn status_json_round_trips_against_fake_daemon() {
         String::from_utf8_lossy(&out.stderr),
     );
     let stdout = String::from_utf8(out.stdout).expect("utf8");
-    let v: serde_json::Value =
-        serde_json::from_str(&stdout).expect("status --json must emit parseable JSON");
+    // CLIG "deterministic, parseable --json": stdout must carry EXACTLY
+    // one JSON document — no preamble object, no trailing frame. A
+    // stray NPU-probe log document once leaked here (BUG-20260712-*),
+    // breaking `sy power status --json | jq`. Stream the stdout through
+    // a serde `Deserializer` and assert a single value.
+    let mut stream =
+        serde_json::Deserializer::from_str(&stdout).into_iter::<serde_json::Value>();
+    let first = stream
+        .next()
+        .expect("stdout must contain a JSON document")
+        .expect("first document must parse");
+    assert!(
+        stream.next().is_none(),
+        "stdout must carry exactly one JSON document; got a second: {stdout}",
+    );
+    let v = first;
     assert_eq!(v["schema"].as_str(), Some("sy.power.status/v1"));
     // Every SPEC §4 top-level key must be present.
     for key in [
