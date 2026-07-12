@@ -1342,6 +1342,7 @@ fn apply_opts(dry_run: bool, yes: bool, with_ppd: bool) -> super::apply::Install
         yes,
         with_ppd,
         ppd_unit_paths: super::apply::installer::default_ppd_unit_paths(),
+        tuned_unit_paths: super::apply::installer::default_tuned_unit_paths(),
         grubby_detect: super::apply::installer::default_grubby_detect(),
     }
 }

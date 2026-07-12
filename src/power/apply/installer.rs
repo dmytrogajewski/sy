@@ -165,6 +165,13 @@ const TELEMETRY_SUBDIR: &str = "power";
 /// surfaces `AlreadyMatches` and does NOT re-invoke systemctl).
 const PPD_UNIT_BASENAME: &str = "power-profiles-daemon.service";
 
+/// Task S7: basename of the competing `tuned` unit. The mask lands
+/// system-wide (`systemctl mask tuned.service`), so the mask symlink
+/// is created at `<system_unit_root>/tuned.service` → `/dev/null`; the
+/// installer detects that symlink to keep re-apply idempotent (second
+/// call surfaces `AlreadyMatches` and does NOT re-invoke systemctl).
+const TUNED_UNIT_BASENAME: &str = "tuned.service";
+
 /// Step 37: canonical filesystem locations of a vendor-installed
 /// power-profiles-daemon unit. Production callers pass this slice
 /// verbatim through [`InstallOpts::ppd_unit_paths`]; tests inject
@@ -173,6 +180,22 @@ pub fn default_ppd_unit_paths() -> Vec<PathBuf> {
     [
         "/usr/lib/systemd/system/power-profiles-daemon.service",
         "/lib/systemd/system/power-profiles-daemon.service",
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .collect()
+}
+
+/// Task S7: canonical filesystem locations of a vendor-installed
+/// `tuned` unit — the competing EPP / `platform_profile` writer that
+/// silently rewrites the same sysfs knobs `sy-powerd` actuates. Fedora
+/// 43 ships `tuned.service` under `/usr/lib/systemd/system/`. Mirrors
+/// [`default_ppd_unit_paths`]: production passes this slice; tests
+/// inject tempdir paths so the detection branch is hermetic.
+pub fn default_tuned_unit_paths() -> Vec<PathBuf> {
+    [
+        "/usr/lib/systemd/system/tuned.service",
+        "/lib/systemd/system/tuned.service",
     ]
     .iter()
     .map(PathBuf::from)
@@ -358,6 +381,12 @@ pub struct InstallOpts {
     /// Production passes `DEFAULT_PPD_UNIT_PATHS`; tests inject
     /// tempdir paths so the detection branch is deterministic.
     pub ppd_unit_paths: Vec<PathBuf>,
+    /// Task S7: where to look for an installed `tuned` systemd unit —
+    /// the competing EPP / `platform_profile` writer. Production passes
+    /// [`default_tuned_unit_paths`]; tests inject tempdir paths so the
+    /// detection branch is deterministic. Empty ⇒ tuned handling is a
+    /// no-op (the host runs no competing governor).
+    pub tuned_unit_paths: Vec<PathBuf>,
     /// Step P3-1: injectable predicate the installer uses to decide
     /// whether to push the kernel cmdline via `grubby` (Fedora) or via
     /// the Debian-style `<grub_root>/10-sy-power.cfg` drop-in.
@@ -384,6 +413,7 @@ pub fn install(opts: &InstallOpts) -> Result<Vec<ChangeRecord>> {
     install_cpufreq_oneshot(opts, &mut out)?;
     install_udev_rule(opts, &mut out)?;
     handle_ppd_conflict(opts, &mut out)?;
+    handle_tuned_conflict(opts, &mut out)?;
     if !opts.dry_run && opts.run_daemon_reload && touched_filesystem(&out) {
         run_daemon_reload(&mut out)?;
     }
@@ -885,7 +915,7 @@ fn ppd_present(candidates: &[PathBuf]) -> bool {
 /// missing.
 fn install_ppd_mask(opts: &InstallOpts, out: &mut Vec<ChangeRecord>) -> Result<()> {
     let mask_link = opts.user_unit_root.join(PPD_UNIT_BASENAME);
-    if is_ppd_masked(&mask_link) {
+    if is_unit_masked(&mask_link) {
         out.push(ChangeRecord::AlreadyMatches(mask_link));
         return Ok(());
     }
@@ -901,11 +931,71 @@ fn install_ppd_mask(opts: &InstallOpts, out: &mut Vec<ChangeRecord>) -> Result<(
     Ok(())
 }
 
+/// Task S7: resolve the `tuned`-conflict decision. `tuned.service` is a
+/// second writer for EPP / `platform_profile`; left running it silently
+/// undoes `sy-powerd`'s actuator writes (CLAUDE.md no-snowflakes). This
+/// mirrors [`handle_ppd_conflict`]:
+///
+/// 1. tuned absent → no-op (the host runs no competing governor).
+/// 2. `yes && tuned_present` → plan the system-wide disable+mask (a
+///    symlink at `<system_unit_root>/tuned.service` → `/dev/null`).
+///    Re-applying when the mask is already in place is a no-op
+///    (`AlreadyMatches`, runner not invoked).
+/// 3. `!yes && tuned_present` → advisory Warning: the operator must
+///    re-run with `--yes` (which shells out `systemctl` as root) to
+///    hand EPP / `platform_profile` ownership to `sy-powerd`.
+///
+/// Unlike PPD there is no `--with-ppd`-style opt-out: two writers for
+/// one knob is always a defect, so the only choices are "mask it" or
+/// "not yet" (advisory).
+fn handle_tuned_conflict(opts: &InstallOpts, out: &mut Vec<ChangeRecord>) -> Result<()> {
+    if !ppd_present(&opts.tuned_unit_paths) {
+        return Ok(());
+    }
+    if !opts.yes {
+        out.push(ChangeRecord::Warning(
+            "tuned.service detected: two writers for EPP/platform_profile (it silently undoes sy-powerd). Re-run `sy power apply --yes` as root to disable+mask it.".to_string(),
+        ));
+        return Ok(());
+    }
+    install_tuned_mask(opts, out)
+}
+
+/// `systemctl disable --now tuned.service` + `systemctl mask
+/// tuned.service` semantics: the unit stops and becomes a symlink to
+/// `/dev/null` under `<system_unit_root>/`. Requires root — the mask
+/// link lives in the root-owned system unit dir; the shell-out is the
+/// privileged step (the operator runbook runs `sy power apply --yes`
+/// under root). We track the mask symlink to keep re-apply idempotent —
+/// the symlink's presence + `/dev/null` target is the "already masked"
+/// signal; we only shell out when the link is missing.
+fn install_tuned_mask(opts: &InstallOpts, out: &mut Vec<ChangeRecord>) -> Result<()> {
+    let mask_link = opts.system_unit_root.join(TUNED_UNIT_BASENAME);
+    if is_unit_masked(&mask_link) {
+        out.push(ChangeRecord::AlreadyMatches(mask_link));
+        return Ok(());
+    }
+    out.push(ChangeRecord::Updated(mask_link));
+    if opts.dry_run {
+        return Ok(());
+    }
+    opts.command_runner
+        .run("systemctl", &["disable", "--now", TUNED_UNIT_BASENAME])
+        .with_context(|| {
+            format!("systemctl disable --now {TUNED_UNIT_BASENAME} (S7 tuned mask)")
+        })?;
+    opts.command_runner
+        .run("systemctl", &["mask", TUNED_UNIT_BASENAME])
+        .with_context(|| format!("systemctl mask {TUNED_UNIT_BASENAME} (S7 tuned mask)"))?;
+    Ok(())
+}
+
 /// True iff `mask_link` is a symlink whose target is `/dev/null` — the
-/// well-known shape `systemctl --user mask` produces. Anything else
-/// (regular file, broken link, missing link) means the mask isn't in
-/// effect and we need to (re-)invoke systemctl.
-fn is_ppd_masked(mask_link: &Path) -> bool {
+/// well-known shape `systemctl mask` produces. Anything else (regular
+/// file, broken link, missing link) means the mask isn't in effect and
+/// we need to (re-)invoke systemctl. Shared by the PPD (`--user`) and
+/// tuned (system) mask paths.
+fn is_unit_masked(mask_link: &Path) -> bool {
     match fs::read_link(mask_link) {
         Ok(target) => target == Path::new("/dev/null"),
         Err(_) => false,
@@ -1008,6 +1098,7 @@ mod tests {
             yes: false,
             with_ppd: false,
             ppd_unit_paths: Vec::new(),
+            tuned_unit_paths: Vec::new(),
             // Default tests to the drop-in branch — that's what every
             // existing pre-P3-1 assertion expects. P3-1-specific tests
             // override to `|| true` to exercise the grubby branch.
@@ -1115,6 +1206,7 @@ mod tests {
             yes: false,
             with_ppd: false,
             ppd_unit_paths: vec![fake],
+            tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
         };
 
@@ -1220,6 +1312,7 @@ mod tests {
             yes: false,
             with_ppd: false,
             ppd_unit_paths: Vec::new(),
+            tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
         };
 
@@ -1343,6 +1436,7 @@ mod tests {
             yes: false,
             with_ppd: false,
             ppd_unit_paths: Vec::new(),
+            tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
         };
 
@@ -1446,6 +1540,7 @@ mod tests {
             yes: false,
             with_ppd: false,
             ppd_unit_paths: Vec::new(),
+            tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
         };
 
@@ -1505,6 +1600,7 @@ mod tests {
             yes: false,
             with_ppd: false,
             ppd_unit_paths: Vec::new(),
+            tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
         };
 
@@ -1550,6 +1646,7 @@ mod tests {
             yes: false,
             with_ppd: false,
             ppd_unit_paths: Vec::new(),
+            tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
         };
         (opts, runner)
@@ -1652,6 +1749,7 @@ mod tests {
             yes: true,
             with_ppd: false,
             ppd_unit_paths: vec![fake],
+            tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
         };
 
@@ -1731,6 +1829,7 @@ mod tests {
             yes: true,
             with_ppd: false,
             ppd_unit_paths: vec![fake.clone()],
+            tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
         };
 
@@ -1802,6 +1901,7 @@ mod tests {
             yes: true,
             with_ppd: true,
             ppd_unit_paths: vec![fake],
+            tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
         };
 
@@ -2049,6 +2149,7 @@ mod tests {
             yes: false,
             with_ppd: false,
             ppd_unit_paths: Vec::new(),
+            tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
         };
 
@@ -2126,6 +2227,198 @@ mod tests {
         assert!(
             saw_trigger,
             "expected `udevadm trigger --subsystem-match=drm`, got {:?}",
+            runner.calls(),
+        );
+    }
+
+    /// Task S7: with a `tuned` unit on disk but no `--yes`, the installer
+    /// emits an advisory Warning that names the two-writers conflict and
+    /// tells the operator how to opt in. No destructive records, no
+    /// shell-outs (masking is root-only and gated on `--yes`). Uses a
+    /// synthetic tuned path so the test is host-independent.
+    #[test]
+    fn detects_tuned_conflict_advisory() {
+        let td = TempDir::new().expect("tempdir");
+        let (mut opts, runner) = opts_with_shared_runner(&td);
+        let fake = seed_fake_ppd(&td, "lib/systemd/system/tuned.service");
+        opts.tuned_unit_paths = vec![fake];
+        opts.yes = false;
+
+        let records = install(&opts).expect("install must not fail when tuned is just-detected");
+
+        assert!(
+            records.iter().any(|r| matches!(
+                r,
+                ChangeRecord::Warning(msg)
+                    if msg.contains("tuned.service")
+                        && msg.contains("EPP/platform_profile")
+                        && msg.contains("--yes")
+            )),
+            "expected advisory tuned Warning, got {records:?}",
+        );
+        let mask_link = opts.system_unit_root.join(TUNED_UNIT_BASENAME);
+        assert!(
+            !records.iter().any(|r| matches!(
+                r,
+                ChangeRecord::Updated(p) | ChangeRecord::Created(p) if p == &mask_link
+            )),
+            "advisory path must not write the tuned mask: {records:?}",
+        );
+        assert!(
+            !runner
+                .calls()
+                .iter()
+                .any(|call| call.iter().any(|a| a == "mask")),
+            "advisory tuned path must not shell out `systemctl mask`: {:?}",
+            runner.calls(),
+        );
+    }
+
+    /// Task S7: `--dry-run` with tuned detected + `--yes` must PLAN the
+    /// mask (surface `Updated(<system>/tuned.service)`) so the diff is
+    /// visible, but write nothing and shell out nothing.
+    #[test]
+    fn dry_run_plans_tuned_mask() {
+        let td = TempDir::new().expect("tempdir");
+        let (mut opts, runner) = opts_with_shared_runner(&td);
+        let fake = seed_fake_ppd(&td, "lib/systemd/system/tuned.service");
+        opts.tuned_unit_paths = vec![fake];
+        opts.yes = true;
+        opts.dry_run = true;
+
+        let records = install(&opts).expect("dry-run install");
+
+        let mask_link = opts.system_unit_root.join(TUNED_UNIT_BASENAME);
+        assert!(
+            records.iter().any(|r| matches!(
+                r,
+                ChangeRecord::Updated(p) if p == &mask_link
+            )),
+            "dry-run must PLAN the tuned mask as Updated, got {records:?}",
+        );
+        assert!(
+            !mask_link.exists(),
+            "dry-run must not create the mask link: {mask_link:?}",
+        );
+        assert!(
+            !runner
+                .calls()
+                .iter()
+                .any(|call| call.iter().any(|a| a == "mask")),
+            "dry-run must not shell out `systemctl mask`: {:?}",
+            runner.calls(),
+        );
+    }
+
+    /// `CommandRunner` that mirrors `systemctl mask tuned.service` on a
+    /// real system — drops a symlink to `/dev/null` under
+    /// `system_unit_root`. Lets the idempotency test exercise the
+    /// already-masked branch without spawning systemctl as root.
+    struct TunedMaskingRunner {
+        inner: std::sync::Arc<MockRunner>,
+        system_unit_root: PathBuf,
+    }
+
+    impl CommandRunner for TunedMaskingRunner {
+        fn run(&self, cmd: &str, args: &[&str]) -> Result<()> {
+            self.inner.run(cmd, args)?;
+            if cmd == "systemctl" && args.contains(&"mask") && args.contains(&TUNED_UNIT_BASENAME) {
+                std::fs::create_dir_all(&self.system_unit_root)
+                    .context("TunedMaskingRunner: ensure system_unit_root exists")?;
+                let link = self.system_unit_root.join(TUNED_UNIT_BASENAME);
+                let _ = std::fs::remove_file(&link);
+                std::os::unix::fs::symlink("/dev/null", &link)
+                    .context("TunedMaskingRunner: install tuned mask symlink")?;
+            }
+            Ok(())
+        }
+    }
+
+    /// Task S7: first `sy power apply --yes` masks tuned via `systemctl
+    /// disable --now` + `systemctl mask`, emitting `Updated(<mask
+    /// symlink>)`. A second plan against the now-masked host surfaces
+    /// `AlreadyMatches` and does NOT re-invoke systemctl (second plan =
+    /// no-op). Mirrors the PPD `idempotent_after_apply` contract.
+    #[test]
+    fn tuned_mask_idempotent_after_apply() {
+        let td = TempDir::new().expect("tempdir");
+        let fake = seed_fake_ppd(&td, "lib/systemd/system/tuned.service");
+        let runner = std::sync::Arc::new(MockRunner::default());
+        let system_unit_root = td.path().join("systemd/system");
+        let make_opts = || InstallOpts {
+            dry_run: false,
+            state_root: td.path().join("state"),
+            user_unit_root: td.path().join("config/systemd/user"),
+            config_root: td.path().join("config"),
+            polkit_root: td.path().join("polkit"),
+            grub_root: td.path().join("grub.d"),
+            grub_cfg_file: td.path().join("default-grub"),
+            dbus_root: td.path().join("dbus.d"),
+            tmpfiles_root: td.path().join("tmpfiles.d"),
+            system_unit_root: system_unit_root.clone(),
+            udev_rules_root: td.path().join("udev/rules.d"),
+            command_runner: Box::new(TunedMaskingRunner {
+                inner: runner.clone(),
+                system_unit_root: system_unit_root.clone(),
+            }),
+            run_daemon_reload: false,
+            yes: true,
+            with_ppd: false,
+            ppd_unit_paths: Vec::new(),
+            tuned_unit_paths: vec![fake.clone()],
+            grubby_detect: Box::new(|| false),
+        };
+
+        let first = install(&make_opts()).expect("first install masks tuned");
+        let mask_link = system_unit_root.join(TUNED_UNIT_BASENAME);
+        assert!(
+            first.iter().any(|r| matches!(
+                r,
+                ChangeRecord::Updated(p) if p == &mask_link
+            )),
+            "first install must Update the tuned mask, got {first:?}",
+        );
+        // Both privileged steps ran exactly once on the first apply.
+        let saw_disable = runner.calls().iter().any(|c| {
+            c.first().map(String::as_str) == Some("systemctl")
+                && c.iter().any(|a| a == "disable")
+                && c.iter().any(|a| a == "--now")
+                && c.iter().any(|a| a == TUNED_UNIT_BASENAME)
+        });
+        assert!(
+            saw_disable,
+            "expected `systemctl disable --now tuned.service`, got {:?}",
+            runner.calls()
+        );
+        let mask_calls = runner
+            .calls()
+            .iter()
+            .filter(|c| c.iter().any(|a| a == "mask") && c.iter().any(|a| a == TUNED_UNIT_BASENAME))
+            .count();
+        assert_eq!(
+            mask_calls,
+            1,
+            "first install must shell out `systemctl mask tuned.service` exactly once: {:?}",
+            runner.calls(),
+        );
+
+        let second = install(&make_opts()).expect("re-apply is noop");
+        assert!(
+            second.iter().any(|r| matches!(
+                r,
+                ChangeRecord::AlreadyMatches(p) if p == &mask_link
+            )),
+            "re-apply must surface AlreadyMatches for the tuned mask, got {second:?}",
+        );
+        let mask_calls_after = runner
+            .calls()
+            .iter()
+            .filter(|c| c.iter().any(|a| a == "mask") && c.iter().any(|a| a == TUNED_UNIT_BASENAME))
+            .count();
+        assert_eq!(
+            mask_calls_after,
+            1,
+            "re-apply must NOT re-invoke `systemctl mask tuned.service`: {:?}",
             runner.calls(),
         );
     }

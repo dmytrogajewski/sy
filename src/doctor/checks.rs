@@ -46,6 +46,7 @@ pub fn default_checks() -> Vec<Box<dyn Check>> {
         Box::new(LandlockVersion),
         Box::new(SystemdUserSession),
         Box::new(CoredumpRecentCount),
+        Box::new(TunedConflict),
     ];
     checks.extend(crate::mon::doctor::mon_doctor_checks());
     checks
@@ -627,6 +628,158 @@ fn parse_coredumpctl_count(stdout: &[u8]) -> usize {
     }
 }
 
+// -- power.tuned_conflict --------------------------------------------------
+
+/// The competing EPP / `platform_profile` writer we defend against. On
+/// Fedora 43 the `tuned` package ships `tuned.service` (and the D-Bus
+/// PPD shim `tuned-ppd.service`); either one rewrites the same sysfs
+/// knobs `sy-powerd` actuates, silently undoing the daemon's writes.
+/// Two writers for one knob is a snowflake risk (CLAUDE.md) — this
+/// check surfaces it and points at the declarative remediation.
+const TUNED_SERVICE: &str = "tuned.service";
+const TUNED_PPD_SERVICE: &str = "tuned-ppd.service";
+const SY_POWERD_SERVICE: &str = "sy-powerd.service";
+
+/// Flags the two-writers conflict: `tuned.service` (or its
+/// `tuned-ppd.service` variant) is active while `sy-powerd` is enabled,
+/// so both actors race to own EPP / `platform_profile`. Read-only —
+/// queries `systemctl is-active` / `is-enabled` and never mutates unit
+/// state (masking is `sy power apply`'s job, gated on `--yes`).
+///
+/// Status mapping:
+/// - `Skip` — `systemctl` not on PATH, or `sy-powerd` not enabled (no
+///   ownership to defend, so a live tuned is not sy's conflict).
+/// - `Fail` — `sy-powerd` enabled AND a tuned unit active: names the
+///   conflict + the `sy power apply` remediation.
+/// - `Pass` — `sy-powerd` enabled, no competing writer active.
+pub struct TunedConflict;
+
+impl TunedConflict {
+    /// Test seam mirroring [`ActiveSandboxScopes::run_with_path`]: a
+    /// `Some("")` PATH exercises the "systemctl missing" branch without
+    /// mutating the process env. `None` uses the inherited PATH.
+    fn run_with_path(&self, path_override: Option<&str>) -> CheckResult {
+        let powerd_enabled =
+            match systemctl_stdout(&["--user", "is-enabled", SY_POWERD_SERVICE], path_override) {
+                Ok(out) => unit_is_enabled(&out),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return CheckResult {
+                        name: self.name(),
+                        status: Status::Skip,
+                        message: Some("systemctl not on PATH".into()),
+                        fix: None,
+                        details: None,
+                    };
+                }
+                Err(e) => {
+                    return CheckResult {
+                        name: self.name(),
+                        status: Status::Skip,
+                        message: Some(format!("systemctl failed: {e}")),
+                        fix: None,
+                        details: None,
+                    };
+                }
+            };
+        // `is-active` exits non-zero for an inactive unit but still
+        // prints the state to stdout; a spawn failure degrades to
+        // "not active" (the is-enabled probe above already skipped on a
+        // missing systemctl).
+        let tuned = systemctl_stdout(&["is-active", TUNED_SERVICE], path_override)
+            .map(|o| unit_is_active(&o))
+            .unwrap_or(false);
+        let tuned_ppd = systemctl_stdout(&["is-active", TUNED_PPD_SERVICE], path_override)
+            .map(|o| unit_is_active(&o))
+            .unwrap_or(false);
+        self.evaluate(tuned, tuned_ppd, powerd_enabled)
+    }
+
+    /// Pure conflict classifier — split out so the pass/fail/skip
+    /// mapping is unit-testable without a live systemd.
+    fn evaluate(&self, tuned: bool, tuned_ppd: bool, powerd_enabled: bool) -> CheckResult {
+        if !powerd_enabled {
+            return CheckResult {
+                name: self.name(),
+                status: Status::Skip,
+                message: Some(format!(
+                    "{SY_POWERD_SERVICE} not enabled; no EPP/platform_profile ownership to defend"
+                )),
+                fix: None,
+                details: None,
+            };
+        }
+        let active: Vec<&str> = [(TUNED_SERVICE, tuned), (TUNED_PPD_SERVICE, tuned_ppd)]
+            .into_iter()
+            .filter_map(|(name, on)| on.then_some(name))
+            .collect();
+        if active.is_empty() {
+            CheckResult {
+                name: self.name(),
+                status: Status::Pass,
+                message: Some(format!(
+                    "no competing EPP/platform_profile writer active ({SY_POWERD_SERVICE} owns it)"
+                )),
+                fix: None,
+                details: None,
+            }
+        } else {
+            CheckResult {
+                name: self.name(),
+                status: Status::Fail,
+                message: Some(format!(
+                    "{} active alongside enabled {SY_POWERD_SERVICE}: two writers for EPP/platform_profile",
+                    active.join(" + ")
+                )),
+                fix: Some(
+                    "run `sy power apply` (plans disabling+masking tuned) then reboot".into(),
+                ),
+                details: Some(json!({ "competing_writers": active })),
+            }
+        }
+    }
+}
+
+impl Check for TunedConflict {
+    fn name(&self) -> &'static str {
+        "power.tuned_conflict"
+    }
+    fn run(&self) -> CheckResult {
+        self.run_with_path(None)
+    }
+}
+
+/// Run `systemctl <args>` and return its stdout regardless of exit
+/// status. `systemctl is-active` / `is-enabled` exit non-zero for
+/// inactive / disabled units yet still print the state word, so we key
+/// off stdout, not the exit code. Only a spawn failure (missing binary)
+/// surfaces as `Err`.
+fn systemctl_stdout(args: &[&str], path_override: Option<&str>) -> std::io::Result<Vec<u8>> {
+    let mut cmd = Command::new(SYSTEMCTL);
+    cmd.args(args);
+    if let Some(p) = path_override {
+        cmd.env("PATH", p);
+    }
+    cmd.output().map(|o| o.stdout)
+}
+
+/// True iff `systemctl is-active <unit>` reported `active`. Any other
+/// word (`inactive`, `failed`, `activating`, empty) is treated as "not
+/// a live writer".
+fn unit_is_active(stdout: &[u8]) -> bool {
+    std::str::from_utf8(stdout)
+        .map(|s| s.trim() == "active")
+        .unwrap_or(false)
+}
+
+/// True iff `systemctl is-enabled <unit>` reported `enabled`. `static`,
+/// `disabled`, `masked`, and `linked` all mean "sy-powerd is not the
+/// declared owner", so only the exact `enabled` word counts.
+fn unit_is_enabled(stdout: &[u8]) -> bool {
+    std::str::from_utf8(stdout)
+        .map(|s| s.lines().next().unwrap_or("").trim() == "enabled")
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -741,6 +894,83 @@ mod tests {
             let result = IpcEndpoint::agt().run();
             assert_eq!(result.status, Status::Skip);
         });
+    }
+
+    #[test]
+    fn tuned_conflict_fails_when_tuned_active_and_powerd_enabled() {
+        // Live-host shape (audit 2026-07-12): tuned.service active,
+        // tuned-ppd inactive, sy-powerd enabled → two writers race for
+        // EPP/platform_profile. The check must FAIL, name the conflict,
+        // and point at the `sy power apply` remediation.
+        let r = TunedConflict.evaluate(
+            /* tuned */ true, /* tuned_ppd */ false, /* powerd */ true,
+        );
+        assert_eq!(r.status, Status::Fail);
+        let msg = r.message.as_deref().unwrap_or("");
+        assert!(msg.contains("tuned.service"), "names the unit: {msg:?}");
+        assert!(
+            msg.contains("two writers for EPP/platform_profile"),
+            "names the conflict: {msg:?}"
+        );
+        assert!(
+            r.fix.as_deref().unwrap_or("").contains("sy power apply"),
+            "fix points at sy power apply: {:?}",
+            r.fix
+        );
+    }
+
+    #[test]
+    fn tuned_conflict_fails_on_tuned_ppd_variant() {
+        // The D-Bus PPD shim `tuned-ppd.service` writes the same knobs;
+        // it must trip the same conflict even when plain tuned is down.
+        let r = TunedConflict.evaluate(false, /* tuned_ppd */ true, true);
+        assert_eq!(r.status, Status::Fail);
+        assert!(
+            r.message
+                .as_deref()
+                .unwrap_or("")
+                .contains("tuned-ppd.service"),
+            "names the tuned-ppd variant: {:?}",
+            r.message
+        );
+    }
+
+    #[test]
+    fn tuned_conflict_passes_when_no_competing_writer() {
+        // sy-powerd enabled, no tuned unit active → sy owns the knobs
+        // uncontested. Pass.
+        let r = TunedConflict.evaluate(false, false, true);
+        assert_eq!(r.status, Status::Pass);
+    }
+
+    #[test]
+    fn tuned_conflict_skips_when_powerd_not_enabled() {
+        // With sy-powerd not enabled there's no ownership to defend, so
+        // a live tuned is not sy's conflict — skip rather than fail.
+        let r = TunedConflict.evaluate(true, true, /* powerd */ false);
+        assert_eq!(r.status, Status::Skip);
+    }
+
+    #[test]
+    fn tuned_conflict_skips_when_systemctl_missing() {
+        // No `systemctl` on PATH → the check can't determine ownership;
+        // skip cleanly (mirrors ActiveSandboxScopes). Drive the branch
+        // with an empty PATH override so no real systemd is consulted.
+        let r = TunedConflict.run_with_path(Some(""));
+        assert_eq!(r.status, Status::Skip);
+    }
+
+    #[test]
+    fn tuned_state_parsers_key_off_stdout() {
+        // `systemctl is-active` / `is-enabled` exit non-zero for
+        // inactive/disabled units but print the state word; the parsers
+        // must key off that word, tolerating trailing newlines.
+        assert!(unit_is_active(b"active\n"));
+        assert!(!unit_is_active(b"inactive\n"));
+        assert!(!unit_is_active(b"failed\n"));
+        assert!(unit_is_enabled(b"enabled\n"));
+        assert!(!unit_is_enabled(b"disabled\n"));
+        assert!(!unit_is_enabled(b"masked\n"));
     }
 
     #[test]
