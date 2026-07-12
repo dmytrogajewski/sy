@@ -151,6 +151,23 @@ pub struct SpawnBlockingRetrainTrigger {
     pub model_status: LatestModelStatus,
 }
 
+impl SpawnBlockingRetrainTrigger {
+    /// Build the production trigger for `state_root`. The trainer reads
+    /// the *whole* telemetry directory (daily-segmented NDJSON) and
+    /// writes the trained model to `<state_root>/forecaster.onnx` — the
+    /// same filename `sy power train` writes and `sy power status`
+    /// reads (`src/power/cli.rs`), so the CLI and daemon stay in
+    /// lockstep. Pinning both paths in one place is what BUG-20260712-1545
+    /// part 2 fixes (the daemon previously wrote `forecast.onnx`).
+    pub fn for_state_root(state_root: &Path, model_status: LatestModelStatus) -> Self {
+        Self {
+            telemetry_path: state_root.to_path_buf(),
+            out_path: state_root.join("forecaster.onnx"),
+            model_status,
+        }
+    }
+}
+
 impl RetrainTrigger for SpawnBlockingRetrainTrigger {
     fn dispatch(&self, cause: RetrainCause) {
         let telemetry = self.telemetry_path.clone();
@@ -611,6 +628,52 @@ impl ForecastTickState {
             model: crate::power::forecast::Model::warmup()?,
             last_forecast: None,
         })
+    }
+
+    /// Startup model load (BUG-20260712-1545 part 3). Prefer a trained
+    /// model persisted at `<state_root>/forecaster.onnx` over the
+    /// embedded warmup fixture so a retrained forecaster survives a
+    /// daemon restart. A missing file falls back to warmup silently
+    /// (fresh host); a present-but-corrupt file WARNs once and falls
+    /// back to warmup — a bad model on disk must never crash the daemon.
+    pub fn load_or_warmup(state_root: &Path) -> anyhow::Result<Self> {
+        let path = state_root.join("forecaster.onnx");
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::warmup(),
+            Err(e) => {
+                tracing::warn!(
+                    target: "sy::power::daemon",
+                    path = %path.display(),
+                    error = %e,
+                    "cannot read trained forecaster; falling back to warmup model",
+                );
+                return Self::warmup();
+            }
+        };
+        match crate::power::forecast::Model::from_onnx_bytes(&bytes) {
+            Ok(model) => {
+                tracing::info!(
+                    target: "sy::power::daemon",
+                    path = %path.display(),
+                    version_sha = %model.version_sha,
+                    "loaded trained forecaster from disk",
+                );
+                Ok(Self {
+                    model,
+                    last_forecast: None,
+                })
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "sy::power::daemon",
+                    path = %path.display(),
+                    error = %format!("{e:#}"),
+                    "trained forecaster on disk is unreadable; falling back to warmup model",
+                );
+                Self::warmup()
+            }
+        }
     }
 }
 
@@ -1559,18 +1622,18 @@ async fn run_async() -> anyhow::Result<()> {
     // identical to Step 24's cold-start path. The trainer's retrain
     // hook (Step 25 / P2-1) hot-swaps a trained model in via
     // [`crate::power::forecast::model::ModelStore`] in a later step.
-    let mut forecast_state =
-        ForecastTickState::warmup().map_err(|e| anyhow::anyhow!("warmup forecaster: {e}"))?;
+    // BUG-20260712-1545 part 3: prefer a trained `forecaster.onnx` on
+    // disk over the embedded warmup so a retrained model survives a
+    // daemon restart; a missing/corrupt file falls back to warmup.
+    let mut forecast_state = ForecastTickState::load_or_warmup(&state_root)
+        .map_err(|e| anyhow::anyhow!("warmup forecaster: {e}"))?;
     // BUG-20260712-* Problem B: per-lever failure latches persist across
     // ticks so a persistently failing actuator WARNs once + backs off
     // instead of spamming the journal every second.
     let mut actuator_latches = ActuatorLatches::default();
     let drift_notifier = SystemDriftNotifier;
-    let retrain_trigger = SpawnBlockingRetrainTrigger {
-        telemetry_path: state_root.clone(),
-        out_path: state_root.join("forecast.onnx"),
-        model_status: Arc::clone(&model_latest),
-    };
+    let retrain_trigger =
+        SpawnBlockingRetrainTrigger::for_state_root(&state_root, Arc::clone(&model_latest));
 
     // T4: rehydrate the bandit posterior + classifier weights from
     // `~/.local/state/sy/power/checkpoint.json` if a matching
@@ -2103,6 +2166,60 @@ mod tests {
             Box::new(NoopNpuRunner),
             Box::new(crate::power::apply::SystemTimeSource::new()),
         )
+    }
+
+    /// BUG-20260712-1545 part 2: the production trigger must point the
+    /// trainer at the telemetry *directory* (daily-segmented NDJSON)
+    /// and write the model to `forecaster.onnx` — the CLI convention
+    /// (`src/power/cli.rs`), not the old `forecast.onnx`.
+    #[test]
+    fn retrain_trigger_writes_forecaster_onnx() {
+        let tmp = TempDir::new().expect("tempdir");
+        let trig =
+            SpawnBlockingRetrainTrigger::for_state_root(tmp.path(), new_latest_model_status());
+        assert_eq!(trig.telemetry_path, tmp.path());
+        assert_eq!(trig.out_path, tmp.path().join("forecaster.onnx"));
+    }
+
+    /// BUG-20260712-1545 part 3: on startup a trained `forecaster.onnx`
+    /// on disk must be loaded in preference to the embedded warmup, so
+    /// a retrained model survives a daemon restart. We seed the file
+    /// with a real ONNX (the warmup bytes) and assert the loaded model
+    /// carries the byte-derived version SHA — *not* the "rules-baseline"
+    /// sentinel `Model::warmup` stamps — proving the disk model won.
+    #[test]
+    fn startup_loads_trained_model_over_warmup() {
+        use crate::power::forecast::model::{WARMUP_ONNX, WARMUP_VERSION_SHA};
+        let tmp = TempDir::new().expect("tempdir");
+        std::fs::write(tmp.path().join("forecaster.onnx"), WARMUP_ONNX).expect("seed model");
+        let state = ForecastTickState::load_or_warmup(tmp.path()).expect("load trained model");
+        assert_ne!(
+            state.model.version_sha, WARMUP_VERSION_SHA,
+            "on-disk trained model must be loaded, not the warmup fixture",
+        );
+        assert_eq!(state.model.input_dim, 12);
+    }
+
+    /// BUG-20260712-1545 part 3: a present-but-corrupt `forecaster.onnx`
+    /// must WARN + fall back to the warmup model, never panic / crash
+    /// the daemon. A missing file also falls back to warmup.
+    #[test]
+    fn startup_falls_back_to_warmup_on_corrupt_model() {
+        use crate::power::forecast::model::WARMUP_VERSION_SHA;
+        let tmp = TempDir::new().expect("tempdir");
+        std::fs::write(tmp.path().join("forecaster.onnx"), b"not a real onnx graph")
+            .expect("seed corrupt model");
+        let state =
+            ForecastTickState::load_or_warmup(tmp.path()).expect("corrupt model falls back");
+        assert_eq!(
+            state.model.version_sha, WARMUP_VERSION_SHA,
+            "corrupt model must fall back to the warmup fixture",
+        );
+
+        // Missing file (fresh host) also yields warmup.
+        let empty = TempDir::new().expect("tempdir");
+        let fresh = ForecastTickState::load_or_warmup(empty.path()).expect("missing file → warmup");
+        assert_eq!(fresh.model.version_sha, WARMUP_VERSION_SHA);
     }
 
     /// Step 26 test sink: counts `dispatch()` calls without spawning

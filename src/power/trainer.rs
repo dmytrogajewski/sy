@@ -439,9 +439,72 @@ struct LabelledWindow {
     class_idx: usize,
 }
 
-/// Read every `AuditEntry` line out of `telemetry_path`, project
-/// `applied_arm` onto the five-class taxonomy, drop unlabelled rows.
+/// Read the labelled corpus at `path`, projecting `applied_arm` onto
+/// the five-class taxonomy and dropping unlabelled rows.
+///
+/// `path` is either a single NDJSON file (the `sy power train
+/// --telemetry <file>` CLI path + every trainer test) or the daemon's
+/// telemetry *directory*. Live telemetry is daily-segmented
+/// (`telemetry-YYYY-MM-DD.ndjson` plus overflow `…​.N.ndjson`, commit
+/// 22df459), so a directory is read as the ordered concatenation of its
+/// `telemetry-*.ndjson` segments (see [`telemetry_segments`]). A
+/// directory with zero matching segments yields zero rows, which the
+/// caller surfaces as [`TrainerError::InsufficientData`]
+/// (BUG-20260712-1545).
 fn read_labelled_rows(path: &Path) -> Result<Vec<LabelledRow>, TrainerError> {
+    if fs::metadata(path)?.is_dir() {
+        let mut out = Vec::new();
+        for segment in telemetry_segments(path)? {
+            out.extend(read_labelled_rows_from_file(&segment)?);
+        }
+        return Ok(out);
+    }
+    read_labelled_rows_from_file(path)
+}
+
+/// Collect the `telemetry-*.ndjson` segment files in `dir`, sorted
+/// chronologically. The date in the filename is ISO-8601 so a plain
+/// lexicographic sort orders days correctly; the overflow index of a
+/// single day (`telemetry-<date>.<N>.ndjson`) is parsed as an integer
+/// so the base file (index 0) sorts first and `.10` sorts after `.2`.
+/// Files that don't match the segment shape (checkpoint.json,
+/// forecaster.onnx, reports/, …) are skipped (BUG-20260712-1545).
+fn telemetry_segments(dir: &Path) -> Result<Vec<PathBuf>, TrainerError> {
+    let mut segments: Vec<(String, u64, PathBuf)> = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if let Some((date, overflow)) = segment_sort_key(name) {
+            segments.push((date, overflow, entry.path()));
+        }
+    }
+    segments.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    Ok(segments.into_iter().map(|(_, _, p)| p).collect())
+}
+
+/// Parse a telemetry segment filename into its `(date, overflow-index)`
+/// sort key, or `None` when `name` isn't a `telemetry-*.ndjson` segment.
+/// The base file (`telemetry-<date>.ndjson`) has overflow index 0;
+/// overflow segments (`telemetry-<date>.<N>.ndjson`) carry `N`.
+fn segment_sort_key(name: &str) -> Option<(String, u64)> {
+    let rest = name.strip_prefix("telemetry-")?.strip_suffix(".ndjson")?;
+    match rest.rsplit_once('.') {
+        Some((date, idx)) if !idx.is_empty() && idx.bytes().all(|b| b.is_ascii_digit()) => {
+            Some((date.to_string(), idx.parse::<u64>().ok()?))
+        }
+        _ => Some((rest.to_string(), 0)),
+    }
+}
+
+/// Read every `AuditEntry` line out of a single NDJSON file, project
+/// `applied_arm` onto the five-class taxonomy, drop unlabelled rows.
+fn read_labelled_rows_from_file(path: &Path) -> Result<Vec<LabelledRow>, TrainerError> {
     let f = fs::File::open(path)?;
     let mut out = Vec::new();
     for line_res in BufReader::new(f).lines() {
@@ -1597,6 +1660,123 @@ mod tests {
                 assert_eq!(required, MIN_TRAINING_ROWS);
                 assert_eq!(found, MIN_TRAINING_ROWS - 1);
             }
+            other => panic!("expected InsufficientData, got {other:?}"),
+        }
+    }
+
+    /// Write a full round-robin corpus (all five classes) into
+    /// `dir/<name>`, splitting the `SYNTH_ROWS` rows so `seq` values
+    /// stay globally monotonic across segments (`start`..`start+count`).
+    /// Mirrors `write_synth_corpus` but lets a test lay the same corpus
+    /// down across several daily-segmented files.
+    fn write_named_segment(dir: &Path, name: &str, start: usize, count: usize) -> PathBuf {
+        let path = dir.join(name);
+        let mut f = fs::File::create(&path).expect("create segment");
+        let arms = ["idle", "browse", "call", "code", "build"];
+        for seq in start..start + count {
+            let arm = arms[seq % arms.len()];
+            let mut feats = class_centroid(arm);
+            match arm {
+                "browse" => {
+                    feats[3] = 0.85;
+                    feats[6] = 0.5;
+                }
+                "code" => {
+                    feats[10] = 0.9;
+                    feats[11] = 0.4;
+                }
+                _ => {}
+            }
+            let feats = perturb(feats, seq as i64);
+            writeln!(f, "{}", synth_line(feats, arm, seq as i64)).expect("write line");
+        }
+        path
+    }
+
+    /// BUG-20260712-1545 part 1: live telemetry is daily-segmented, so
+    /// the trainer must accept the state *directory* and read every
+    /// `telemetry-*.ndjson` segment. The corpus split across two daily
+    /// files must train exactly as if it were one file, and unrelated
+    /// files (checkpoint.json, forecaster.onnx) must be skipped.
+    #[test]
+    fn reads_directory_corpus_across_segments() {
+        let tmp = TempDir::new().expect("tempdir");
+        let half = SYNTH_ROWS / 2;
+        write_named_segment(tmp.path(), "telemetry-2026-07-11.ndjson", 0, half);
+        write_named_segment(
+            tmp.path(),
+            "telemetry-2026-07-12.ndjson",
+            half,
+            SYNTH_ROWS - half,
+        );
+        // Decoys that must be skipped, not parsed as telemetry.
+        fs::write(tmp.path().join("checkpoint.json"), b"{}").expect("decoy checkpoint");
+        fs::write(tmp.path().join("forecaster.onnx"), b"not onnx").expect("decoy model");
+        fs::create_dir(tmp.path().join("reports")).expect("decoy reports dir");
+
+        let out_path = tmp.path().join("model.onnx");
+        let report = retrain_gru(tmp.path(), &out_path).expect("directory corpus trains");
+        assert_eq!(report.rows_used, SYNTH_ROWS);
+        assert!(out_path.exists(), "model should land at {}", out_path.display());
+    }
+
+    /// BUG-20260712-1545 part 1: overflow segments of one day are named
+    /// `telemetry-<date>.<N>.ndjson`. Plain lexicographic order sorts
+    /// `.10` before `.2`; the trainer must order them numerically
+    /// (base file first, then 1, 2, … 10) so the corpus is chronological.
+    #[test]
+    fn reads_directory_corpus_orders_numeric_overflow() {
+        // Deliberately create the segments out of order and with a
+        // numeric-overflow suffix that would mis-sort lexicographically.
+        let names = [
+            "telemetry-2026-07-12.10.ndjson",
+            "telemetry-2026-07-12.2.ndjson",
+            "telemetry-2026-07-12.ndjson",
+            "telemetry-2026-07-12.1.ndjson",
+        ];
+        let expected = [
+            "telemetry-2026-07-12.ndjson",
+            "telemetry-2026-07-12.1.ndjson",
+            "telemetry-2026-07-12.2.ndjson",
+            "telemetry-2026-07-12.10.ndjson",
+        ];
+        let tmp = TempDir::new().expect("tempdir");
+        for name in names {
+            fs::write(tmp.path().join(name), b"").expect("touch segment");
+        }
+        let ordered = telemetry_segments(tmp.path()).expect("collect segments");
+        let ordered_names: Vec<String> = ordered
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(ordered_names, expected);
+    }
+
+    /// BUG-20260712-1545 part 1: single-file paths must keep working
+    /// (the `sy power train --telemetry <file>` CLI + every existing
+    /// trainer test pass a file, not a directory).
+    #[test]
+    fn single_file_corpus_still_trains() {
+        let tmp = TempDir::new().expect("tempdir");
+        let in_path = write_synth_corpus(tmp.path());
+        assert!(in_path.is_file(), "fixture must be a single file");
+        let out_path = tmp.path().join("model.onnx");
+        let report = retrain_gru(&in_path, &out_path).expect("single-file corpus trains");
+        assert_eq!(report.rows_used, SYNTH_ROWS);
+    }
+
+    /// BUG-20260712-1545 part 1: a directory with zero matching
+    /// segments must flow into the documented `InsufficientData` path,
+    /// never panic on an empty tensor.
+    #[test]
+    fn empty_directory_is_insufficient_data_not_panic() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Only non-telemetry files present.
+        fs::write(tmp.path().join("checkpoint.json"), b"{}").expect("decoy");
+        let out_path = tmp.path().join("model.onnx");
+        let err = retrain_gru(tmp.path(), &out_path).expect_err("empty dir has no rows");
+        match err {
+            TrainerError::InsufficientData { found, .. } => assert_eq!(found, 0),
             other => panic!("expected InsufficientData, got {other:?}"),
         }
     }
