@@ -1028,14 +1028,17 @@ pub fn one_tick(
         .iter()
         .map(|(n, _)| arm_by_name(ctx.cfg, n))
         .collect();
-    let chosen = shield::project(
-        &arms_typed,
-        state,
-        &snap,
-        ctx.cfg,
-        ctx.thrash,
-        Instant::now(),
-    );
+    // BUG-20260712-1136: an operator pin (`sy power profile <arm>`) must
+    // actuate regardless of the anti-thrash floor. `project_forced`
+    // bypasses the `would_thrash` veto for the pinned singleton while
+    // keeping the shield safety constraints; the bandit path keeps the
+    // oscillation floor via `project`.
+    let now_instant = Instant::now();
+    let chosen = if pinned.is_some() {
+        shield::project_forced(&arms_typed, state, &snap, ctx.cfg, ctx.thrash, now_instant)
+    } else {
+        shield::project(&arms_typed, state, &snap, ctx.cfg, ctx.thrash, now_instant)
+    };
 
     let mut reason_chain = vec![source_label, format!("shield:{}", state.as_str())];
     reason_chain.extend(apply_arm(&chosen, ctx, latches, clock.now()));
