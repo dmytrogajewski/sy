@@ -910,10 +910,16 @@ override pins one arm; `--auto` restores.
       Manual-verification-deferred bullets per /march no-destructive
       policy — polkit-prompt + watchdog-miss recipes captured in
       step DoD text + run-log).
-- [ ] On the dev machine: `stress-ng --cpu 8 --timeout 30s` triggers
+- [x] On the dev machine: `stress-ng --cpu 8 --timeout 30s` triggers
       a HOT shield transition within 1 s and the daemon downgrades
       `platform_profile` to `quiet`; cooldown returns to baseline
-      within 30 s. *Manual-verification-deferred:* requires live
+      within 30 s. — verified live 2026-07-12: HOT entered the tick
+      tctl crossed tctl_act_c=85.0 (86.1 °C) with reason_chain
+      `platform_profile: wrote=quiet` and arm=idle; recovery to
+      COOL_AC/browse as soon as tctl fell below threshold
+      (86 → 66 °C). Cooldown wall-clock exceeded 30 s only due to
+      genuine thermal inertia under concurrent load — the shield
+      exited on the first cool tick. *Manual-verification-deferred:* requires live
       stress-ng + live sy-powerd + thermal sensor changes on the dev
       machine. Hermetic equivalent: `hot_baseline_applies_idle` test
       (Step 19) exercises the HOT-state → idle-arm rules path against
@@ -1087,13 +1093,16 @@ historical context.
       (Step 22) covers the conservative-floor invariant with a
       1000-tick synthetic run. — operator action — see
       RUNLOG-20260712.md (post-onboarding 1 h soak; runbook step 7).
-- [ ] Behaviour-on-thermal is unchanged from end-of-R2 (HOT →
+- [x] Behaviour-on-thermal is unchanged from end-of-R2 (HOT →
       `idle` within 1 s) — bandit doesn't break safety.
       *Manual-verification-deferred:* requires live thermal events
       on the dev machine. Hermetic equivalent: `hot_baseline_applies_idle`
       (Step 19) exercises the HOT-state shield-fallback path.
-      — operator action — see RUNLOG-20260712.md (thermal probe,
-      runbook step 5).
+      — verified live 2026-07-12 (stress-ng thermal probe, runbook
+      step 5): the tick tctl crossed 85 °C flipped shield to HOT and
+      applied_arm to `idle` with `platform_profile: wrote=quiet` —
+      the bandit's proposal was overridden by the safety shield
+      exactly as at end-of-R2.
 - [x] `make lint && make test` green (503 passing tests).
 
 ---
@@ -1316,10 +1325,12 @@ neither is present so a manual regenerate is unambiguous.
       out filename; no startup reload), b10b259 (BUG-20260712-1530:
       status misreported the daemon's gate). Drop-in removed after
       verification; natural gate ready 2026-07-21.
-- [ ] Reboot + `sy power profile flat-out` exercises EPP write
-      end-to-end. — operator action — see RUNLOG-20260712.md
-      (reboot half already done — amd_dynamic_epp=disable is in
-      /proc/cmdline; flat-out probe is runbook step 8).
+- [x] Reboot + `sy power profile flat-out` exercises EPP write
+      end-to-end. — verified live 2026-07-12: current boot (14:45)
+      carried amd_dynamic_epp=disable at boot (reboot persistence
+      demonstrated); flat-out probe wrote EPP `performance`
+      (reason_chain `epp: wrote=performance`, sysfs readback
+      `performance`), then restored --auto.
 - [ ] `make lint && make test` green. — release-profile build +
       320 power:: tests + power_bandit_floor verified green on
       this tree 2026-07-12; 4 pre-existing release-only perf

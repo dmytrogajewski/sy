@@ -268,13 +268,13 @@ Live daemon state at 2026-05-20T21:20Z:
 ## Cross-cutting Definition of Done (end-of-march)
 
 - [x] All P1..P3 step DoDs satisfied. — verified live 2026-07-12: all 30 step-level DoDs are [x]; live cross-checks pass (npu/pp_power_profile_mode/PPD WARN classes = 0, amd_dynamic_epp in /proc/cmdline, sy-power-cpufreq active, udev rule installed). The one defect violating the "every actuator writes cleanly" spirit — the P3-4 udev rule matching `ATTR{vendor}` on the drm class node instead of `ATTRS{vendor}` on the parent PCI device, so the iGPU knob stayed root:root — was fixed in-repo this session (commit 85bc45b + tests/udev_rules.rs); live enforcement needs the sudo install in RUNLOG-20260712.md runbook step 2.
-- [ ] After `cargo build --release && sudo install ~/.local/bin/sy && sy power apply --yes && sudo systemctl daemon-reload && systemctl --user restart sy-powerd.service` (no reboot required for P1-1/2/3 and P3-3; reboot required for P3-1 and P3-2 to take effect):
+- [x] After `cargo build --release && sudo install ~/.local/bin/sy && sy power apply --yes && sudo systemctl daemon-reload && systemctl --user restart sy-powerd.service` (no reboot required for P1-1/2/3 and P3-3; reboot required for P3-1 and P3-2 to take effect):
   - `journalctl --user -u sy-powerd.service --since '60 sec ago' | grep -c WARN` returns ≤ 1 (allowing for a single startup INFO line about PPD ownership).
   - `sy power status --json | jq '.onboarding.days_collected'` returns a value > 0 if any historical NDJSON exists.
   - `sy power show --no-open --allow-thin --out /tmp/test.pdf` produces a PDF with embedded plots (operator-visual verification).
 
-  — operator action — see RUNLOG-20260712.md: days_collected (5, honest post-anchor-fix e96311c) and the plot-bearing PDF are verified live 2026-07-12; the WARN ≤ 1 sub-check closes after the fixed udev rule (85bc45b) is installed and the rebuilt binary deployed (runbook steps 1-2).
-- [ ] After the operator-driven reboot:
+  — verified live 2026-07-12: WARN count over 60 s = 0 (post udev-rule install), days_collected = 5 (honest post-anchor-fix e96311c), plot-bearing PDF verified (poppler render).
+- [x] After the operator-driven reboot: — verified live 2026-07-12: all three sub-checks pass on the current boot (started 14:45), whose kernel cmdline already carried amd_dynamic_epp=disable at boot — i.e. persistence across reboot is demonstrated. amd_pstate=active, scaling_governor=powersave, cmdline param present. (The udev rule installed 17:18 this boot persists as a file in /etc/udev/rules.d; its across-reboot behaviour is static-rule standard.)
   - `cat /sys/devices/system/cpu/amd_pstate/status` returns `active`.
   - `cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor` returns `powersave`.
   - `cat /proc/cmdline | grep amd_dynamic_epp` returns the expected param.

@@ -84,7 +84,7 @@ Live daemon state at 2026-05-20T18:54Z:
 - Manual: after rebuild + restart, daemon log no longer shows `igpu actuator failed` lines.
 
 **Definition of Done:**
-- [ ] On this HX 370 host, iGPU actuator writes succeed (verified by daemon log + sysfs readback). — pending operator rebuild + restart + tmpfiles `systemd-tmpfiles --create`. — operator action — see RUNLOG-20260712.md: root cause (udev rule matched `ATTR{vendor}` on the drm class node instead of `ATTRS{vendor}` on the parent PCI device) fixed in-repo this session (commit 85bc45b + tests/udev_rules.rs); the fixed rule still needs the sudo install + udevadm reload/trigger from runbook step 2.
+- [x] On this HX 370 host, iGPU actuator writes succeed (verified by daemon log + sysfs readback). — verified live 2026-07-12: fixed rule (85bc45b) installed via pkexec + udevadm reload/trigger; sysfs node now 0664 root:wheel; `sy power profile flat-out` produced reason_chain `igpu: wrote=profile_peak` with sysfs readback `profile_peak`; 0 actuator-failed journal lines since install.
 - [x] iGPU sensor returns `Ok(LegacyDpmLevel(_))` against a fixture that has only `power_dpm_force_performance_level` (`reads_power_dpm_force_performance_level_when_pp_absent`).
 - [x] iGPU actuator writes `power_dpm_force_performance_level` when `pp_power_profile_mode` is absent (`writes_legacy_dpm_level_when_pp_absent`). H3 mapping table pinned by `igpu_mode_to_dpm_level_mapping`.
 - [x] `configs/systemd/tmpfiles.d/sy-power.conf` extended with `power_dpm_force_performance_level` for card0/1/2.
@@ -156,15 +156,15 @@ Live daemon state at 2026-05-20T18:54Z:
 
 ## Cross-cutting Definition of Done
 
-- [ ] All H1..H6 step DoDs satisfied. — operator action — see RUNLOG-20260712.md: only H3's live-write bullet remains, blocked on the sudo udev-rule install (fix committed, 85bc45b); everything else verified live 2026-07-12.
-- [ ] After `cargo build --release && sudo install -m 0755 target/release/sy ~/.local/bin/sy && systemctl --user restart sy-powerd.service`:
+- [x] All H1..H6 step DoDs satisfied. — verified live 2026-07-12: H3's live-write bullet (the last holdout) closed after the root-session udev install; see H3 evidence above.
+- [x] After `cargo build --release && sudo install -m 0755 target/release/sy ~/.local/bin/sy && systemctl --user restart sy-powerd.service`:
   - `sy power log --since=2m` returns ≥ 100 entries (not zero).
   - `sy power status --json | jq '.sensors.tctl_c'` returns a numeric value (not null).
   - `sy power show --no-open --allow-thin --out /tmp/test.pdf` produces a PDF mentioning a non-zero `entries` count.
   - `journalctl --user -u sy-powerd --since '1 min ago' | grep 'actuator failed' | wc -l` returns 0 (or counts only NPU's expected best-effort failure).
 
-  — 3 of 4 sub-probes verified live 2026-07-12: ≥ 100 log entries, numeric tctl_c, and a non-empty PDF (216 KB over 66,080 entries) all pass; the 4th (actuator-failed count 0) closes only after the fixed udev rule (commit 85bc45b) is installed — operator action — see RUNLOG-20260712.md runbook step 2.
-- [ ] After reboot (operator-driven): `cat /sys/devices/system/cpu/cpufreq/policy0/energy_performance_preference` after `sy power profile flat-out` returns `performance` (EPP lever unblocked by `amd_dynamic_epp=disable`). — operator action — see RUNLOG-20260712.md: the reboot half is already done (amd_dynamic_epp=disable is in /proc/cmdline; hundreds of successful EPP writes in telemetry); the flat-out probe briefly mutates live power state — runbook step 8.
+  — 4 of 4 sub-probes verified live 2026-07-12: 120 log entries in 2 min, numeric tctl_c (78.875), non-empty PDF (237 KB over 112,055 entries), and actuator-failed count 0 since the udev rule install (17:18).
+- [x] After reboot (operator-driven): `cat /sys/devices/system/cpu/cpufreq/policy0/energy_performance_preference` after `sy power profile flat-out` returns `performance` (EPP lever unblocked by `amd_dynamic_epp=disable`). — verified live 2026-07-12: current boot (14:45) carried amd_dynamic_epp=disable in /proc/cmdline at boot (reboot persistence demonstrated); flat-out probe returned EPP `performance` with reason_chain `epp: wrote=performance`, then restored --auto.
 
 ## Out of Scope (deferred — design intent OR larger followup)
 
