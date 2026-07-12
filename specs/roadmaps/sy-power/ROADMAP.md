@@ -1770,15 +1770,16 @@ dep comment and in the `src/power/report/render.rs` module preamble.
 - [x] `sy power show --json --since=1d` round-trips through the
       `sy.power.report/v1` schema. Pinned by
       `power::cli::tests::show_json_skips_pdf`.
-- [ ] Report PDF is reproducible: same NDJSON window + same `sy
-      power show` invocation → byte-identical PDF. **Partially
-      deferred** — the `generated_at_rfc3339` field is wall-clock
-      and the integration test does not freeze time; the structural
-      bytes (catalog, page tree, font dict, content streams) are
-      deterministic over the same metric inputs because pdf-writer
-      itself emits in declaration order. A follow-up step can pass
-      a clock-injected timestamp + a fixed model SHA via env var if
-      strict byte-equality is required.
+- [x] Report PDF is reproducible: same NDJSON window + same `sy
+      power show` invocation → byte-identical PDF. **Closed by Step
+      S6** — `build_report_header` now reads `generated_at_rfc3339`
+      from the injected `Clock` (not wall-clock), and the
+      `SY_POWER_REPORT_TIMESTAMP` (RFC3339) + `SY_POWER_REPORT_MODEL_SHA`
+      env vars pin the two wall-clock inputs for strict byte-equality
+      (documented in `sy power show --help`). The plot series already
+      iterate in sorted / fixed order and pdf-writer emits in
+      declaration order, so the structural bytes were deterministic;
+      pinned by `power::cli::tests::report_pdf_is_byte_reproducible_with_injected_clock`.
 - [ ] Documented in `README.md` under the `sy power` section with
       a screenshot of the report. **Manual-verification-deferred**.
 - [x] `make lint && make test` green.

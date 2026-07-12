@@ -18,7 +18,7 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Subcommand;
 
-use super::clock::SystemClock;
+use super::clock::{Clock, SystemClock};
 use super::config::PowerConfig;
 use super::intent::{
     AiplaneIntentChannel, CgroupAncestryChannel, IdleChannel, LogindChannel, MprisChannel,
@@ -176,6 +176,12 @@ pub enum PowerCmd {
     ///   sy power show --since=24h --no-open     # CI / headless
     ///   sy power show --out=/tmp/report.pdf     # explicit path
     ///   sy power show --json --since=1d         # agent path
+    ///
+    /// Reproducible output: over the same NDJSON window the PDF is
+    /// byte-identical once its two wall-clock inputs are pinned via env:
+    ///   SY_POWER_REPORT_TIMESTAMP=<RFC3339>  pins the "Generated" line
+    ///                                        (e.g. 2026-05-19T12:00:00Z)
+    ///   SY_POWER_REPORT_MODEL_SHA=<sha>      pins the "Model version" line
     Show {
         /// Filter to entries newer than this duration (e.g. `7d`,
         /// `1h`). Default: 7 days, per SPEC §RV.2.
@@ -931,12 +937,15 @@ fn show_cmd(opts: ShowOpts) -> Result<()> {
         activity: &activity,
         entries: &entries,
     };
-    let header = build_report_header(since);
+    let header = build_report_header(since, &SystemClock);
+    // Reuse the (possibly env-pinned) header timestamp for the default
+    // output path so a pinned invocation writes to a stable filename too.
+    let generated_at = header.generated_at_rfc3339.clone();
     let template = ReportTemplate::build(&report_metrics, header);
     let pdf_bytes = compile_pdf(&template, &report_metrics);
     let out_path = opts
         .out
-        .unwrap_or_else(|| default_report_out_path(&state_dir));
+        .unwrap_or_else(|| default_report_out_path(&state_dir, &generated_at));
     write_pdf(&out_path, &pdf_bytes)?;
     let stdin_is_tty = std::io::stdin().is_terminal();
     if should_open_viewer(opts.no_open, stdin_is_tty) {
@@ -1022,20 +1031,60 @@ fn emit_report_json(
     }
 }
 
+/// Env var pinning the report's `generated_at` timestamp (RFC 3339).
+/// When set to a parseable RFC-3339 instant it overrides the injected
+/// clock so `sy power show` renders a byte-identical PDF across runs;
+/// an unparseable value is ignored and the clock wins.
+const ENV_REPORT_TIMESTAMP: &str = "SY_POWER_REPORT_TIMESTAMP";
+/// Env var pinning the embedded model-identity SHA. When set it
+/// overrides the default `rules-baseline` marker so the report's
+/// "Model version" line is stable across machines/runs.
+const ENV_REPORT_MODEL_SHA: &str = "SY_POWER_REPORT_MODEL_SHA";
+/// Default model-identity marker when [`ENV_REPORT_MODEL_SHA`] is unset.
+const DEFAULT_MODEL_SHA: &str = "rules-baseline";
+
 /// Build the report header from the active window. Host name comes
 /// from `uname` (or `unknown-host` on failure — the CLI must never
 /// crash on a sandbox without a hostname); the generated timestamp is
-/// rendered in RFC 3339 UTC so the path-stamping convention round-trips
-/// cleanly.
-fn build_report_header(since: Duration) -> ReportHeader {
+/// read from the injected [`Clock`] (not wall-clock directly) so the
+/// PDF is byte-reproducible under a frozen clock. The
+/// [`ENV_REPORT_TIMESTAMP`] / [`ENV_REPORT_MODEL_SHA`] env vars pin the
+/// timestamp + model identity for strict byte-equality (see the Phase
+/// RV determinism DoD).
+fn build_report_header(since: Duration, clock: &dyn Clock) -> ReportHeader {
     let host = hostname_or_unknown();
-    let generated_at_rfc3339 = chrono::Utc::now().to_rfc3339();
+    let generated_at_rfc3339 = report_timestamp(clock);
     let window_days = since.as_secs_f32() / 86_400.0;
     ReportHeader {
         host,
         generated_at_rfc3339,
         window_days,
-        model_version_sha: "rules-baseline".to_string(),
+        model_version_sha: report_model_sha(),
+    }
+}
+
+/// Resolve the report timestamp: an [`ENV_REPORT_TIMESTAMP`] override
+/// (canonicalised to UTC RFC 3339 so the output bytes are identical
+/// regardless of the offset the operator supplied) takes precedence;
+/// otherwise the injected clock's `now()` is used. An unparseable
+/// override falls through to the clock rather than erroring — the
+/// report must never fail to render over a malformed env var.
+fn report_timestamp(clock: &dyn Clock) -> String {
+    if let Ok(raw) = std::env::var(ENV_REPORT_TIMESTAMP) {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(raw.trim()) {
+            return dt.with_timezone(&chrono::Utc).to_rfc3339();
+        }
+    }
+    clock.now().to_rfc3339()
+}
+
+/// Resolve the embedded model-identity SHA: a non-empty
+/// [`ENV_REPORT_MODEL_SHA`] override wins, else the
+/// [`DEFAULT_MODEL_SHA`] marker.
+fn report_model_sha() -> String {
+    match std::env::var(ENV_REPORT_MODEL_SHA) {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => DEFAULT_MODEL_SHA.to_string(),
     }
 }
 
@@ -1052,9 +1101,12 @@ fn hostname_or_unknown() -> String {
 
 /// Default `--out` path: `<state>/reports/sy-power-<rfc3339>.pdf`.
 /// Filesystem-safe RFC 3339 — colons swapped for hyphens so the path
-/// is copy-pasteable into `xdg-open` arg lists across shells.
-fn default_report_out_path(state_dir: &Path) -> PathBuf {
-    let ts = chrono::Utc::now().to_rfc3339().replace(':', "-");
+/// is copy-pasteable into `xdg-open` arg lists across shells. Takes the
+/// report's generated-at timestamp (already resolved from the injected
+/// clock / [`ENV_REPORT_TIMESTAMP`]) so a pinned invocation lands a
+/// stable filename.
+fn default_report_out_path(state_dir: &Path, generated_at_rfc3339: &str) -> PathBuf {
+    let ts = generated_at_rfc3339.replace(':', "-");
     state_dir.join("reports").join(format!("sy-power-{ts}.pdf"))
 }
 
@@ -1742,6 +1794,97 @@ mod tests {
         assert!(
             doc.get("pdf").is_none(),
             "JSON path must not embed PDF bytes"
+        );
+    }
+
+    /// Step S6 DoD (Phase RV finale): the report PDF is byte-reproducible.
+    /// Rendering the same fixture window twice — through independent
+    /// metric-extraction passes (so any HashMap iteration-order
+    /// nondeterminism in the plot series would surface as differing
+    /// bytes) with a frozen [`MockClock`] and a pinned model SHA —
+    /// yields byte-identical PDFs. This closes the "same NDJSON window +
+    /// same invocation -> byte-identical PDF" item deferred at Step 35.
+    #[test]
+    fn report_pdf_is_byte_reproducible_with_injected_clock() {
+        use crate::power::clock::MockClock;
+        use crate::power::log::AuditEntry;
+        use crate::power::report::{
+            extract_activity_metrics, extract_bandit_metrics, extract_drift_metrics,
+            extract_energy_metrics, extract_forecast_metrics, extract_shield_metrics,
+        };
+        use crate::power::snapshot::{Snapshot, SnapshotRaw, FEATURE_LEN, SCHEMA_ID};
+        use chrono::TimeZone;
+
+        const PINNED_SHA: &str = "deadbeefcafef00d";
+        const FIXTURE_TICKS: i64 = 16;
+        let base = chrono::Utc
+            .with_ymd_and_hms(2026, 5, 19, 12, 0, 0)
+            .single()
+            .expect("pinned base ts");
+        let build_entries = || -> Vec<AuditEntry> {
+            (0..FIXTURE_TICKS)
+                .map(|i| {
+                    let snap = Snapshot {
+                        schema: SCHEMA_ID,
+                        ts: base + chrono::Duration::seconds(i),
+                        features: [0.0; FEATURE_LEN],
+                        raw: SnapshotRaw {
+                            package_power_w: Some(8.0),
+                            ..Default::default()
+                        },
+                        snapshot_hash: "0".repeat(64),
+                    };
+                    AuditEntry::r3(
+                        snap,
+                        "browse".to_string(),
+                        "COOL_AC".to_string(),
+                        Vec::new(),
+                        vec![("browse".to_string(), 0.5)],
+                        0.05,
+                    )
+                })
+                .collect()
+        };
+        // Pin the embedded model identity so it is stable across runs.
+        std::env::set_var("SY_POWER_REPORT_MODEL_SHA", PINNED_SHA);
+        let clock = MockClock::new(base);
+        let render_once = || -> Vec<u8> {
+            let entries = build_entries();
+            let bandit = extract_bandit_metrics(&entries);
+            let forecast = extract_forecast_metrics(&entries);
+            let shield = extract_shield_metrics(&entries);
+            let energy = extract_energy_metrics(&entries);
+            let drift = extract_drift_metrics(&entries);
+            let activity = extract_activity_metrics(&entries);
+            let metrics = ReportMetrics {
+                bandit: &bandit,
+                forecast: &forecast,
+                shield: &shield,
+                energy: &energy,
+                drift: &drift,
+                activity: &activity,
+                entries: &entries,
+            };
+            let header = build_report_header(Duration::from_secs(2 * 3600), &clock);
+            let template = ReportTemplate::build(&metrics, header);
+            compile_pdf(&template, &metrics)
+        };
+        let first = render_once();
+        let second = render_once();
+        std::env::remove_var("SY_POWER_REPORT_MODEL_SHA");
+        assert_eq!(
+            first, second,
+            "same window + frozen clock + pinned SHA must be byte-identical",
+        );
+        assert!(first.starts_with(b"%PDF-"), "must be a well-formed PDF");
+        let haystack = String::from_utf8_lossy(&first);
+        assert!(
+            haystack.contains(PINNED_SHA),
+            "SY_POWER_REPORT_MODEL_SHA override must round-trip into the bytes",
+        );
+        assert!(
+            haystack.contains("2026-05-19T12:00:00"),
+            "injected-clock timestamp must round-trip into the bytes",
         );
     }
 
