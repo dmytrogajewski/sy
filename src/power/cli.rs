@@ -1771,6 +1771,7 @@ mod tests {
                 last_alarm_at: Some(chrono::Utc::now()),
             },
             model: None,
+            onboarding: None,
         };
         let err = status_drift_exit(&resp).expect("alarm must produce a PowerError");
         let pe = err
@@ -1793,6 +1794,7 @@ mod tests {
             last_audit: None,
             drift: DriftStatus::default(),
             model: None,
+            onboarding: None,
         };
         assert!(status_drift_exit(&resp).is_none());
     }

@@ -505,6 +505,24 @@ pub fn new_latest_model_status() -> LatestModelStatus {
     Arc::new(RwLock::new(None))
 }
 
+/// Shared "latest onboarding gate" slot (BUG-20260712-1530). Written by
+/// the daemon's tick loop right after it recomputes
+/// [`OnboardingTickState::status`]; read by the IPC handler to populate
+/// [`crate::power::ipc::StatusResponse::onboarding`]. Holding the
+/// daemon's own view here is what lets `sy power status` report the gate
+/// the daemon is *actually* enforcing rather than the CLI process's
+/// re-computation, which diverges whenever the two load a different
+/// `SY_POWER_ONBOARDING_DAYS` (e.g. a systemd drop-in scoping the env to
+/// `sy-powerd` only). Starts `None` until the first tick computes a
+/// status.
+pub type LatestOnboarding = Arc<RwLock<Option<crate::power::ipc::OnboardingWire>>>;
+
+/// Build an empty latest-onboarding holder. Mirrors
+/// [`new_latest_model_status`].
+pub fn new_latest_onboarding() -> LatestOnboarding {
+    Arc::new(RwLock::new(None))
+}
+
 /// Desktop-side notifier for the SPEC §5 "sy-powerd is retraining:
 /// drift detected" message. Separate from the systemd [`Notifier`]
 /// trait above (which fires `WATCHDOG=1` pings) so the two surfaces
@@ -1424,6 +1442,7 @@ async fn run_async() -> anyhow::Result<()> {
     let last_entry = new_latest_audit_entry();
     let drift_latest = new_latest_drift_status();
     let model_latest = new_latest_model_status();
+    let onboarding_latest = new_latest_onboarding();
     let cfg = PowerConfig::load(&super::power_config_path()).unwrap_or_default();
 
     // S3 guard rail (BUG-20260712-0139): a telemetry retention horizon
@@ -1449,22 +1468,23 @@ async fn run_async() -> anyhow::Result<()> {
     let accept_last_entry = Arc::clone(&last_entry);
     let accept_drift = Arc::clone(&drift_latest);
     let accept_model = Arc::clone(&model_latest);
+    let accept_onboarding = Arc::clone(&onboarding_latest);
     let accept_arms = cfg.arms.clone();
     tokio::spawn(async move {
         loop {
             match listener.accept().await {
                 Ok((stream, _)) => {
-                    let latest = Arc::clone(&accept_latest);
-                    let pin = Arc::clone(&accept_pin);
-                    let last_entry = Arc::clone(&accept_last_entry);
-                    let drift = Arc::clone(&accept_drift);
-                    let model = Arc::clone(&accept_model);
-                    let arms = accept_arms.clone();
+                    let state = ConnState {
+                        latest: Arc::clone(&accept_latest),
+                        pin: Arc::clone(&accept_pin),
+                        last_entry: Arc::clone(&accept_last_entry),
+                        drift: Arc::clone(&accept_drift),
+                        model: Arc::clone(&accept_model),
+                        onboarding: Arc::clone(&accept_onboarding),
+                        arms: accept_arms.clone(),
+                    };
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection_full(
-                            stream, latest, pin, last_entry, drift, model, arms,
-                        )
-                        .await
+                        if let Err(e) = handle_connection_full(stream, state).await
                         {
                             tracing::debug!(
                                 target: "sy::power::daemon",
@@ -1639,6 +1659,18 @@ async fn run_async() -> anyhow::Result<()> {
             cfg.onboarding.days,
             first_telemetry_at,
         ));
+        // BUG-20260712-1530: publish the daemon's authoritative
+        // onboarding view (gate + its effective `target_days`) so the
+        // IPC `Status` handler serves the gate the daemon is actually
+        // enforcing, not the CLI's re-computation.
+        if let Some(status) = onboarding_state.status.as_ref() {
+            if let Ok(mut g) = onboarding_latest.write() {
+                *g = Some(crate::power::ipc::OnboardingWire::from_status(
+                    status,
+                    cfg.onboarding.days,
+                ));
+            }
+        }
         let ctx = TickContext {
             sysfs_root: PathBuf::from("/sys"),
             cgroup_root: cgroup_root.clone(),
@@ -1825,16 +1857,35 @@ fn build_live_intent() -> Intent {
 /// blocking the tick loop. Validates pin names against `arms` so a
 /// caller-side typo is rejected with a structured [`crate::power::ipc::ProfileAck`]
 /// instead of leaving the daemon in a degenerate state.
-async fn handle_connection_full(
-    mut stream: tokio::net::UnixStream,
+/// Shared daemon state an accepted IPC connection reads (and, for
+/// `pin`, writes). Bundled into one struct so [`handle_connection_full`]
+/// stays a two-argument fn — the slots grow one-per-surface (drift,
+/// model, onboarding, …) and a positional arg list would blow the
+/// clippy `too_many_arguments` ceiling.
+struct ConnState {
     latest: LatestSnapshot,
     pin: LatestPin,
     last_entry: LatestAuditEntry,
     drift: LatestDriftStatus,
     model: LatestModelStatus,
+    onboarding: LatestOnboarding,
     arms: Vec<Arm>,
+}
+
+async fn handle_connection_full(
+    mut stream: tokio::net::UnixStream,
+    state: ConnState,
 ) -> anyhow::Result<()> {
     use crate::power::ipc::{read_frame, write_frame, ProfileAck, StatusRequest, StatusResponse};
+    let ConnState {
+        latest,
+        pin,
+        last_entry,
+        drift,
+        model,
+        onboarding,
+        arms,
+    } = state;
     let req: StatusRequest = read_frame(&mut stream).await?;
     match req {
         StatusRequest::Status => {
@@ -1847,10 +1898,12 @@ async fn handle_connection_full(
                     let entry = last_entry.read().ok().and_then(|g| g.clone());
                     let drift_status = drift.read().ok().map(|g| g.clone()).unwrap_or_default();
                     let model_status = model.read().ok().and_then(|g| g.clone());
+                    let onboarding_status = onboarding.read().ok().and_then(|g| g.clone());
                     let mut resp = StatusResponse::from_snapshot(s);
                     resp.last_audit = entry;
                     resp.drift = drift_status;
                     resp.model = model_status;
+                    resp.onboarding = onboarding_status;
                     write_frame(&mut stream, &resp).await?;
                 }
                 None => {
@@ -3363,6 +3416,62 @@ mod tests {
             raw: SnapshotRaw::default(),
             snapshot_hash: String::new(),
         }
+    }
+
+    /// BUG-20260712-1530: the IPC `Status` response must carry the
+    /// daemon's own onboarding view — active, days_collected, ready_at,
+    /// and the daemon's *effective* `target_days` — so `sy power status`
+    /// reports the gate the daemon is actually enforcing instead of the
+    /// CLI process's re-computation. Populate the shared onboarding slot
+    /// with a "gate open, target_days = 0" view (the concrete repro:
+    /// a systemd drop-in scoping `SY_POWER_ONBOARDING_DAYS=0` to
+    /// `sy-powerd`), dial the handler over a socket pair, and assert the
+    /// wire response reflects it verbatim.
+    #[tokio::test]
+    async fn status_response_carries_daemon_onboarding_block() {
+        use crate::power::ipc::{
+            read_frame, write_frame, OnboardingWire, StatusRequest, StatusResponse,
+        };
+        let latest = new_latest_snapshot();
+        *latest.write().expect("snapshot slot") = Some(empty_snapshot());
+        let onboarding = new_latest_onboarding();
+        let ready_at = chrono::Utc::now() - chrono::Duration::days(1);
+        *onboarding.write().expect("onboarding slot") = Some(OnboardingWire {
+            active: false,
+            days_collected: 5,
+            ready_at,
+            target_days: 0,
+        });
+
+        let (server, mut client) =
+            tokio::net::UnixStream::pair().expect("in-process socket pair");
+        let state = ConnState {
+            latest,
+            pin: new_pin_slot(),
+            last_entry: new_latest_audit_entry(),
+            drift: new_latest_drift_status(),
+            model: new_latest_model_status(),
+            onboarding,
+            arms: Vec::new(),
+        };
+        let handle = tokio::spawn(handle_connection_full(server, state));
+
+        write_frame(&mut client, &StatusRequest::Status)
+            .await
+            .expect("send status request");
+        let resp: StatusResponse = read_frame(&mut client).await.expect("read response");
+        handle.await.expect("join handler").expect("handler ok");
+
+        let onb = resp
+            .onboarding
+            .expect("daemon must serve its own onboarding block");
+        assert!(!onb.active, "daemon reports the gate open");
+        assert_eq!(onb.days_collected, 5);
+        assert_eq!(
+            onb.target_days, 0,
+            "target_days must reflect the daemon's effective config, not the CLI's",
+        );
+        assert_eq!(onb.ready_at, ready_at);
     }
 
     /// BUG-20260522-0037: the NPU actuator's `Display` impl embeds the
