@@ -280,7 +280,9 @@ fn status(json_out: bool, waybar_out: bool) -> Result<()> {
     // one-shot CLI invocation we have no history, and the DFA's
     // priority order (call_active / SOC / Tctl) reaches every other
     // state without depending on `prev` except for the MEETING lock.
-    let shield_state = shield::transition(ShieldState::CoolAc, &local_snap, &cfg.shield);
+    // One-shot invocation: no cross-tick history, so `secs_since_call`
+    // is `None` (never in a MEETING lock window here).
+    let shield_state = shield::transition(ShieldState::CoolAc, &local_snap, &cfg.shield, None);
     // Step 18 anti-dead-code probe: walk `shield::project` against an
     // empty ranked list so the projection + rules-baseline fallback
     // stay live in the production binary. The projection's pick is
@@ -384,7 +386,9 @@ pub(crate) fn build_live_status_value() -> Result<serde_json::Value> {
         &SystemClock,
         sysfs_root().as_path(),
     );
-    let shield_state = shield::transition(ShieldState::CoolAc, &local_snap, &cfg.shield);
+    // One-shot invocation: no cross-tick history, so `secs_since_call`
+    // is `None` (never in a MEETING lock window here).
+    let shield_state = shield::transition(ShieldState::CoolAc, &local_snap, &cfg.shield, None);
     let resp = dial_status(&super::daemon::socket_path())
         .map_err(|e| anyhow::anyhow!("sy-powerd unreachable: {e}"))?;
     let onboarding = super::onboarding::compute_onboarding_status(

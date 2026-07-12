@@ -1,14 +1,19 @@
 //! 5-state shield DFA (Roadmap Step 17).
 //!
-//! `transition(prev, snapshot, cfg) -> ShieldState` is a pure function:
-//! no clock reads, no I/O, deterministic given its three inputs. The
-//! state enumeration matches SPEC §4 — `COOL_AC | WARM_AC | HOT |
-//! BATTERY_LOW | MEETING` — and the priority order is `MEETING` >
-//! `BATTERY_LOW` > `HOT` > `WARM_AC` > `COOL_AC`.
+//! `transition(prev, snapshot, cfg, secs_since_call) -> ShieldState` is
+//! a pure function: no clock reads, no I/O, deterministic given its
+//! four inputs. The state enumeration matches SPEC §4 — `COOL_AC |
+//! WARM_AC | HOT | BATTERY_LOW | MEETING` — and the priority order is
+//! `MEETING` > `BATTERY_LOW` > `HOT` > `WARM_AC` > `COOL_AC`.
 //!
 //! - `MEETING` fires when `call_active` is true now, OR `prev ==
-//!   Meeting` with the call still held; the 30-second "lock after VAD
-//!   release" timer lives in the daemon (Step 19), not here.
+//!   Meeting` and fewer than `cfg.meeting_lock_after_vad_s` seconds
+//!   have elapsed since `call_active` was last true. That elapsed time
+//!   arrives as the injected `secs_since_call` argument (the daemon
+//!   tracks the last-call timestamp across ticks) so the DFA stays
+//!   pure — no implicit clock read. Once the lock window elapses
+//!   MEETING is NOT absorbing: the DFA re-evaluates the thermal /
+//!   battery rungs normally (BUG-20260712-1201).
 //! - `BATTERY_LOW` fires on DC operation with SOC at or below the
 //!   emergency or low thresholds; emergency takes precedence in the
 //!   Step 18 projection.
@@ -78,15 +83,26 @@ impl ShieldState {
 /// the priority order. The function reads only `snapshot.raw` fields
 /// and the `cfg` thresholds; it makes no syscalls, allocates nothing,
 /// and is `Send + Sync` by virtue of its arguments.
-pub fn transition(prev: ShieldState, snapshot: &Snapshot, cfg: &ShieldConfig) -> ShieldState {
+pub fn transition(
+    prev: ShieldState,
+    snapshot: &Snapshot,
+    cfg: &ShieldConfig,
+    secs_since_call: Option<f32>,
+) -> ShieldState {
     let raw = &snapshot.raw;
     let call_active = raw.call_active.unwrap_or(false);
-    // "MEETING locks until VAD release" — the daemon (Step 19) clears
-    // `prev` after `cfg.meeting_lock_after_vad_s` of silence. While
-    // `call_active` is true OR the daemon hasn't released `prev`, the
-    // DFA pins MEETING. The threshold itself stays a daemon-side
-    // concern so the DFA stays pure (no implicit clock read).
-    if call_active || prev == ShieldState::Meeting {
+    // MEETING is held while a whitelisted idle-inhibitor is live
+    // (`call_active`, a LEVEL per BUG-20260712-1200) and for
+    // `cfg.meeting_lock_after_vad_s` seconds after it last went false.
+    // `secs_since_call` is the daemon-tracked elapsed time since
+    // `call_active` was last true (`None` ⇒ never seen this run); the
+    // daemon threads it in so the DFA reads no wall clock and stays
+    // pure. Once the window elapses MEETING releases and the DFA
+    // re-evaluates normally — it is NOT absorbing (BUG-20260712-1201).
+    let within_lock = secs_since_call
+        .map(|s| s < cfg.meeting_lock_after_vad_s as f32)
+        .unwrap_or(false);
+    if call_active || (prev == ShieldState::Meeting && within_lock) {
         return ShieldState::Meeting;
     }
 
@@ -147,7 +163,7 @@ mod tests {
             battery_soc_pct: Some(100),
             ..Default::default()
         });
-        let state = transition(ShieldState::CoolAc, &snap, &cfg);
+        let state = transition(ShieldState::CoolAc, &snap, &cfg, None);
         assert_eq!(state, ShieldState::Hot);
     }
 
@@ -161,7 +177,7 @@ mod tests {
             battery_soc_pct: Some(cfg.battery_low_dc_pct),
             ..Default::default()
         });
-        let state = transition(ShieldState::CoolAc, &snap, &cfg);
+        let state = transition(ShieldState::CoolAc, &snap, &cfg, None);
         assert_eq!(state, ShieldState::BatteryLow);
     }
 
@@ -174,18 +190,13 @@ mod tests {
             battery_soc_pct: Some(cfg.battery_emergency_dc_pct),
             ..Default::default()
         });
-        let state = transition(ShieldState::CoolAc, &snap, &cfg);
+        let state = transition(ShieldState::CoolAc, &snap, &cfg, None);
         assert_eq!(state, ShieldState::BatteryLow);
     }
 
-    #[test]
-    fn meeting_state_locks_for_30s_post_vad() {
-        // Scripted snapshot stream: tick 0 triggers MEETING via
-        // call_active. Subsequent ticks have call_active = false; the
-        // DFA must hold MEETING as long as `prev == Meeting` (the
-        // daemon, Step 19, manages the 30 s release timer outside the
-        // DFA).
-        let cfg = ShieldConfig::default();
+    /// Build a (live-call, post-call) snapshot pair on a cool/AC/full
+    /// host so the only thing driving MEETING is the call signal.
+    fn meeting_snap_pair() -> (Snapshot, Snapshot) {
         let live = snap_with(SnapshotRaw {
             tctl_c: Some(TCTL_COOL_C),
             ac_online: Some(true),
@@ -200,15 +211,59 @@ mod tests {
             call_active: Some(false),
             ..Default::default()
         });
-        let s0 = transition(ShieldState::CoolAc, &live, &cfg);
+        (live, after_vad)
+    }
+
+    #[test]
+    fn meeting_held_within_lock_window() {
+        // While call_active is true, then for every second up to (but
+        // not including) `meeting_lock_after_vad_s` after it goes
+        // false, MEETING stays pinned — no premature release.
+        let cfg = ShieldConfig::default();
+        let (live, after_vad) = meeting_snap_pair();
+        let s0 = transition(ShieldState::CoolAc, &live, &cfg, Some(0.0));
         assert_eq!(s0, ShieldState::Meeting);
-        // Simulate 30 ticks of 1 Hz silence — DFA must stay MEETING
-        // because the daemon hasn't released `prev` yet.
         let mut prev = s0;
-        for _ in 0..cfg.meeting_lock_after_vad_s {
-            prev = transition(prev, &after_vad, &cfg);
-            assert_eq!(prev, ShieldState::Meeting);
+        for secs in 0..cfg.meeting_lock_after_vad_s {
+            prev = transition(prev, &after_vad, &cfg, Some(secs as f32));
+            assert_eq!(
+                prev,
+                ShieldState::Meeting,
+                "must stay MEETING at secs={secs}"
+            );
         }
+    }
+
+    #[test]
+    fn meeting_releases_after_lock_window() {
+        // BUG-20260712-1201: MEETING must NOT be absorbing. Once the
+        // call ends (call_active=false) and `meeting_lock_after_vad_s`
+        // seconds elapse, the DFA re-evaluates normally instead of
+        // pinning MEETING until daemon restart.
+        let cfg = ShieldConfig::default();
+        let (live, after_vad) = meeting_snap_pair();
+        let s0 = transition(ShieldState::CoolAc, &live, &cfg, Some(0.0));
+        assert_eq!(s0, ShieldState::Meeting);
+        // One second short of the window → still held.
+        let held = transition(
+            s0,
+            &after_vad,
+            &cfg,
+            Some((cfg.meeting_lock_after_vad_s - 1) as f32),
+        );
+        assert_eq!(held, ShieldState::Meeting);
+        // Window elapsed → MEETING releases; cool/AC snapshot ⇒ COOL_AC.
+        let released = transition(
+            held,
+            &after_vad,
+            &cfg,
+            Some(cfg.meeting_lock_after_vad_s as f32),
+        );
+        assert_eq!(
+            released,
+            ShieldState::CoolAc,
+            "MEETING must release once the lock window elapses",
+        );
     }
 
     #[test]
@@ -221,7 +276,7 @@ mod tests {
             battery_soc_pct: Some(80),
             ..Default::default()
         });
-        let state = transition(ShieldState::CoolAc, &snap, &cfg);
+        let state = transition(ShieldState::CoolAc, &snap, &cfg, None);
         assert_eq!(state, ShieldState::CoolAc);
     }
 
@@ -249,7 +304,7 @@ mod tests {
                             call_active: Some(meeting),
                             ..Default::default()
                         });
-                        let state = transition(ShieldState::CoolAc, &snap, &cfg);
+                        let state = transition(ShieldState::CoolAc, &snap, &cfg, None);
                         // Match-all proves the function never falls
                         // off the back of the enum — adding a new
                         // variant later forces this match to update

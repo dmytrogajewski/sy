@@ -403,6 +403,39 @@ pub struct LastChosen {
     pub prev_arm: Option<String>,
 }
 
+/// Cross-tick shield state. Bundles the previous tick's DFA output
+/// with the wall-clock instant `call_active` was last observed true so
+/// the daemon can feed `secs_since_call` into [`shield::transition`].
+/// MEETING therefore releases `cfg.shield.meeting_lock_after_vad_s`
+/// seconds after the call ends instead of latching until daemon
+/// restart (BUG-20260712-1201).
+#[derive(Debug, Clone)]
+pub struct ShieldTickState {
+    /// DFA state applied on the previous tick. Seeds the next
+    /// `transition`'s `prev` argument.
+    pub prev: ShieldState,
+    /// Wall-clock instant `call_active` was last observed true. `None`
+    /// until the first live call this run; drives the `secs_since_call`
+    /// the DFA uses to age the MEETING lock window.
+    pub last_call_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl Default for ShieldTickState {
+    fn default() -> Self {
+        Self {
+            prev: ShieldState::CoolAc,
+            last_call_at: None,
+        }
+    }
+}
+
+impl ShieldTickState {
+    /// Fresh state: `COOL_AC` with no call ever seen.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 /// Step 22 bandit state held across ticks: the Clucb posterior, the
 /// previous tick's arm choice (for the lag-by-one reward update), and
 /// the prev-prev arm name (so `compute_reward`'s thrash penalty knows
@@ -872,7 +905,7 @@ pub fn one_tick(
     clock: &dyn Clock,
     ctx: &TickContext<'_>,
     pin: &LatestPin,
-    prev_state: &mut ShieldState,
+    shield_state: &mut ShieldTickState,
     bandit_state: &mut BanditTickState,
     onboarding_state: &mut OnboardingTickState,
     activity_state: &mut ActivityTickState,
@@ -909,7 +942,18 @@ pub fn one_tick(
     if let Ok(mut g) = latest.write() {
         *g = Some(snap.clone());
     }
-    let state = shield::transition(*prev_state, &snap, &ctx.cfg.shield);
+    // BUG-20260712-1201: track the last tick `call_active` was true so
+    // the MEETING lock ages off a real timestamp. When the call is
+    // live this tick, `secs_since_call` is 0 (the `call_active ||`
+    // branch pins MEETING anyway); after it ends the elapsed seconds
+    // grow until the DFA releases MEETING past the lock window.
+    if snap.raw.call_active == Some(true) {
+        shield_state.last_call_at = Some(snap.ts);
+    }
+    let secs_since_call = shield_state
+        .last_call_at
+        .map(|t| (snap.ts - t).num_milliseconds() as f32 / 1000.0);
+    let state = shield::transition(shield_state.prev, &snap, &ctx.cfg.shield, secs_since_call);
     let context = sanitise_context_with_activity(&snap.features, label);
     let onboarding_active = onboarding_state
         .status
@@ -1038,7 +1082,7 @@ pub fn one_tick(
         context,
         prev_arm: prev_arm_name,
     });
-    *prev_state = state;
+    shield_state.prev = state;
     // Step 31: drift bypasses the onboarding gate so a mid-life
     // alarm can fire a retrain even after day 14. The gate
     // semantically becomes "are we ALREADY in the rules-only path
@@ -1481,7 +1525,7 @@ async fn run_async() -> anyhow::Result<()> {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let clock = crate::power::clock::SystemClock;
-    let mut prev_state = ShieldState::CoolAc;
+    let mut shield_state = ShieldTickState::new();
     let mut bandit_state = BanditTickState::from_config(&cfg);
     let cgroup_root = production_cgroup_root();
     let state_root = super::power_state_dir_for_daemon();
@@ -1605,7 +1649,7 @@ async fn run_async() -> anyhow::Result<()> {
             &clock,
             &ctx,
             &pin,
-            &mut prev_state,
+            &mut shield_state,
             &mut bandit_state,
             &mut onboarding_state,
             &mut activity_state,
@@ -2078,13 +2122,22 @@ mod tests {
         let drift_latest = new_latest_drift_status();
         let trig = NoopRetrainTrigger;
         let drift_notifier = NoopDriftNotifier;
-        one_tick(
+        // Bridge the legacy `&mut ShieldState` callers onto the
+        // BUG-20260712-1201 `ShieldTickState`. The MEETING-lock
+        // timestamp need not persist across legacy calls (these tests
+        // don't drive `call_active`), so seed `prev` from `prev_state`
+        // and write the DFA output back afterwards.
+        let mut shield = ShieldTickState {
+            prev: *prev_state,
+            last_call_at: None,
+        };
+        let out = one_tick(
             sensors,
             intent,
             clock,
             ctx,
             pin,
-            prev_state,
+            &mut shield,
             bandit_state,
             &mut onb,
             &mut activity,
@@ -2097,7 +2150,9 @@ mod tests {
             latest,
             last_entry,
             &drift_latest,
-        )
+        );
+        *prev_state = shield.prev;
+        out
     }
 
     /// No-op desktop notifier for tests that don't care about the
@@ -2503,7 +2558,7 @@ mod tests {
             thrash: &thrash,
             npu: &npu,
         };
-        let mut prev = ShieldState::CoolAc;
+        let mut prev = ShieldTickState::new();
         let mut bandit = BanditTickState::from_config(&cfg);
         let mut onb = post_onboarding_state();
         let mut activity = ActivityTickState::new();
@@ -2766,7 +2821,7 @@ mod tests {
             thrash: &thrash,
             npu: &npu,
         };
-        let mut prev = ShieldState::CoolAc;
+        let mut prev = ShieldTickState::new();
         let mut bandit = BanditTickState::from_config(&cfg);
         let mut onb = post_onboarding_state();
         let mut activity = ActivityTickState::new();
@@ -2966,7 +3021,7 @@ mod tests {
             thrash: &thrash,
             npu: &npu,
         };
-        let mut prev = ShieldState::CoolAc;
+        let mut prev = ShieldTickState::new();
         let mut bandit = BanditTickState::from_config(&cfg);
         let mut onb = OnboardingTickState {
             status: Some(OnboardingStatus {
@@ -3137,7 +3192,7 @@ mod tests {
             thrash: &thrash,
             npu: &npu,
         };
-        let mut prev = ShieldState::CoolAc;
+        let mut prev = ShieldTickState::new();
         let mut bandit = BanditTickState::from_config(&cfg);
         let mut onb = post_onboarding_state();
         let mut activity = ActivityTickState::new();
