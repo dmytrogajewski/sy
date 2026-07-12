@@ -228,6 +228,12 @@ pub fn default_grubby_detect() -> Box<dyn Fn() -> bool + Send + Sync> {
     Box::new(|| which::which("grubby").is_ok())
 }
 
+/// Production stress-ng detection for [`InstallOpts::stress_ng_detect`]
+/// — same `which`-based shape as [`default_grubby_detect`].
+pub fn default_stress_ng_detect() -> Box<dyn Fn() -> bool + Send + Sync> {
+    Box::new(|| which::which("stress-ng").is_ok())
+}
+
 /// One change the installer made (or, under `dry_run`, would make).
 ///
 /// Stable for stdout pretty-print and (later, Step 35) JSON. Variants
@@ -394,6 +400,14 @@ pub struct InstallOpts {
     /// to the `which` crate); tests pass a closure returning a fixed
     /// `bool` so the branch is deterministic regardless of host `$PATH`.
     pub grubby_detect: Box<dyn Fn() -> bool + Send + Sync>,
+    /// Injectable predicate for `stress-ng` presence — the load
+    /// generator the R3 thermal-shield DoD probe shells out to. The
+    /// probe itself is operator-run; the installer only encodes the
+    /// dependency declaratively (no-snowflakes: the requirement lives
+    /// in `sy`, not in someone's shell history). Production passes
+    /// [`default_stress_ng_detect`]; tests inject a fixed `bool` so
+    /// assertions don't depend on what the dev host has installed.
+    pub stress_ng_detect: Box<dyn Fn() -> bool + Send + Sync>,
 }
 
 /// Drive the install. Idempotent: a second call against the same
@@ -414,6 +428,7 @@ pub fn install(opts: &InstallOpts) -> Result<Vec<ChangeRecord>> {
     install_udev_rule(opts, &mut out)?;
     handle_ppd_conflict(opts, &mut out)?;
     handle_tuned_conflict(opts, &mut out)?;
+    check_probe_tools(opts, &mut out);
     if !opts.dry_run && opts.run_daemon_reload && touched_filesystem(&out) {
         run_daemon_reload(&mut out)?;
     }
@@ -990,6 +1005,21 @@ fn install_tuned_mask(opts: &InstallOpts, out: &mut Vec<ChangeRecord>) -> Result
     Ok(())
 }
 
+/// Advisory-only probe-tool check: the R3 thermal-shield DoD probe
+/// drives the shield into HOT with `stress-ng`, which Fedora does not
+/// ship by default. Package installation needs root and `sy power
+/// apply` is user-scoped, so — like the polkit / dbus destinations —
+/// we degrade to a `Warning` carrying the exact remediation command
+/// instead of shelling out to `dnf` ourselves. Present ⇒ silent, so a
+/// fully-provisioned host keeps the "0 changes on re-apply" DoD.
+fn check_probe_tools(opts: &InstallOpts, out: &mut Vec<ChangeRecord>) {
+    if !(opts.stress_ng_detect)() {
+        out.push(ChangeRecord::Warning(
+            "stress-ng missing (R3 thermal-shield probe tool): install with `sudo dnf install -y stress-ng`".to_string(),
+        ));
+    }
+}
+
 /// True iff `mask_link` is a symlink whose target is `/dev/null` — the
 /// well-known shape `systemctl mask` produces. Anything else (regular
 /// file, broken link, missing link) means the mask isn't in effect and
@@ -1103,6 +1133,7 @@ mod tests {
             // existing pre-P3-1 assertion expects. P3-1-specific tests
             // override to `|| true` to exercise the grubby branch.
             grubby_detect: Box::new(|| false),
+            stress_ng_detect: Box::new(|| true),
         }
     }
 
@@ -1208,6 +1239,7 @@ mod tests {
             ppd_unit_paths: vec![fake],
             tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
+            stress_ng_detect: Box::new(|| true),
         };
 
         let records = install(&opts).expect("install must not fail when PPD is just-detected");
@@ -1314,6 +1346,7 @@ mod tests {
             ppd_unit_paths: Vec::new(),
             tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
+            stress_ng_detect: Box::new(|| true),
         };
 
         let records = install(&opts).expect("install must succeed when dest matches");
@@ -1438,6 +1471,7 @@ mod tests {
             ppd_unit_paths: Vec::new(),
             tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
+            stress_ng_detect: Box::new(|| true),
         };
 
         let records = install(&opts).expect("install must succeed when dest matches");
@@ -1542,6 +1576,7 @@ mod tests {
             ppd_unit_paths: Vec::new(),
             tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
+            stress_ng_detect: Box::new(|| true),
         };
 
         let records = install(&opts).expect("install must succeed when dest matches");
@@ -1602,6 +1637,7 @@ mod tests {
             ppd_unit_paths: Vec::new(),
             tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
+            stress_ng_detect: Box::new(|| true),
         };
 
         let records = install(&opts).expect("install must not fail on unwritable polkit root");
@@ -1648,6 +1684,7 @@ mod tests {
             ppd_unit_paths: Vec::new(),
             tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
+            stress_ng_detect: Box::new(|| true),
         };
         (opts, runner)
     }
@@ -1751,6 +1788,7 @@ mod tests {
             ppd_unit_paths: vec![fake],
             tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
+            stress_ng_detect: Box::new(|| true),
         };
 
         let records = install(&opts).expect("install with --yes + PPD detected");
@@ -1831,6 +1869,7 @@ mod tests {
             ppd_unit_paths: vec![fake.clone()],
             tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
+            stress_ng_detect: Box::new(|| true),
         };
 
         let first = install(&make_opts()).expect("first install masks PPD");
@@ -1903,6 +1942,7 @@ mod tests {
             ppd_unit_paths: vec![fake],
             tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
+            stress_ng_detect: Box::new(|| true),
         };
 
         let records = install(&opts).expect("install with --with-ppd");
@@ -2151,6 +2191,7 @@ mod tests {
             ppd_unit_paths: Vec::new(),
             tuned_unit_paths: Vec::new(),
             grubby_detect: Box::new(|| false),
+            stress_ng_detect: Box::new(|| true),
         };
 
         let records = install(&opts).expect("install must succeed when dest matches");
@@ -2367,6 +2408,7 @@ mod tests {
             ppd_unit_paths: Vec::new(),
             tuned_unit_paths: vec![fake.clone()],
             grubby_detect: Box::new(|| false),
+            stress_ng_detect: Box::new(|| true),
         };
 
         let first = install(&make_opts()).expect("first install masks tuned");
@@ -2420,6 +2462,51 @@ mod tests {
             1,
             "re-apply must NOT re-invoke `systemctl mask tuned.service`: {:?}",
             runner.calls(),
+        );
+    }
+
+    /// Probe-tool advisory: a host without `stress-ng` gets exactly one
+    /// Warning naming the tool and the dnf remediation — never a write
+    /// or a shell-out (package install is root's job, apply is
+    /// user-scoped).
+    #[test]
+    fn stress_ng_absent_warns_with_remediation() {
+        let td = TempDir::new().expect("tempdir");
+        let mut opts = opts_for(&td, false);
+        opts.stress_ng_detect = Box::new(|| false);
+        let records = install(&opts).expect("install succeeds");
+        let warnings: Vec<&String> = records
+            .iter()
+            .filter_map(|r| match r {
+                ChangeRecord::Warning(w) if w.contains("stress-ng") => Some(w),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "expected exactly one stress-ng advisory, got {records:?}",
+        );
+        assert!(
+            warnings[0].contains("dnf install -y stress-ng"),
+            "advisory must carry the remediation command: {}",
+            warnings[0],
+        );
+    }
+
+    /// Present ⇒ silent: a provisioned host emits no stress-ng record
+    /// at all, preserving the "0 changes on re-apply" idempotency DoD.
+    #[test]
+    fn stress_ng_present_stays_silent() {
+        let td = TempDir::new().expect("tempdir");
+        let opts = opts_for(&td, false);
+        let records = install(&opts).expect("install succeeds");
+        assert!(
+            !records.iter().any(|r| matches!(
+                r,
+                ChangeRecord::Warning(w) if w.contains("stress-ng")
+            )),
+            "stress-ng present must emit no advisory, got {records:?}",
         );
     }
 }
