@@ -917,7 +917,10 @@ override pins one arm; `--auto` restores.
       stress-ng + live sy-powerd + thermal sensor changes on the dev
       machine. Hermetic equivalent: `hot_baseline_applies_idle` test
       (Step 19) exercises the HOT-state → idle-arm rules path against
-      a tempdir sysfs + fake hwmon. — operator action — see
+      a tempdir sysfs + fake hwmon. Dependency productized
+      2026-07-12: `sy power apply` now warns with the exact dnf
+      remediation when stress-ng is absent (commit 7bc1459). —
+      operator action — see
       RUNLOG-20260712.md (thermal probe needs stress-ng installed
       declaratively first; runbook step 5).
 - [x] `sy power log --since=1m --json` shows every transition with
@@ -1242,7 +1245,10 @@ and `model.version_sha = "rules-baseline"`.
       idle_lt_5min}` + `train_dispatched_when_all_gates_open` +
       `train_skipped_during_onboarding`. — operator action — see
       RUNLOG-20260712.md (post-onboarding observation; runbook
-      step 7).
+      step 7). Positive half observed live 2026-07-12: dispatch
+      waited exactly for user_idle_s ≥ 300 on a locked session
+      (16:02 restart → 16:07:24 dispatch); the never-while-active
+      negative still needs the at-keyboard observation.
 - [x] `make lint && make test` green.
 
 ---
@@ -1297,11 +1303,19 @@ neither is present so a manual regenerate is unambiguous.
       immediately; the trainer runs in an idle+plugged window;
       `sy power status --json` reports `model.version_sha` ≠
       `"rules-baseline"`; bandit begins exploring (audit log shows
-      non-rules picks within the α-margin). — operator action —
-      see RUNLOG-20260712.md (onboarding fast-path; runbook step 6.
-      Structural blocker fixed this session: first_telemetry_at
-      anchor persisted in checkpoint + retention guard, commit
-      e96311c).
+      non-rules picks within the α-margin). — pipeline verified live
+      2026-07-12 (runbook step 6): gate flipped via drop-in, retrain
+      dispatched at idle+300s on AC (16:07), trainer read the
+      segmented corpus and trained for 8 min, then the T3 per-class
+      recall floor correctly refused to ship (class idle recall
+      0.000 < 0.5 — browse-skewed 5-day corpus). version_sha stays
+      rules-baseline by design until the corpus diversifies, so the
+      box stays open pending the mixed-use soak. Blockers fixed this
+      session: e96311c (first_telemetry_at anchor), b4e17e8
+      (BUG-20260712-1545: trainer got the state dir, EISDIR; wrong
+      out filename; no startup reload), b10b259 (BUG-20260712-1530:
+      status misreported the daemon's gate). Drop-in removed after
+      verification; natural gate ready 2026-07-21.
 - [ ] Reboot + `sy power profile flat-out` exercises EPP write
       end-to-end. — operator action — see RUNLOG-20260712.md
       (reboot half already done — amd_dynamic_epp=disable is in
@@ -1794,7 +1808,11 @@ bottom):
       The PDF is structurally valid (Helvetica base font, standard
       A4 portrait, single text stream per page); evince / okular /
       Firefox all consume the pdf-writer output natively per the
-      upstream test corpus. — operator action — see
+      upstream test corpus. Engine-level render verified live
+      2026-07-12: poppler (evince's renderer) rasterizes page 1 of a
+      112 055-entry report correctly via pdftoppm; okular is not
+      installed on this host. In-viewer eyeball + screenshots remain.
+      — operator action — see
       RUNLOG-20260712.md (viewer check + screenshot; runbook
       step 9).
 - [x] Three auto-generated executive-summary bullets read as
