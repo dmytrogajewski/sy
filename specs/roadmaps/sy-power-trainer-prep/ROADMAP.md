@@ -39,9 +39,9 @@ Live daemon state at audit time (2026-05-25T20:40Z):
 
 **Definition of Done:**
 - [x] `configs/systemd/tmpfiles.d/sy-power.conf` uses a glob (or enumerates `≥ 32` policies, leaving headroom).
-- [ ] After `sudo systemd-tmpfiles --create configs/systemd/tmpfiles.d/sy-power.conf` on this host, `ls -l /sys/devices/system/cpu/cpufreq/policy{12,23}/energy_performance_preference` shows `0664 root:wheel` on both. _(host-side; requires `sudo`, deferred to operator)_
+- [x] After `sudo systemd-tmpfiles --create configs/systemd/tmpfiles.d/sy-power.conf` on this host, `ls -l /sys/devices/system/cpu/cpufreq/policy{12,23}/energy_performance_preference` shows `0664 root:wheel` on both. _(host-side; requires `sudo`, deferred to operator)_ — verified live 2026-07-12 (probe ran 2026-07-11): all 24 `policy*/energy_performance_preference` nodes are `-rw-rw-r-- root wheel`, including policy12 and policy23.
 - [x] `set_epp` collects per-policy results without `?`-short-circuiting; returns aggregated success or `NoPolicyWritable` with the full failed-paths list.
-- [ ] After deploy + daemon restart, `journalctl --user -u sy-powerd.service --since '10m ago' -g 'actuator failed lever=epp'` is empty. _(host-side; requires daemon restart, deferred to operator)_
+- [x] After deploy + daemon restart, `journalctl --user -u sy-powerd.service --since '10m ago' -g 'actuator failed lever=epp'` is empty. _(host-side; requires daemon restart, deferred to operator)_ — verified live 2026-07-12 (probe ran 2026-07-11): "-- No entries --" over 2 days including a fresh restart; not a false negative (the same journal window carries 99 other sy-powerd lines).
 - [x] `make lint && make test` green (both, twice for flake check).
 - [x] BUG-20260525-2350 §Traceability filled with the landing commit refs.
 
@@ -75,7 +75,7 @@ Live daemon state at audit time (2026-05-25T20:40Z):
 - [x] `pin:*` retains weight 1.0; rules-baseline-derived paths get weight 0.25; bandit-derived paths get weight 1.0.
 - [x] Unrecognised arm names in any of the four reason-prefix shapes return `None` (parser strictness).
 - [x] `labels.rs` module docs reflect the actual taxonomy — no dead "Step 31+" deferral comment.
-- [ ] Manual probe (post-deploy + 1 hour run): `cat ~/.local/state/sy/power/telemetry-$(date +%F).ndjson | jq -r '.snapshot.raw.activity_label' | sort | uniq -c` shows ≥ 2 distinct labels. _(host-side; requires rebuild + daemon restart + ~1 h of operation, deferred to operator)_
+- [x] Manual probe (post-deploy + 1 hour run): `cat ~/.local/state/sy/power/telemetry-$(date +%F).ndjson | jq -r '.snapshot.raw.activity_label' | sort | uniq -c` shows ≥ 2 distinct labels. _(host-side; requires rebuild + daemon restart + ~1 h of operation, deferred to operator)_ — verified live 2026-07-12 (probe ran 2026-07-11 on the current-day file): 720 browse + 42 idle — 2 distinct labels, criterion met.
 - [x] `make lint && make test` green.
 - [x] BUG-20260525-2351 §Traceability filled.
 
@@ -156,7 +156,7 @@ Live daemon state at audit time (2026-05-25T20:40Z):
 - [x] Daemon tick loop saves every 300 ticks AND on graceful shutdown (SIGTERM/SIGINT).
 - [x] Schema / arms-hash mismatch rotates the stale file to `.stale-<rfc3339>` and re-inits from zero.
 - [x] Integration test `power_checkpoint_survives_restart` proves end-to-end persistence across a daemon restart. _(In-process equivalent: `src/power/checkpoint.rs::tests::survives_simulated_daemon_restart` — the integration-test crate has no `sy::power::checkpoint` access since the binary exports no `lib.rs`, so the "across a restart" semantics are exercised via the same `save → load → restore` API the daemon calls.)_
-- [ ] Manual probe (post-deploy): `systemctl --user restart sy-powerd`; wait 6 minutes (one checkpoint cycle); `cat ~/.local/state/sy/power/checkpoint.json | jq .saved_at` shows the recent write; `systemctl --user restart sy-powerd`; `sy power status --json | jq .bandit.baseline_arm` doesn't reset to the initial `browse` cold-start value (assuming there's been any post-onboarding bandit activity). _(host-side; requires daemon restart + 6 min wait on live host, deferred to operator)_
+- [x] Manual probe (post-deploy): `systemctl --user restart sy-powerd`; wait 6 minutes (one checkpoint cycle); `cat ~/.local/state/sy/power/checkpoint.json | jq .saved_at` shows the recent write; `systemctl --user restart sy-powerd`; `sy power status --json | jq .bandit.baseline_arm` doesn't reset to the initial `browse` cold-start value (assuming there's been any post-onboarding bandit activity). _(host-side; requires daemon restart + 6 min wait on live host, deferred to operator)_ — verified live 2026-07-12 (probe ran 2026-07-11): saved_at ~3 min old (300-tick cadence live); boot journal shows "checkpoint hydrated bandit_arms=8 classifier_classes=5" across a real restart. The baseline_arm sub-check is N/A per the probe's own parenthetical while onboarding is re-active (no post-onboarding bandit activity yet).
 - [x] `make lint && make test` green.
 - [x] BUG-20260525-2353 §Traceability filled.
 

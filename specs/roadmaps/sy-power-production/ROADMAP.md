@@ -267,17 +267,21 @@ Live daemon state at 2026-05-20T21:20Z:
 
 ## Cross-cutting Definition of Done (end-of-march)
 
-- [ ] All P1..P3 step DoDs satisfied.
+- [x] All P1..P3 step DoDs satisfied. — verified live 2026-07-12: all 30 step-level DoDs are [x]; live cross-checks pass (npu/pp_power_profile_mode/PPD WARN classes = 0, amd_dynamic_epp in /proc/cmdline, sy-power-cpufreq active, udev rule installed). The one defect violating the "every actuator writes cleanly" spirit — the P3-4 udev rule matching `ATTR{vendor}` on the drm class node instead of `ATTRS{vendor}` on the parent PCI device, so the iGPU knob stayed root:root — was fixed in-repo this session (commit 85bc45b + tests/udev_rules.rs); live enforcement needs the sudo install in RUNLOG-20260712.md runbook step 2.
 - [ ] After `cargo build --release && sudo install ~/.local/bin/sy && sy power apply --yes && sudo systemctl daemon-reload && systemctl --user restart sy-powerd.service` (no reboot required for P1-1/2/3 and P3-3; reboot required for P3-1 and P3-2 to take effect):
   - `journalctl --user -u sy-powerd.service --since '60 sec ago' | grep -c WARN` returns ≤ 1 (allowing for a single startup INFO line about PPD ownership).
   - `sy power status --json | jq '.onboarding.days_collected'` returns a value > 0 if any historical NDJSON exists.
   - `sy power show --no-open --allow-thin --out /tmp/test.pdf` produces a PDF with embedded plots (operator-visual verification).
+
+  — operator action — see RUNLOG-20260712.md: days_collected (5, honest post-anchor-fix e96311c) and the plot-bearing PDF are verified live 2026-07-12; the WARN ≤ 1 sub-check closes after the fixed udev rule (85bc45b) is installed and the rebuilt binary deployed (runbook steps 1-2).
 - [ ] After the operator-driven reboot:
   - `cat /sys/devices/system/cpu/amd_pstate/status` returns `active`.
   - `cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor` returns `powersave`.
   - `cat /proc/cmdline | grep amd_dynamic_epp` returns the expected param.
   - sy-powerd's reason_chain shows every actuator as `no-change` or a successful write (no `skipped` lines except optionally NPU if P1-1 detected no pmode flag).
-- [ ] **Total bug count delta**: prior 16 known bugs → ≤ 4 remaining (the design-intent items + the pre-existing aiplane test flake + DKMS unrelated).
+
+  — operator action — see RUNLOG-20260712.md: amd_dynamic_epp=disable already confirmed in /proc/cmdline on the current boot; the full four-sub-check sweep re-runs after the next operator reboot (runbook step 8).
+- [x] **Total bug count delta**: prior 16 known bugs → ≤ 4 remaining (the design-intent items + the pre-existing aiplane test flake + DKMS unrelated). — verified live 2026-07-12: ledger updated — before = 16 open power bugs; now 3 remain, within the ≤ 4 budget: BUG-20260528-0930 (design-intent remainder), BUG-20260601-1943 (allowed flaky-test remainder), and DKMS amd-isp4 (unrelated system issue). Everything else closed this session: BUG-20260608-2341 (power.toml XDG resolver, a911c57), BUG-20260608-2244 (zbus tokio→async-io, 6087853), BUG-20260601-2030 (probe_intent SY_SYSFS_ROOT hermetic isolation, 83f2d6a), iGPU udev ATTRS fix (85bc45b), onboarding-retention deadlock (first_telemetry_at anchor, e96311c), telemetry size-cap starvation + per-lever WARN latch/backoff (22df459), BUG-20260712-1046 (ThrashTracker lockout, 2237298), BUG-20260712-1200/-1201 (call_active level + MEETING release, be5356a), BUG-20260712-1136 (pin over anti-thrash floor, 3b08ebe), BUG-20260712-1137 (non-finite pin score serde + exit 5, 8413d16).
 
 ## Out of scope (deferred)
 
