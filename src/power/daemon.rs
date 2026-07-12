@@ -41,8 +41,8 @@ use std::time::{Duration, Instant};
 
 use crate::power::activity::{ActivityLabel, OnlineClassifier, ACTIVITY_CLASS_COUNT};
 use crate::power::apply::{
-    self, Actuator, Applied, CgroupActuator, EppActuator, IgpuActuator, NpuActuator,
-    PlatformProfileActuator,
+    self, Actuator, ActuatorLatches, Applied, CgroupActuator, EppActuator, IgpuActuator,
+    LatchOutcome, LeverLatch, NpuActuator, PlatformProfileActuator,
 };
 use crate::power::bandit::{compute_reward, for_snapshot_features_with_activity, Arm, Clucb};
 use crate::power::checkpoint::{
@@ -686,36 +686,32 @@ fn degenerate_arm(name: &str) -> Arm {
 /// best-effort — `xrt-smi` may be absent, the device may be offline,
 /// the firmware may refuse a transition; we downgrade the error to a
 /// `tracing::warn!` per SPEC §4 "NPU lever is best-effort".
-fn apply_arm(arm: &Arm, ctx: &TickContext<'_>) -> Vec<String> {
+fn apply_arm(
+    arm: &Arm,
+    ctx: &TickContext<'_>,
+    latches: &mut ActuatorLatches,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<String> {
     let mut reasons: Vec<String> = Vec::new();
-    let pp = PlatformProfileActuator::new();
-    log_apply(
+    apply_lever(
         "platform_profile",
-        pp.apply(arm.platform_profile.clone(), &ctx.sysfs_root),
+        latches.lever("platform_profile"),
+        now,
         &mut reasons,
+        || PlatformProfileActuator::new().apply(arm.platform_profile.clone(), &ctx.sysfs_root),
     );
-    log_apply(
-        "epp",
-        EppActuator::new().apply(arm.epp, &ctx.sysfs_root),
-        &mut reasons,
-    );
-    log_apply(
-        "igpu",
-        IgpuActuator::new().apply(arm.igpu_mode.clone(), &ctx.sysfs_root),
-        &mut reasons,
-    );
-    match ctx.npu.apply(arm.npu_pmode, &ctx.sysfs_root) {
-        Ok(o) => reasons.push(format!("npu: {}", outcome_summary(&o))),
-        Err(e) => {
-            tracing::warn!(target: "sy::power::daemon", error = %e, "npu apply failed (best-effort)");
-            reasons.push(short_npu_reason(&e));
-        }
-    }
-    log_apply(
-        "cgroup",
-        CgroupActuator::new().apply(arm.cgroup.clone(), &ctx.cgroup_root),
-        &mut reasons,
-    );
+    apply_lever("epp", latches.lever("epp"), now, &mut reasons, || {
+        EppActuator::new().apply(arm.epp, &ctx.sysfs_root)
+    });
+    apply_lever("igpu", latches.lever("igpu"), now, &mut reasons, || {
+        IgpuActuator::new().apply(arm.igpu_mode.clone(), &ctx.sysfs_root)
+    });
+    apply_lever("npu", latches.lever("npu"), now, &mut reasons, || {
+        ctx.npu.apply(arm.npu_pmode, &ctx.sysfs_root)
+    });
+    apply_lever("cgroup", latches.lever("cgroup"), now, &mut reasons, || {
+        CgroupActuator::new().apply(arm.cgroup.clone(), &ctx.cgroup_root)
+    });
     reasons
 }
 
@@ -769,40 +765,91 @@ fn short_npu_reason<E: std::fmt::Display>(err: &E) -> String {
     out
 }
 
-/// Append a `<lever>: <outcome>` or `<lever>: skipped (<err>)` token
-/// to the reason chain. Mirrors the NPU branch above but flattens the
-/// `Result` into one line of code for the four sysfs-backed levers.
+/// Apply one lever through its [`LeverLatch`], appending exactly one
+/// reason-chain token per tick and emitting at most one journal line
+/// on the failure/recovery *edges* only.
+///
+/// BUG-20260712-* Problem B: a persistently failing actuator (the iGPU
+/// one on this host) used to retry + WARN every 1 Hz tick forever. The
+/// latch WARNs once on entry, skips the sysfs write while backing off
+/// (exponential, capped 60 s), and logs once on recovery — while the
+/// reason chain still records the lever state every tick (cheap) so
+/// `sy power explain` never loses the per-tick trail.
+fn apply_lever(
+    lever: &'static str,
+    latch: &mut LeverLatch,
+    now: chrono::DateTime<chrono::Utc>,
+    reasons: &mut Vec<String>,
+    attempt: impl FnOnce() -> anyhow::Result<Applied>,
+) {
+    match latch.step(now, attempt) {
+        LatchOutcome::Ok(o) => reasons.push(format!("{lever}: {}", outcome_summary(&o))),
+        LatchOutcome::Recovered(o) => {
+            tracing::info!(target: "sy::power::daemon", lever, "actuator recovered");
+            reasons.push(format!("{lever}: {}", outcome_summary(&o)));
+        }
+        LatchOutcome::Failed(e) => {
+            warn_actuator_failed(lever, &e);
+            reasons.push(failure_token(lever, &e));
+        }
+        LatchOutcome::StillFailed(e) => {
+            // Silent: the entry WARN already fired. The reason chain
+            // still names the failure so the audit trail is intact.
+            reasons.push(failure_token(lever, &e));
+        }
+        LatchOutcome::Skipped { backoff_secs } => {
+            reasons.push(format!("{lever}: latched-failed (retry in {backoff_secs}s)"));
+        }
+    }
+}
+
+/// Emit the single failure-edge WARN for `lever`.
 ///
 /// BUG-20260525-2350: when the EPP actuator returns the structured
 /// `NoPolicyWritable` variant, the WARN line also carries
-/// `failed_policies=<n>` + a comma-joined `failed_paths=…` field so
-/// the operator can run `systemd-tmpfiles --create` against exactly
-/// the leaves that need it without grep-and-trim.
-fn log_apply(lever: &str, res: anyhow::Result<Applied>, reasons: &mut Vec<String>) {
-    match res {
-        Ok(o) => reasons.push(format!("{lever}: {}", outcome_summary(&o))),
-        Err(e) => {
-            if let Some(apply::epp::EppError::NoPolicyWritable { failed }) =
-                e.downcast_ref::<apply::epp::EppError>()
-            {
-                let failed_paths = failed
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                tracing::warn!(
-                    target: "sy::power::daemon",
-                    lever,
-                    error = %e,
-                    failed_policies = failed.len(),
-                    failed_paths = %failed_paths,
-                    "actuator failed",
-                );
-            } else {
-                tracing::warn!(target: "sy::power::daemon", lever, error = %e, "actuator failed");
-            }
-            reasons.push(format!("{lever}: skipped ({e})"));
-        }
+/// `failed_policies=<n>` + a comma-joined `failed_paths=…` field so the
+/// operator can run `systemd-tmpfiles --create` against exactly the
+/// leaves that need it without grep-and-trim. The NPU lever stays
+/// best-effort (SPEC §4) — its WARN is a plain one-liner.
+fn warn_actuator_failed(lever: &str, e: &anyhow::Error) {
+    if lever == "npu" {
+        tracing::warn!(target: "sy::power::daemon", lever, error = %e, "npu apply failed (best-effort; latched, backing off)");
+        return;
+    }
+    if let Some(apply::epp::EppError::NoPolicyWritable { failed }) =
+        e.downcast_ref::<apply::epp::EppError>()
+    {
+        let failed_paths = failed
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        tracing::warn!(
+            target: "sy::power::daemon",
+            lever,
+            error = %e,
+            failed_policies = failed.len(),
+            failed_paths = %failed_paths,
+            "actuator failed (latched, backing off)",
+        );
+    } else {
+        tracing::warn!(
+            target: "sy::power::daemon",
+            lever,
+            error = %e,
+            "actuator failed (latched, backing off)",
+        );
+    }
+}
+
+/// Render the reason-chain token for a failed lever. NPU keeps its
+/// bounded `npu: skipped (…)` form ([`short_npu_reason`]); the four
+/// sysfs levers use the compact `<lever>: skipped (<err>)` form.
+fn failure_token(lever: &str, e: &anyhow::Error) -> String {
+    if lever == "npu" {
+        short_npu_reason(e)
+    } else {
+        format!("{lever}: skipped ({e})")
     }
 }
 
@@ -831,6 +878,7 @@ pub fn one_tick(
     activity_state: &mut ActivityTickState,
     drift_state: &mut DriftTickState,
     forecast_state: &mut ForecastTickState,
+    latches: &mut ActuatorLatches,
     drift_notifier: &dyn DriftNotifier,
     retrain_trigger: &dyn RetrainTrigger,
     logger: &Logger,
@@ -946,7 +994,7 @@ pub fn one_tick(
     );
 
     let mut reason_chain = vec![source_label, format!("shield:{}", state.as_str())];
-    reason_chain.extend(apply_arm(&chosen, ctx));
+    reason_chain.extend(apply_arm(&chosen, ctx, latches, clock.now()));
 
     let top3: Vec<(String, f32)> = ranked_pairs.iter().take(3).cloned().collect();
     let prev_arm_name = bandit_state
@@ -1445,6 +1493,10 @@ async fn run_async() -> anyhow::Result<()> {
     // [`crate::power::forecast::model::ModelStore`] in a later step.
     let mut forecast_state =
         ForecastTickState::warmup().map_err(|e| anyhow::anyhow!("warmup forecaster: {e}"))?;
+    // BUG-20260712-* Problem B: per-lever failure latches persist across
+    // ticks so a persistently failing actuator WARNs once + backs off
+    // instead of spamming the journal every second.
+    let mut actuator_latches = ActuatorLatches::default();
     let drift_notifier = SystemDriftNotifier;
     let retrain_trigger = SpawnBlockingRetrainTrigger {
         telemetry_path: state_root.clone(),
@@ -1558,6 +1610,7 @@ async fn run_async() -> anyhow::Result<()> {
             &mut activity_state,
             &mut drift_state,
             &mut forecast_state,
+            &mut actuator_latches,
             &drift_notifier,
             &retrain_trigger,
             &logger,
@@ -2020,6 +2073,7 @@ mod tests {
         let mut activity = ActivityTickState::new();
         let mut drift = DriftTickState::new();
         let mut forecast = ForecastTickState::warmup().expect("warmup model");
+        let mut latches = ActuatorLatches::default();
         let drift_latest = new_latest_drift_status();
         let trig = NoopRetrainTrigger;
         let drift_notifier = NoopDriftNotifier;
@@ -2035,6 +2089,7 @@ mod tests {
             &mut activity,
             &mut drift,
             &mut forecast,
+            &mut latches,
             &drift_notifier,
             &trig,
             logger,
@@ -2468,6 +2523,7 @@ mod tests {
             &mut activity,
             &mut drift,
             &mut forecast,
+            &mut ActuatorLatches::default(),
             &drift_notifier,
             &trig,
             &logger,
@@ -2737,6 +2793,7 @@ mod tests {
                 &mut activity,
                 &mut drift,
                 &mut forecast,
+                &mut ActuatorLatches::default(),
                 &drift_notifier,
                 &trig,
                 &logger,
@@ -2936,6 +2993,7 @@ mod tests {
             &mut activity,
             &mut drift,
             &mut forecast,
+            &mut ActuatorLatches::default(),
             &drift_notifier,
             &trig,
             &logger,
@@ -3106,6 +3164,7 @@ mod tests {
             &mut activity,
             &mut drift,
             &mut forecast,
+            &mut ActuatorLatches::default(),
             &notifier,
             &trig,
             &logger,
@@ -3331,12 +3390,14 @@ mod tests {
             PathBuf::from("/sys/devices/system/cpu/cpufreq/policy12/energy_performance_preference"),
             PathBuf::from("/sys/devices/system/cpu/cpufreq/policy23/energy_performance_preference"),
         ];
-        let err: anyhow::Error = EppError::NoPolicyWritable {
-            failed: failed.clone(),
-        }
-        .into();
+        let mut latch = LeverLatch::default();
         let mut reasons: Vec<String> = Vec::new();
-        log_apply("epp", Err(err), &mut reasons);
+        apply_lever("epp", &mut latch, chrono::Utc::now(), &mut reasons, || {
+            Err(EppError::NoPolicyWritable {
+                failed: failed.clone(),
+            }
+            .into())
+        });
         assert!(
             logs_contain("failed_policies=2"),
             "WARN must carry the structured failed-policy count",
