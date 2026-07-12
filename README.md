@@ -90,6 +90,17 @@ sy power apply             # apply config rules
 sy power show --json       # full snapshot (governor, EPP, bandit weights)
 ```
 
+`sy power show` renders an offline PDF report over the decision journal:
+an executive summary, the per-arm decision mix, cumulative regret against
+the rules-only baseline, and power/reward plots — so you can audit what
+the bandit actually did over a window. Add `--json` for the
+`sy.power.report/v1` schema instead of a PDF, `--out` to pin the path, and
+`--since` to widen the window. The PDF is byte-identical over the same
+audit window once its two wall-clock inputs are pinned via
+`SY_POWER_REPORT_TIMESTAMP` and `SY_POWER_REPORT_MODEL_SHA`.
+
+<img src="assets/sy-power-report.png" alt="sy power show report — executive summary and methodology page" width="600" />
+
 ### Rice — niri + waybar + …
 
 Gruvbox Material Dark Medium. Configs live as
