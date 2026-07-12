@@ -42,6 +42,13 @@ pub const EXIT_DRIFT_ACTIVE: i32 = 3;
 /// reuse it whenever an IPC dial fails.
 pub const EXIT_DAEMON_UNREACHABLE: i32 = 4;
 
+/// Stable exit code: the daemon answered but its response frame could
+/// not be parsed (protocol / version mismatch, or a malformed field).
+/// Distinct from [`EXIT_DAEMON_UNREACHABLE`] so an agent can tell a
+/// down socket from a reachable-but-unparseable daemon
+/// (BUG-20260712-1137).
+pub const EXIT_DECODE_ERROR: i32 = 5;
+
 pub mod activity;
 pub mod apply;
 pub mod bandit;

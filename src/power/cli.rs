@@ -34,7 +34,7 @@ use super::report::{
 use super::shield::{self, ShieldState};
 use super::snapshot::{self, Intent, Sensors};
 use super::status::{format_explain, format_status, format_waybar, format_waybar_daemon_down};
-use super::{PowerError, EXIT_DAEMON_UNREACHABLE, EXIT_DRIFT_ACTIVE};
+use super::{PowerError, EXIT_DAEMON_UNREACHABLE, EXIT_DECODE_ERROR, EXIT_DRIFT_ACTIVE};
 
 /// CLIG exit code for a malformed flag value (`--since=garbage`).
 const EXIT_USAGE: i32 = 2;
@@ -335,10 +335,7 @@ fn status(json_out: bool, waybar_out: bool) -> Result<()> {
                 println!("{}", format_waybar_daemon_down());
                 return Ok(());
             }
-            return Err(anyhow::Error::new(PowerError {
-                code: EXIT_DAEMON_UNREACHABLE,
-                msg: format!("sy-powerd unreachable: {e}"),
-            }));
+            return Err(anyhow::Error::new(classify_dial_error(&e)));
         }
     };
     let onboarding = super::onboarding::compute_onboarding_status(
@@ -420,6 +417,29 @@ pub(crate) fn status_drift_exit(resp: &StatusResponse) -> Option<anyhow::Error> 
     }))
 }
 
+/// Map a `dial_*` IO error onto a structured [`PowerError`].
+///
+/// A decode failure (`InvalidData`) means the daemon answered but its
+/// frame did not parse — a protocol/version mismatch or a malformed
+/// field, *not* an unreachable socket. It gets [`EXIT_DECODE_ERROR`] and
+/// a message that names the parse failure, so a reachable-but-degraded
+/// daemon is never mis-reported as "unreachable" (BUG-20260712-1137).
+/// Every other IO kind (connect refused, missing socket, timeout) stays
+/// on [`EXIT_DAEMON_UNREACHABLE`].
+fn classify_dial_error(e: &std::io::Error) -> PowerError {
+    if e.kind() == std::io::ErrorKind::InvalidData {
+        PowerError {
+            code: EXIT_DECODE_ERROR,
+            msg: format!("sy-powerd response could not be parsed: {e}"),
+        }
+    } else {
+        PowerError {
+            code: EXIT_DAEMON_UNREACHABLE,
+            msg: format!("sy-powerd unreachable: {e}"),
+        }
+    }
+}
+
 /// Blocking dial of the `sy-powerd` Unix socket. Sends one
 /// [`StatusRequest::Status`] and reads one [`StatusResponse`].
 /// Mirrors `power::ipc::{encode_frame, read_frame}` but stays on
@@ -490,10 +510,7 @@ fn profile_cmd(name: Option<String>, auto: bool) -> Result<()> {
     let ack = match dial_profile(&super::daemon::socket_path(), &req) {
         Ok(a) => a,
         Err(e) => {
-            return Err(anyhow::Error::new(PowerError {
-                code: EXIT_DAEMON_UNREACHABLE,
-                msg: format!("sy-powerd unreachable: {e}"),
-            }));
+            return Err(anyhow::Error::new(classify_dial_error(&e)));
         }
     };
     if !ack.ok {
@@ -1450,6 +1467,33 @@ mod tests {
     use super::*;
     use clap::CommandFactory;
     use tempfile::TempDir;
+
+    /// BUG-20260712-1137: a decode failure means the daemon answered but
+    /// its frame did not parse — the CLI must report that (exit
+    /// `EXIT_DECODE_ERROR`, "could not be parsed"), never masquerade a
+    /// healthy daemon as "unreachable". A connect-level error keeps the
+    /// unreachable code.
+    #[test]
+    fn decode_error_is_not_reported_as_unreachable() {
+        let decode = std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "decode: invalid type: null, expected f32",
+        );
+        let mapped = classify_dial_error(&decode);
+        assert_eq!(mapped.code, EXIT_DECODE_ERROR);
+        assert!(
+            mapped.msg.contains("could not be parsed"),
+            "decode error must name the parse failure, not 'unreachable': {}",
+            mapped.msg,
+        );
+        assert!(!mapped.msg.contains("unreachable"), "{}", mapped.msg);
+
+        let refused =
+            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused");
+        let mapped = classify_dial_error(&refused);
+        assert_eq!(mapped.code, EXIT_DAEMON_UNREACHABLE);
+        assert!(mapped.msg.contains("unreachable"), "{}", mapped.msg);
+    }
 
     /// Roadmap Step 1: assert every shipped subcommand surfaces in
     /// `sy power --help`. The roadmap text says "all 8" but the

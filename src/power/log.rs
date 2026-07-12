@@ -76,6 +76,28 @@ fn default_audit_schema() -> &'static str {
     SCHEMA_ID
 }
 
+/// Deserialise `ranked_actions` tolerating a JSON `null` score.
+/// A manual pin records the pinned arm's score as `f32::INFINITY`
+/// (`daemon::one_tick`'s `pin:<arm>` branch); `serde_json` emits `null`
+/// for any non-finite float, and the default `(String, f32)`
+/// deserialiser rejects `null → f32`. Without this shim every pinned
+/// audit line fails to parse — the tail reader silently skips it
+/// (`sy power log --since=<short>` returns "no entries") and the IPC
+/// `last_audit` decode fails (`sy power status --json` reports a healthy
+/// daemon as "unreachable"). Each `null` score reconstitutes as
+/// `f32::NAN`, mirroring the H1 feature-array shim in
+/// [`crate::power::snapshot`]. See BUG-20260712-1137.
+fn deserialize_ranked_null_as_nan<'de, D>(deserializer: D) -> Result<Vec<(String, f32)>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Vec<(String, Option<f32>)> = serde::Deserialize::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .map(|(name, score)| (name, score.unwrap_or(f32::NAN)))
+        .collect())
+}
+
 /// One audit-log line. Fields beyond `schema` + `snapshot` are
 /// `Option<_>` / empty `Vec` in R1 so the schema is forward-compatible
 /// with R2's shield (Step 17), R2's actuation (Step 19), and R3's
@@ -103,7 +125,7 @@ pub struct AuditEntry {
     /// Populated in R3 (Step 22); empty for older NDJSON lines so the
     /// schema stays forward-compatible. The Step 22 `sy power status` +
     /// Step 23 `sy power explain` consume this field directly.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_ranked_null_as_nan")]
     pub ranked_actions: Vec<(String, f32)>,
     /// CLUCB conservative-α margin in force when this entry was written.
     /// Mirrors `cfg.bandit.alpha` at decision time. Surfaced on
@@ -1088,6 +1110,69 @@ mod tests {
         // Newest first: -5s, -30s, -60s.
         assert_eq!(entries[0].snapshot.ts, now + chrono::Duration::seconds(-5));
         assert_eq!(entries[2].snapshot.ts, now + chrono::Duration::seconds(-60));
+    }
+
+    /// BUG-20260712-1137: a manual pin records `f32::INFINITY` as the
+    /// ranked score, which `serde_json` serialises as `null`. The tail
+    /// reader must parse the line back (`null → NaN`) instead of
+    /// silently skipping it, otherwise `sy power log --since=<short>`
+    /// returns "no entries" while a pin is active.
+    #[test]
+    fn tail_reads_pinned_entries_with_nonfinite_score() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("power");
+        let logger = Logger::with_overrides(
+            root,
+            DEFAULT_MAX_SIZE_BYTES,
+            DEFAULT_RETENTION_DAYS,
+            Box::new(MockFreeSpace::new(PLENTY)),
+        );
+        let now = at(2026, 5, 19, 12, 0, 0);
+        let entry = AuditEntry::r3(
+            fixed_snapshot(now),
+            "flat-out".to_string(),
+            "COOL_AC".to_string(),
+            vec!["pin:flat-out".to_string()],
+            vec![("flat-out".to_string(), f32::INFINITY)],
+            0.05,
+        );
+        logger.append(&entry, &MockClock::new(now)).unwrap();
+        let read_clock = MockClock::new(now);
+        let entries = logger.tail(Duration::from_secs(30), &read_clock).unwrap();
+        assert_eq!(
+            entries.len(),
+            1,
+            "pinned entry must be tailed back, not skipped as unparseable",
+        );
+        assert_eq!(entries[0].ranked_actions.len(), 1);
+        assert_eq!(entries[0].ranked_actions[0].0, "flat-out");
+        assert!(
+            entries[0].ranked_actions[0].1.is_nan(),
+            "null score reconstitutes as NaN",
+        );
+    }
+
+    /// BUG-20260712-1137: the on-wire form of a non-finite score is
+    /// `null`; the roundtrip through serde must survive it. Guards the
+    /// IPC `status --json` decode path (same `AuditEntry` deserialiser).
+    #[test]
+    fn audit_entry_with_nonfinite_score_round_trips() {
+        let now = at(2026, 5, 19, 12, 0, 0);
+        let entry = AuditEntry::r3(
+            fixed_snapshot(now),
+            "flat-out".to_string(),
+            "COOL_AC".to_string(),
+            vec!["pin:flat-out".to_string()],
+            vec![("flat-out".to_string(), f32::INFINITY)],
+            0.05,
+        );
+        let line = serde_json::to_string(&entry).unwrap();
+        assert!(
+            line.contains("[\"flat-out\",null]"),
+            "non-finite score must serialise as null: {line}",
+        );
+        let back: AuditEntry = serde_json::from_str(&line).expect("pinned line must deserialize");
+        assert!(back.ranked_actions[0].1.is_nan());
     }
 
     /// Step 12 DoD: `Logger::tail` walks every dated file under the
