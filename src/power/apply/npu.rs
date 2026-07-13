@@ -257,7 +257,7 @@ impl XrtSmiProbe {
     }
 
     /// Two-phase probe that also returns the captured runtime-phase
-    /// stderr. Same resolution as [`probe`], with two behavioural
+    /// stderr. Same resolution as [`Self::probe`], with two behavioural
     /// changes that keep the read-only status/waybar path quiet:
     ///
     /// - The runtime-test failure (the amdxdna `DRM_IOCTL_AMDXDNA_SET_STATE
@@ -335,7 +335,7 @@ impl XrtSmiProbe {
         PROCESS_PROBE.get().copied().unwrap_or(resolved)
     }
 
-    /// Disk-cache layer behind [`probe_cached`], without the per-process
+    /// Disk-cache layer behind [`Self::probe_cached`], without the per-process
     /// memo so it stays unit-testable as an independent "second
     /// process". Resolves the `xrt-smi` cache key (path + mtime); on a
     /// non-AMD host where the binary is absent there is no key, so it
@@ -353,7 +353,7 @@ impl XrtSmiProbe {
     }
 
     /// Cache lookup + fill for an explicit `(key_path, key_mtime)`.
-    /// Split out from [`resolve_with_disk_cache`] so tests can drive the
+    /// Split out from [`Self::resolve_with_disk_cache`] so tests can drive the
     /// persistence contract with a synthetic key (no real `xrt-smi`).
     fn resolve_with_key(
         runner: &dyn CommandRunner,

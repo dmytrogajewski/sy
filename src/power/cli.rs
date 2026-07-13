@@ -179,9 +179,9 @@ pub enum PowerCmd {
     ///
     /// Reproducible output: over the same NDJSON window the PDF is
     /// byte-identical once its two wall-clock inputs are pinned via env:
-    ///   SY_POWER_REPORT_TIMESTAMP=<RFC3339>  pins the "Generated" line
+    ///   `SY_POWER_REPORT_TIMESTAMP=<RFC3339>`  pins the "Generated" line
     ///                                        (e.g. 2026-05-19T12:00:00Z)
-    ///   SY_POWER_REPORT_MODEL_SHA=<sha>      pins the "Model version" line
+    ///   `SY_POWER_REPORT_MODEL_SHA=<sha>`      pins the "Model version" line
     Show {
         /// Filter to entries newer than this duration (e.g. `7d`,
         /// `1h`). Default: 7 days, per SPEC §RV.2.

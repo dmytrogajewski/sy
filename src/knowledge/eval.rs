@@ -4,7 +4,7 @@
 //! with fixture rankings; the live `sy knowledge eval` command
 //! ([`crate::knowledge::cli::eval_cmd`]) is the production consumer — it
 //! loads the checked-in `queries.jsonl`, runs each query through the
-//! daemon search path, and feeds the resulting rankings into [`metrics`].
+//! daemon search path, and feeds the resulting rankings into [`metrics()`].
 //!
 //! Definitions (single-gold labels):
 //! - `recall_at_1` / `recall_at_5` — hit-rate@k, averaged over the
@@ -41,7 +41,7 @@ pub struct LabelledQuery {
     pub date_to: Option<String>,
 }
 
-/// Per-query ranked outcome fed into [`metrics`]: the ranked chunk
+/// Per-query ranked outcome fed into [`metrics()`]: the ranked chunk
 /// ids/text (best first) plus whether the search abstained.
 #[derive(Debug, Clone, Default)]
 pub struct RankedResult {

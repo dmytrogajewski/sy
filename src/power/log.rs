@@ -627,7 +627,7 @@ const MARKER_TAIL_PROBE_BYTES: u64 = 1024;
 
 /// Return `true` if the trailing [`MARKER_TAIL_PROBE_BYTES`] of `path`
 /// already contain a `"marker":"rotated:size_cap"` line. Used by
-/// [`Logger::write_size_cap_marker`] for cross-restart dedupe — see
+/// [`Logger::record_size_cap`] for cross-restart dedupe — see
 /// BUG-20260522-0037. Best-effort: any I/O error is treated as "no
 /// marker present" so the caller falls back to its normal write path.
 fn file_tail_has_size_cap_marker(path: &Path) -> bool {

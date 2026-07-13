@@ -19,7 +19,8 @@
 //!    3000, clamp to `max - 8.0`, then `(x + 4) / 4`.
 //!
 //! The filterbank is loaded once from `preprocessor_config.json` in
-//! [`MelExtractor::from_preprocessor_config`] so sy never hard-codes
+//! [`MelExtractor::from_preprocessor_config`](crate::aiplane::workloads::whisper_mel::MelExtractor::from_preprocessor_config)
+//! so sy never hard-codes
 //! the 16 080 float matrix.
 
 use std::sync::Arc;

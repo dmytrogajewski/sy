@@ -141,7 +141,7 @@ pub enum Req {
         /// REQ-2 pre-search filter. `None` ⇒ unfiltered (back-compat).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         filter: Option<SearchFilter>,
-        /// REQ-6 abstain cutoff in [0,1]. `None` ⇒ server default.
+        /// REQ-6 abstain cutoff in `[0,1]`. `None` ⇒ server default.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         abstain_threshold: Option<f32>,
     },
@@ -166,7 +166,7 @@ pub enum Req {
         /// REQ-2 pre-search filter. `None` ⇒ unfiltered (back-compat).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         filter: Option<SearchFilter>,
-        /// REQ-6 abstain cutoff in [0,1]. `None` ⇒ server default.
+        /// REQ-6 abstain cutoff in `[0,1]`. `None` ⇒ server default.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         abstain_threshold: Option<f32>,
     },
@@ -193,7 +193,7 @@ pub enum Resp {
     },
     Search {
         hits: Vec<HitRow>,
-        /// REQ-6 calibrated confidence in [0,1]. Computed in Step 12;
+        /// REQ-6 calibrated confidence in `[0,1]`. Computed in Step 12;
         /// here it is plumbing-only. Legacy payloads without the field
         /// deserialize to the neutral default `1.0` (uncalibrated /
         /// not-abstained) so a Step-6 daemon and an older CLI interop.

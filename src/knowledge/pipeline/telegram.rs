@@ -165,7 +165,7 @@ impl TelegramPipeline {
 }
 
 /// A single parsed Telegram message, source-format agnostic. Both the JSON
-/// and HTML parsers produce these; [`Message::into_record`] derives the
+/// and HTML parsers produce these; [`window_into_record`] derives the
 /// stable `chunk_id` and payload.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Message {

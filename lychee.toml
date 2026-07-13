@@ -95,6 +95,13 @@ exclude = [
   # browser, the failure is purely an HTTP/2 protocol mismatch.
   "^https?://(www\\.)?amd\\.com/",
 
+  # Origin has been returning Cloudflare 530 (origin unreachable) since
+  # 2026-07; the article is cited in the sy-file-manager SPECs.
+  "^https?://kirkryan\\.co\\.uk/",
+
+  # Times out on CI runners (>20 s) while fine interactively.
+  "^https?://linrunner\\.de/tlp",
+
   # Documentation-template placeholders. The documenter skill renders
   # `@maintainer-handle → https://github.com/maintainer-handle` as a
   # contributor-list example; the URL is intentionally a placeholder.

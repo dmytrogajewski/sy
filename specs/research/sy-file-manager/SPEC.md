@@ -308,8 +308,8 @@ The complete `sy file` plane consists of:
      listing.
    - Cross-tree: `sy file --ipc search '<glob>' --root /` returns
      a JSON stream of matches.
-8. **Preview pipeline** — built-in previewers for: text/* (syntect-
-   highlighted), image/* (iced::widget::image), markdown
+8. **Preview pipeline** — built-in previewers for: `text/*` (syntect-
+   highlighted), `image/*` (iced::widget::image), markdown
    (pulldown-cmark → cosmic-text → wgpu canvas; **no chrome**), pdf
    (first page via `pdftoppm`), video (first frame via `ffmpeg
    -ss 0 -frames 1`), 3D (`f3d`), archive (`lsar`). Anything else

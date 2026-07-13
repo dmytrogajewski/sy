@@ -140,7 +140,7 @@ fn season_range(season: &str) -> Option<((u32, u32), (u32, u32))> {
 /// `now` is the deterministic reference date (the daemon reads the clock and
 /// passes today in) so this stays clock-free and unit-testable. Two layers:
 ///   1. an in-Rust **RU/EN lexicon** — Russian holidays + seasons + "in
-///      <Month>" / "last <season>" — the SPEC's chosen approach (no Duckling /
+///      `<Month>`" / "last `<season>`" — the SPEC's chosen approach (no Duckling /
 ///      HeidelTime runtime snowflake);
 ///   2. **`two_timer`** for generic English relative/range phrases the lexicon
 ///      doesn't cover ("last month", "next year", …), evaluated against `now`.

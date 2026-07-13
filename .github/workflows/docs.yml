@@ -110,6 +110,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Run Vale (Microsoft + Google packs)
+        # Advisory: reviewdog can fail on infra issues (e.g. the PR
+        # diff exceeds GitHub's 20k-line API limit); never block.
+        continue-on-error: true
         uses: errata-ai/vale-action@reviewdog
         with:
           fail_on_error: false

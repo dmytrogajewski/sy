@@ -451,7 +451,8 @@ struct QueryResult {
     points: Vec<SearchHit>,
 }
 
-/// Compile a structured [`SearchFilter`] (plus an optional `file_path` prefix
+/// Compile a structured [`SearchFilter`](crate::aiplane::ipc::SearchFilter)
+/// (plus an optional `file_path` prefix
 /// text-match, preserving the Step 5 behaviour) into a qdrant `Filter` JSON
 /// object. Returns `None` when nothing constrains the search (empty filter and
 /// no prefix). Field → clause shapes are verified against SPEC §2:

@@ -6,7 +6,7 @@
 //! logit of 0 (sigmoid 0.5) is the model's indifference boundary — the
 //! natural decision point for "is there a high-confidence match here?".
 //!
-//! We turn the reranked top scores into a single `confidence` in [0,1] by
+//! We turn the reranked top scores into a single `confidence` in `[0,1]` by
 //! combining the top-1 sigmoid with the top1−top2 margin: a dominant
 //! top-1 keeps the full sigmoid signal, while a flat distribution (top-1
 //! and top-2 nearly tied) is discounted toward the indifference point.
@@ -31,7 +31,7 @@ pub fn sigmoid(logit: f32) -> f32 {
     1.0 / (1.0 + (-logit).exp())
 }
 
-/// Calibrated confidence in [0,1] from the reranked top scores
+/// Calibrated confidence in `[0,1]` from the reranked top scores
 /// (descending raw logits). Returns 0.0 for an empty slice (nothing to be
 /// confident about). With a single hit, confidence is just its sigmoid
 /// (no margin to discount). Otherwise it is `sigmoid(top1)` modulated by
