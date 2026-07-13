@@ -99,8 +99,9 @@ exclude = [
   # 2026-07; the article is cited in the sy-file-manager SPECs.
   "^https?://kirkryan\\.co\\.uk/",
 
-  # Times out on CI runners (>20 s) while fine interactively.
+  # Time out on CI runners (>20 s) while fine interactively.
   "^https?://linrunner\\.de/tlp",
+  "^https?://biggo\\.com/",
 
   # Documentation-template placeholders. The documenter skill renders
   # `@maintainer-handle → https://github.com/maintainer-handle` as a

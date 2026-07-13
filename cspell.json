@@ -395,7 +395,9 @@
     "XBEL",
     "xplr",
     "Xtism",
-    "Yasuno"
+    "Yasuno",
+    "unkinded",
+    "parameterised"
   ],
   "minWordLength": 4,
   "allowCompoundWords": true
