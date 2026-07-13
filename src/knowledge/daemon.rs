@@ -27,8 +27,9 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
+        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
+        mpsc,
     },
     thread,
     time::{Duration, Instant},
@@ -39,7 +40,8 @@ use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 
 use super::{
-    cli, embed, ipc, manifest, qdrant, repair, runctx::RunCtx, sources, state, status, QDRANT_PORT,
+    QDRANT_PORT, calibrate, cli, embed, ipc, manifest, qdrant, query, repair, runctx::RunCtx,
+    sources, sparse, state, status,
 };
 use sources::SourceMode;
 
@@ -146,6 +148,30 @@ pub fn run() -> Result<()> {
     };
     qdrant::ensure_collection()?;
 
+    // qdrant ≥ 1.16 guard (knowledge-retrieval-iter1 cross-cutting DoD): the
+    // hybrid Universal Query sets `query.rrf.k = 60`, but qdrant < 1.16
+    // silently ignores configurable RRF `k` and hybrid search regresses. Warn
+    // loudly (no hard crash — dense-only still works); see
+    // `qdrant_version_warning`.
+    if let Some(w) = qdrant_version_warning(qdrant::server_version()) {
+        tracing::warn!(target: "sy::knowledge::daemon", "{w}");
+    }
+
+    // Schema v2 migration (knowledge-retrieval-iter1 Step 3): if the live
+    // collection predates the named `dense`+`sparse` schema, queue a resumable
+    // `FullResync` once the daemon loop is up so it is dropped, recreated at
+    // SCHEMA_VERSION, and re-embedded. `ensure_collection` only *creates* a
+    // missing collection (always at v2), so a pre-v2 collection survives the
+    // call above and is still detectable here.
+    let migrate_schema = schema_migration_needed(qdrant::collection_info().as_ref());
+    if migrate_schema {
+        tracing::info!(
+            target: "sy::knowledge::daemon",
+            schema_version = crate::knowledge::SCHEMA_VERSION,
+            "collection predates schema v2; queuing full resync"
+        );
+    }
+
     // Start the aiplane supervisor. Each NPU workload (embed, rerank)
     // runs in its own subprocess so each can own a /dev/accel/accel0
     // HW context — XDNA limits to one HW context per process. The
@@ -223,6 +249,14 @@ pub fn run() -> Result<()> {
 
     let (daemon_tx, daemon_rx) = mpsc::channel::<DaemonOp>();
 
+    // Queue the schema-v2 migration detected above. Reuses the existing
+    // `FullResync` machinery (drop + recreate-at-v2 + re-embed); the op lands
+    // in `daemon_rx` and is honoured on the first loop iteration. Resumable:
+    // re-index is idempotent on point id.
+    if migrate_schema {
+        let _ = daemon_tx.send(DaemonOp::Ipc(ipc::Op::FullResync));
+    }
+
     // User-controlled flags shared with the per-pass `RunCtx` and with the
     // IPC bridge thread (so Pause / Cancel take effect *during* a pass —
     // the main loop is blocked inside run_index while a pass runs and
@@ -296,21 +330,23 @@ pub fn run() -> Result<()> {
     // refreshes ts_unix + the live qdrant point count, and writes back —
     // keeping the tile visible and showing live progress.
     let heartbeat_paused = paused.clone();
-    thread::spawn(move || loop {
-        thread::sleep(Duration::from_secs(3));
-        let mut s = match status::load() {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        if !s.daemon_running {
-            // Shutdown was the last write — stop heartbeating.
-            return;
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_secs(3));
+            let mut s = match status::load() {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            if !s.daemon_running {
+                // Shutdown was the last write — stop heartbeating.
+                return;
+            }
+            s.ts_unix = state::now_secs();
+            s.points = qdrant::point_count().unwrap_or(s.points);
+            s.qdrant_ready = qdrant::is_ready();
+            s.paused = heartbeat_paused.load(Ordering::SeqCst);
+            let _ = status::save(&s);
         }
-        s.ts_unix = state::now_secs();
-        s.points = qdrant::point_count().unwrap_or(s.points);
-        s.qdrant_ready = qdrant::is_ready();
-        s.paused = heartbeat_paused.load(Ordering::SeqCst);
-        let _ = status::save(&s);
     });
 
     // Initial watcher set + initial index pass. We build the watcher
@@ -323,29 +359,25 @@ pub fn run() -> Result<()> {
 
     let mut last_run = Instant::now();
     let mut last_fs_pass = Instant::now() - FS_TICKLE_FLOOR;
-
-    let _ = run_one_pass(
-        false,
-        false,
-        &mut last_pass,
-        interval,
-        last_run,
-        &active_manifests,
-        &paused,
-        &cancel,
-    );
+    // The initial catch-up pass runs as the first loop iteration (see
+    // `first_pass` below), NOT synchronously here. Gating `READY=1` on a
+    // potentially long reprocess (e.g. re-transcribing a large Telegram
+    // export) would blow `TimeoutStartSec` and trip a systemd restart loop
+    // that never converges — the daemon would be killed mid-pass, restart,
+    // and re-start the same long pass forever.
+    let mut first_pass = true;
 
     let shutdown = Arc::new(AtomicBool::new(false));
     install_signal_handlers(shutdown.clone());
 
-    // SPEC §4.5 / arch-supervision Step 4: announce `READY=1` once
-    // qdrant is up, the IPC socket is bound, the aiplane workers
-    // have loaded, and the initial index pass has completed. After
-    // this point `systemctl --user status sy-knowledge.service`
-    // shows `active (running)` and the `WatchdogSec=30s` timer
-    // arms. The watchdog ping thread fires unconditionally — it
-    // returns `None` on dev hosts where the unit isn't notify-
-    // supervised, so the dev run incurs no extra thread.
+    // SPEC §4.5 / arch-supervision Step 4: announce `READY=1` once qdrant is
+    // up, the IPC socket is bound, and the aiplane workers have loaded —
+    // BEFORE the (potentially long) initial index pass, which runs as the
+    // first iteration of the loop below. After this point `systemctl --user
+    // status sy-knowledge.service` shows `active (running)` and the
+    // `WatchdogSec=30s` timer arms. The watchdog ping thread fires
+    // unconditionally (returns `None` on non-notify dev hosts, so the dev run
+    // incurs no extra thread) and keeps pinging throughout the initial pass.
     sy_core::notify::ready();
     let _watchdog = sy_core::notify::spawn_watchdog();
 
@@ -413,6 +445,14 @@ pub fn run() -> Result<()> {
 
         if want_shutdown {
             break;
+        }
+        // First loop iteration performs the initial catch-up pass. Moved out
+        // of startup (before `READY=1`) so a large reprocess runs in the
+        // background instead of gating service-start under `TimeoutStartSec`.
+        // Treated as user-driven (unthrottled) to match the old eager pass.
+        if first_pass {
+            want_index_user = true;
+            first_pass = false;
         }
         // Pause / Resume / TogglePause / Cancel are handled directly in
         // the IPC bridge thread (so they take effect *during* a pass).
@@ -589,6 +629,40 @@ fn apply_op(
         DaemonOp::FsTickle => *want_index_fs = true,
         DaemonOp::DiscoveryTickle => *want_rescan = true,
     }
+}
+
+/// Decide whether daemon startup should queue a `FullResync` to migrate the
+/// live collection to schema v2 (named `dense`+`sparse`). Pure so the trigger
+/// is unit-testable without a live qdrant.
+///
+/// `info` is the parsed collection-info body, or `None` when the collection is
+/// absent / qdrant unreachable. A missing collection needs no migration: it is
+/// (re)created directly at v2 by `ensure_collection`. A present collection that
+/// predates the named-vector schema must be dropped + re-embedded.
+fn schema_migration_needed(info: Option<&serde_json::Value>) -> bool {
+    info.is_some_and(qdrant::schema_is_pre_v2)
+}
+
+/// Build the "qdrant too old" startup warning, or `None` when the live
+/// version is adequate (≥ `MIN_HYBRID_VERSION`) or unknown. Pure so the
+/// boundary is unit-testable without a live qdrant.
+///
+/// Below 1.16 qdrant silently ignores the hybrid query's configurable RRF
+/// `k` (Step 5), so hybrid search regresses without any error. We warn
+/// loudly rather than refuse to start: a degraded daemon that still serves
+/// dense-only search is safer than a daemon that won't boot, and the
+/// operator gets an unmissable journal line pointing at `sy apply`.
+fn qdrant_version_warning(server: Option<(u32, u32)>) -> Option<String> {
+    let v = server?;
+    if qdrant::meets_min_version(v, qdrant::MIN_HYBRID_VERSION) {
+        return None;
+    }
+    let (min_major, min_minor) = qdrant::MIN_HYBRID_VERSION;
+    Some(format!(
+        "live qdrant is {}.{} but hybrid RRF `k` requires qdrant ≥ {min_major}.{min_minor}; \
+         hybrid search will silently regress — run `sy apply` to upgrade qdrant",
+        v.0, v.1
+    ))
 }
 
 fn enabled_folders(manifests: &[manifest::QdrManifest]) -> HashSet<PathBuf> {
@@ -848,9 +922,11 @@ fn init_aiplane_supervisor() -> Result<()> {
     // snapshot fresh and recovers from worker crashes without
     // user intervention.
     let supv_for_poll = supv.clone();
-    thread::spawn(move || loop {
-        supv_for_poll.poll_once();
-        thread::sleep(Duration::from_secs(1));
+    thread::spawn(move || {
+        loop {
+            supv_for_poll.poll_once();
+            thread::sleep(Duration::from_secs(1));
+        }
     });
 
     supervisor::set_current(supv);
@@ -1309,12 +1385,14 @@ fn install_signal_handlers(flag: Arc<AtomicBool>) {
         libc::signal(libc::SIGTERM, handler as *const () as usize);
         libc::signal(libc::SIGINT, handler as *const () as usize);
     }
-    thread::spawn(move || loop {
-        if SIGNAL_RECEIVED.load(Ordering::SeqCst) {
-            flag.store(true, Ordering::SeqCst);
-            return;
+    thread::spawn(move || {
+        loop {
+            if SIGNAL_RECEIVED.load(Ordering::SeqCst) {
+                flag.store(true, Ordering::SeqCst);
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
         }
-        thread::sleep(Duration::from_millis(100));
     });
 }
 
@@ -1344,6 +1422,8 @@ fn handle_req(req: ipc::Req) -> ipc::Resp {
             limit,
             prefix,
             priority,
+            filter,
+            abstain_threshold: _,
         } => {
             let vec = match embed::embed_one(&query, priority) {
                 Ok(v) => v,
@@ -1353,18 +1433,31 @@ fn handle_req(req: ipc::Req) -> ipc::Resp {
                     };
                 }
             };
-            match qdrant::search(&vec, limit, prefix.as_deref()) {
+            // Apply the SAME structured pre-filter the rerank path uses, so the
+            // embed-only path honours `exclude_kinds` (the self-poisoning
+            // default-exclude) / `from` / dates instead of dropping them.
+            let mut filter = filter.unwrap_or_default();
+            let today = chrono::Local::now().date_naive();
+            query::maybe_fill_dates(&mut filter, &query, today);
+            let pre_filter = qdrant::build_filter(&filter, prefix.as_deref());
+            match qdrant::search_with_filter(&vec, limit, pre_filter.as_ref()) {
                 Ok(hits) => ipc::Resp::Search {
                     hits: hits
                         .into_iter()
                         .map(|h| ipc::HitRow {
                             score: h.score,
+                            chunk_id: crate::knowledge::chunk::point_id(
+                                &h.payload.file_path,
+                                h.payload.chunk_index,
+                            ),
                             file_path: h.payload.file_path,
                             chunk_index: h.payload.chunk_index,
                             chunk_text: h.payload.chunk_text,
                             embed_score: None,
                         })
                         .collect(),
+                    confidence: ipc::default_search_confidence(),
+                    abstained: false,
                 },
                 Err(e) => ipc::Resp::Error {
                     msg: format!("qdrant search: {e}"),
@@ -1377,7 +1470,36 @@ fn handle_req(req: ipc::Req) -> ipc::Resp {
             prefix,
             candidates,
             priority,
-        } => handle_search_rerank(query, limit, prefix.as_deref(), candidates, priority),
+            // Step 7 compiles `filter` (+ the Step 5 `prefix`) into a qdrant
+            // pre-filter inside `handle_search_rerank`. Step 12 applies
+            // `abstain_threshold` to the calibrated confidence there.
+            filter,
+            abstain_threshold,
+        } => handle_search_rerank(
+            query,
+            limit,
+            prefix.as_deref(),
+            candidates,
+            priority,
+            &filter.unwrap_or_default(),
+            abstain_threshold,
+        ),
+        ipc::Req::GetChunk { chunk_id } => match qdrant::get_point(&chunk_id) {
+            Ok(Some(p)) => ipc::Resp::Chunk {
+                chunk: Some(ipc::ChunkRow {
+                    chunk_id,
+                    file_path: p.file_path,
+                    chunk_index: p.chunk_index,
+                    kind: p.kind,
+                    source_name: p.source_name,
+                    text: p.chunk_text,
+                }),
+            },
+            Ok(None) => ipc::Resp::Chunk { chunk: None },
+            Err(e) => ipc::Resp::Error {
+                msg: format!("qdrant get_chunk: {e}"),
+            },
+        },
         ipc::Req::Run { workload, input } => {
             // Every NPU workload runs in its own worker subprocess.
             // The supervisor was started at daemon boot with embed +
@@ -1414,6 +1536,8 @@ fn handle_search_rerank(
     prefix: Option<&str>,
     candidates: usize,
     priority: sy_core::Priority,
+    filter: &ipc::SearchFilter,
+    abstain_threshold: Option<f32>,
 ) -> ipc::Resp {
     use crate::aiplane::registry::{WorkloadInput, WorkloadKind, WorkloadOutput};
     use std::time::Instant;
@@ -1433,20 +1557,45 @@ fn handle_search_rerank(
     };
     let ms_embed = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Stage 2: cosine top-N from qdrant.
+    // Stage 2: hybrid dense+sparse top-N from qdrant, fused by RRF. The
+    // query-side sparse vector mirrors the index-time encoder (Step 4). The
+    // structured `SearchFilter` (date range, from/kind/source any-of,
+    // include/exclude sources) plus the Step 5 `prefix` file_path text-match
+    // are compiled into one qdrant pre-filter applied to both prefetch legs.
+    // Synonym expansion is sparse-side only (REQ-7): the dense embedding
+    // above used the unmodified `query`; here we OR-in alias tokens from the
+    // declarative `~/.config/sy-knowledge/synonyms.yaml` (installed by `sy
+    // apply`) so the lexical leg gains precise BM25 matches without polluting
+    // dense recall. A missing/empty table is a no-op.
+    let qsparse = sparse::encode(&query::expand_synonyms(&query, &query::load_synonyms()));
+    // REQ-8 (Step 18): when the caller supplied no date bound, auto-fill the
+    // window from RU/EN natural-language time phrases in the query ("новогодние
+    // праздники 2024", "in January", "last summer", generic English via
+    // two_timer). Explicit `--date-from/--date-to` always win; an unrecognized
+    // phrase is a logged no-op. `today` is read here so the expander stays pure.
+    let mut filter = filter.clone();
+    let today = chrono::Local::now().date_naive();
+    query::maybe_fill_dates(&mut filter, &query, today);
+    let pre_filter = qdrant::build_filter(&filter, prefix);
     let t = Instant::now();
-    let raw_hits = match qdrant::search(&qvec, n_candidates, prefix) {
+    let raw_hits = match qdrant::query_hybrid(&qvec, &qsparse, pre_filter.as_ref(), n_candidates) {
         Ok(h) => h,
         Err(e) => {
             return ipc::Resp::Error {
-                msg: format!("qdrant search: {e}"),
+                msg: format!("qdrant hybrid query: {e}"),
             };
         }
     };
     let ms_qdrant = t.elapsed().as_secs_f64() * 1000.0;
 
     if raw_hits.is_empty() {
-        return ipc::Resp::Search { hits: Vec::new() };
+        // No candidates → zero confidence; abstain when a threshold was set.
+        let confidence = calibrate::confidence(&[]);
+        return ipc::Resp::Search {
+            hits: Vec::new(),
+            confidence,
+            abstained: abstain_threshold.is_some_and(|t| calibrate::should_abstain(confidence, t)),
+        };
     }
 
     // Stage 3: rerank via the worker subprocess. The supervisor was
@@ -1486,12 +1635,34 @@ fn handle_search_rerank(
     let mut scored: Vec<(f32, qdrant::SearchHit)> =
         rerank_scores.into_iter().zip(raw_hits).collect();
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Stage 4: calibrate (REQ-6). The rerank scores are raw bge logits,
+    // sorted desc above, so the top-1/top-2 spread feeds the margin term.
+    // If the caller set an `abstain_threshold` and the calibrated
+    // confidence is below it, return an empty, abstained response rather
+    // than quoting background noise.
+    let sorted_scores: Vec<f32> = scored.iter().map(|(s, _)| *s).collect();
+    let confidence = calibrate::confidence(&sorted_scores);
+    if let Some(threshold) = abstain_threshold {
+        if calibrate::should_abstain(confidence, threshold) {
+            return ipc::Resp::Search {
+                hits: Vec::new(),
+                confidence,
+                abstained: true,
+            };
+        }
+    }
+
     let take = limit.min(scored.len());
     let hits: Vec<ipc::HitRow> = scored
         .into_iter()
         .take(take)
         .map(|(rerank_score, h)| ipc::HitRow {
             score: rerank_score,
+            chunk_id: crate::knowledge::chunk::point_id(
+                &h.payload.file_path,
+                h.payload.chunk_index,
+            ),
             file_path: h.payload.file_path,
             chunk_index: h.payload.chunk_index,
             chunk_text: h.payload.chunk_text,
@@ -1502,7 +1673,11 @@ fn handle_search_rerank(
     let ms_total = t_total.elapsed().as_secs_f64() * 1000.0;
     log_search_rerank_complete(n_candidates, take, ms_embed, ms_qdrant, ms_rerank, ms_total);
 
-    ipc::Resp::Search { hits }
+    ipc::Resp::Search {
+        hits,
+        confidence,
+        abstained: false,
+    }
 }
 
 /// Emit the SPEC §4.6 "workload completed" structured event for a
@@ -1547,6 +1722,49 @@ mod parking_lot_like_mutex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// knowledge-retrieval-iter1 Step 3: a live collection that predates the
+    /// v2 named-vector schema (old flat unnamed `{size,distance}` vectors) must
+    /// trigger a `FullResync` on daemon startup; a v2 collection or an absent
+    /// collection must not.
+    #[test]
+    fn stale_schema_triggers_full_resync() {
+        let pre_v2 = serde_json::json!({
+            "result": { "config": { "params": {
+                "vectors": { "size": 768, "distance": "Cosine" }
+            }}}
+        });
+        assert!(schema_migration_needed(Some(&pre_v2)));
+
+        let v2 = serde_json::json!({
+            "result": { "config": { "params": {
+                "vectors": { "dense": { "size": 768, "distance": "Cosine" } }
+            }}}
+        });
+        assert!(!schema_migration_needed(Some(&v2)));
+
+        // Absent collection: created fresh at v2, no migration.
+        assert!(!schema_migration_needed(None));
+    }
+
+    /// knowledge-retrieval-iter1 cross-cutting DoD: the daemon must warn
+    /// loudly (but not crash) when the live qdrant predates 1.16 — below
+    /// that, configurable RRF `k` is silently ignored and hybrid search
+    /// regresses. An adequate or unknown version yields no warning.
+    #[test]
+    fn old_qdrant_version_warns() {
+        // ≥1.16: silent.
+        assert!(qdrant_version_warning(Some((1, 16))).is_none());
+        assert!(qdrant_version_warning(Some((1, 18))).is_none());
+        // <1.16: a loud, actionable warning naming the live version.
+        let w = qdrant_version_warning(Some((1, 12))).expect("warning for old qdrant");
+        assert!(w.contains("1.12"));
+        assert!(w.contains("1.16"));
+        assert!(w.contains("sy apply"));
+        // Unknown (unreachable / unparseable): no warning — `ensure_collection`
+        // already failed loudly upstream if qdrant were truly down.
+        assert!(qdrant_version_warning(None).is_none());
+    }
 
     /// arch-observability Step 2: the knowledge daemon's per-workload
     /// completion log must be a structured `tracing::info!` carrying

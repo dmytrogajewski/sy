@@ -201,7 +201,7 @@ impl MonMetricsSocket {
 }
 
 /// Produce the `mon.metrics_socket.<plane>` `&'static str` the doctor
-/// runner expects. The leak is bounded by [`KNOWN_PLANES.len()`]
+/// runner expects. The leak is bounded by [`KNOWN_PLANES`]`.len()`
 /// (6 entries) and called once per `Doctor::new()`; total leaked
 /// bytes ≈ 200, well under any reasonable program-lifetime cap.
 fn leak_name(plane: &str) -> &'static str {

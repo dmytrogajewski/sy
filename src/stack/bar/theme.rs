@@ -1,9 +1,9 @@
 //! Load active sy theme palette and expose it as iced colors.
 //!
 //! Mirrors the layout of `themes/<name>.toml`:
-//!   [colors]  bg, bg_soft, bg1, bg2, fg, fg_dim, red, orange, yellow, green,
-//!             aqua, blue, purple, gray
-//!   [ui]      accent
+//!   `[colors]`  bg, bg_soft, bg1, bg2, fg, fg_dim, red, orange, yellow, green,
+//!               aqua, blue, purple, gray
+//!   `[ui]`      accent
 //!
 //! Falls back to gruvbox-material if anything is missing.
 

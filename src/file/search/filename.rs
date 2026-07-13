@@ -1,7 +1,7 @@
 //! Fuzzy filename matcher backing the `sy file` plane's `/` filter.
 //! Roadmap Step 25 (SPEC §3.3 item 7).
 //!
-//! [`matches`] takes a query string + a slice of [`Entry`]s and returns
+//! `matches` takes a query string + a slice of [`Entry`]s and returns
 //! the indices of the entries whose `name` fuzzy-matches the query,
 //! sorted by descending [`nucleo::Matcher::fuzzy_match`] score (best
 //! first). Stable: the same `(query, entries)` produces the same

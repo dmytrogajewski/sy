@@ -98,6 +98,7 @@ pub mod knowledge {
         #[derive(Debug, Clone)]
         pub struct HitRow {
             pub score: f32,
+            pub chunk_id: String,
             pub file_path: String,
             pub chunk_index: u32,
             pub chunk_text: String,

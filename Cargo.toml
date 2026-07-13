@@ -18,6 +18,16 @@ edition = "2021"
 # true`. Long-form comments stay attached to the line they document.
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+# knowledge-retrieval-iter1 Step 18 (REQ-8): English natural-language
+# date *ranges* for `query::expand_dates`. two_timer is the only Rust
+# crate returning ranges (not single instants); it takes a deterministic
+# reference `now` via `Config::now(NaiveDateTime)` so the pure expander
+# stays clock-free in tests. RU/seasons/holidays are handled by an
+# in-Rust lexicon (no Rust crate parses Russian; Duckling/HeidelTime are
+# anti-goal snowflakes). Audited 2.2.5: transitive deps are
+# chrono/pidgin/regex/serde_regex/lazy_static — `cargo deny check
+# advisories` clean, no RUSTSEC (unlike the rejected bm25→fxhash).
+two_timer = "2"
 clap = { version = "4", features = ["derive", "env"] }
 minijinja = "2"
 serde = { version = "1", features = ["derive"] }
@@ -178,6 +188,12 @@ procfs = "0.18"
 # `pb::ModelProto` types under `tract_onnx::pb`, which the warmup-
 # fixture generator (`examples/gen_warmup_gru.rs`) uses to emit a
 # rules-equivalent ONNX without a separate protobuf schema.
+# aiplane Stt (whisper-medium): real-valued STFT for the Whisper
+# log-mel feature extractor (`src/aiplane/workloads/whisper_mel.rs`).
+# `rustfft` is already in the lock tree (pulled transitively by
+# `tract-onnx`); declaring it as a direct dep adds no new download and
+# pins the same audited 6.x line. Pure-Rust, no C deps, MIT/Apache-2.0.
+rustfft = "6"
 tract-onnx = "0.22"
 # Step 24 hot-reload primitive. The daemon (Step 26) holds an
 # `ArcSwap<Model>`; the trainer (Step 25) swaps freshly-exported
@@ -420,6 +436,13 @@ bar-iced = ["gui-iced"]
 # `cargo test --features test-dbus` once `power-profiles-daemon`
 # has been masked.
 test-dbus = []
+# aiplane Stt: real-NPU end-to-end tests that load the whisper-medium
+# encoder + decoder ONNX over the VitisAI EP and transcribe the AMD
+# sample WAV. Off by default — the default gate is FakeWorkload-only
+# (no `/dev/accel/accel0`). Flip on locally with
+# `cargo test --features test-npu` (or `make test-npu`) once the model
+# cache is populated by `prep_npu_workload.py --workload stt`.
+test-npu = []
 # sy-mon Step 9 (SPEC §3 SCOPE item 1 + §6 risk "second HTTP stack"):
 # enable the Prometheus UDS exposition surface on every plane that
 # depends on `sy-core`. Off by default so `--no-default-features`
@@ -441,6 +464,7 @@ file-iouring = ["dep:tokio-uring"]
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+two_timer.workspace = true
 clap.workspace = true
 minijinja.workspace = true
 serde.workspace = true
@@ -455,6 +479,9 @@ image.workspace = true
 ort.workspace = true
 ort-sys.workspace = true
 tokenizers.workspace = true
+# aiplane Stt: Whisper log-mel feature extractor STFT. See workspace
+# dep comment for the no-new-download / audit rationale.
+rustfft.workspace = true
 reqwest.workspace = true
 notify.workspace = true
 notify-debouncer-mini.workspace = true

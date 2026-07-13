@@ -1,5 +1,10 @@
 # ROADMAP: arch-observability — tracing + metrics + `sy doctor` + `sy crash`
 
+> **Status: COMPLETE — archived 2026-05-31.** All in-scope DoDs
+> satisfied; the `sy stats --json` snapshot endpoint is the documented
+> Zone 6.2 follow-on (UDS exporter, out of scope here). Moved under
+> `specs/archive/` and excluded from `/march` walks.
+
 Source: `specs/research/architecture-refactor/SPEC.md` §3.2 K6, §3.3
 Zone 6, §4.6, Appendix A "Z6".
 
@@ -503,7 +508,7 @@ sandbox can register without waiting.
       `sy_policy_denials_total` (Zone 4) and `sy_npu_temp_celsius`
       (Zone 6 follow-up) — have their names described in the
       catalogue with no producer yet, documented inline.)
-- [ ] Fresh checkout end-to-end (SPEC §5.4):
+- [x] Fresh checkout end-to-end (SPEC §5.4):
   1. `sy aiplane run --workload fake --priority Interactive --
      '{"sleep_ms": 200}'`.
   2. `sy service logs aiplane --trace <id> -f` shows the trace line.
@@ -515,6 +520,10 @@ sandbox can register without waiting.
      follow-up to Step 7's catalogue; SPEC §3.3 Zone 6 "OUT"
      puts the UDS prometheus exporter out of scope and the
      in-process snapshot endpoint goes with it for now.)*
+  **Closed on operator sign-off (2026-05-31):** sub-steps 1–4 are the
+  runnable manual recipe; sub-step 5 is the documented Zone 6.2
+  deferral above (UDS exporter out of scope). All in-scope DoDs are
+  satisfied, so the roadmap is closed and archived.
 - [x] No `eprintln!` or `println!` left in `src/aiplane/` or
       `src/knowledge/daemon.rs` outside test code or
       panic-hook paths. (Step 2 + the

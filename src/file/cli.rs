@@ -85,7 +85,7 @@ const EXIT_PLUGIN_ERROR: i32 = 5;
 #[derive(Debug, Subcommand)]
 pub enum FileCmd {
     /// Health probes for the file plane (SPEC §3.3 item 19). Runs the
-    /// six [`doctor::file_doctor_checks`] probes — daemon reachable,
+    /// six [`file_doctor_checks`](super::doctor::file_doctor_checks) probes — daemon reachable,
     /// JetBrainsMono Nerd Font present, niri keybinds present + collision-
     /// free, systemd unit installed, bookmarks dir writable, plugin
     /// registry reachable. Emits `sy.file.doctor/v1` on `--json`.

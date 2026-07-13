@@ -1,6 +1,6 @@
 //! Stdio JSON-RPC MCP server exposing the eleven SPEC §4.3 `file_*`
 //! tools. Mirrors the line-delimited JSON transport shape used by
-//! [`src/knowledge/mcp.rs`] and [`src/power/mcp.rs`] — one request per
+//! `src/knowledge/mcp.rs` and `src/power/mcp.rs` — one request per
 //! line, one response per line — so a host that already understands
 //! `sy knowledge mcp` speaks `sy file mcp` without negotiation
 //! changes.

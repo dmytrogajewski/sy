@@ -4,7 +4,7 @@
 //! `iced::widget::image::Handle::from_bytes`), caches the resulting
 //! handle keyed by path on
 //! [`crate::file::state::PreviewState`], and paints it through
-//! [`iced::widget::image`] with `ContentFit::Contain` so the aspect
+//! `iced::widget::image` with `ContentFit::Contain` so the aspect
 //! ratio stays correct under the responsive layout ladder.
 //!
 //! ## Anti-chrome contract

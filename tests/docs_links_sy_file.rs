@@ -45,18 +45,20 @@ fn workspace_root() -> PathBuf {
 /// shape with a leading `!` and are intentionally included so a broken
 /// image path is caught too.
 fn extract_links(body: &str) -> Vec<String> {
-    let re = regex::Regex::new(r"\[([^\]]+)\]\(([^)]+)\)")
-        .expect("link-extraction regex must compile");
-    re.captures_iter(body)
-        .map(|c| c[2].to_string())
-        .collect()
+    let re =
+        regex::Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").expect("link-extraction regex must compile");
+    re.captures_iter(body).map(|c| c[2].to_string()).collect()
 }
 
 /// Strip a Markdown link fragment (`#anchor`) and any leading
 /// whitespace introduced by reflowing. The on-disk file the link
 /// targets is what matters; the anchor is resolved by the renderer.
 fn strip_fragment(target: &str) -> &str {
-    target.split_once('#').map(|(p, _)| p).unwrap_or(target).trim()
+    target
+        .split_once('#')
+        .map(|(p, _)| p)
+        .unwrap_or(target)
+        .trim()
 }
 
 /// Skip rule: absolute URLs (http/https/mailto/file), bare anchors

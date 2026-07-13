@@ -162,7 +162,7 @@ impl Doctor {
         Self { checks }
     }
 
-    /// Same as [`Self::with_checks`] but reachable from sibling
+    /// Same as `Self::with_checks` but reachable from sibling
     /// modules at compile time. Used by `sy mon doctor` (sy-mon
     /// ROADMAP Step 21) to run the dashboard-plumbing checks under a
     /// private `Doctor` instance without leaking the full check list

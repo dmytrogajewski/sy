@@ -1,0 +1,23 @@
+# sy-knowledge synonym table (knowledge-retrieval-iter1 Step 17, REQ-7).
+#
+# Installed by `sy apply` to ~/.config/sy-knowledge/synonyms.yaml. Used on the
+# SPARSE (lexical / BM25) leg of hybrid search ONLY: when a query mentions a
+# canonical entity or any of its aliases, every term in the group is OR-ed
+# into the sparse query so literal brand/entity matches surface in the top
+# hits. The dense embedding leg is left untouched (it already captures
+# semantic synonymy; expanding it would only dilute recall).
+#
+# Schema: a list of groups, each `{ canonical, aliases: [...] }`. Matching is
+# case-insensitive on whole tokens (Cyrillic-aware). Edit freely; a missing or
+# empty file is a no-op.
+
+- canonical: X5
+  aliases:
+    - Пятёрочка
+    - Перекрёсток
+    - Чижик
+    - X5 Group
+
+- canonical: Магнит
+  aliases:
+    - Тандер

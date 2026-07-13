@@ -125,7 +125,7 @@ pub(crate) fn build_acp_command(
 /// is `Some` but `systemd-run` is missing, emit a single
 /// `tracing::warn!` and fall back to a direct spawn — see the
 /// module head comment for the rationale. The profile path is
-/// resolved by [`policy::resolver::resolve_policy_root`] so this
+/// resolved by [`crate::agt::policy::resolver::resolve_policy_root`] so this
 /// daemon-side caller and the sandbox-exec re-exec agree on which
 /// `policy/profiles/` directory is active.
 fn resolve_spawn_command(spec: &AgentSpec, cwd: &Path) -> Result<(PathBuf, Vec<String>)> {

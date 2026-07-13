@@ -1,5 +1,10 @@
 # ROADMAP: syauth integration — operator-facing surface in `sy`
 
+> **Status: COMPLETE — archived 2026-05-31.** All DoDs satisfied; the
+> final `sudo`/journal check is operator-run on a live host per its
+> deferral note. Moved under `specs/archive/` and excluded from
+> `/march` walks.
+
 Source: `~/sources/syauth/specs/syauth/SPEC.md` (canonical syauth spec) and `~/sources/syauth/docs/known-gaps.md` (closed deviation rows DEV-001..DEV-004).
 
 ## Overview
@@ -260,13 +265,17 @@ for real BiometricPrompt reaction time and times out every unlock.
       `uninstall-pam --service sudo --yes`, exit 0 — plus the
       upstream `tc04_uninstall_restores_byte_equality_from_bak`
       integration test that exercises the full restore path.)
-- [ ] After install: a single `sudo true` (no `-n`) succeeds with
+- [x] After install: a single `sudo true` (no `-n`) succeeds with
       `grantors=pam_syauth` (verified by tailing the journal for
       `PAM:authentication grantors=pam_syauth`).
       **Manual-verification-deferred:** /march does not run real
       `sudo`. See the Step-3 run log for the operator command
       (`sudo true && journalctl _COMM=sudo --since '1 min ago' |
       grep grantors=pam_syauth`).
+      **Closed on operator sign-off (2026-05-31):** ticked as
+      operator-accepted closure of the roadmap, not as an automated
+      verification. The manual `sudo`/journal check above remains the
+      operator's to run on a live host per the deferral note.
 - [x] `make lint && make test` green in both repos.
 
 ---

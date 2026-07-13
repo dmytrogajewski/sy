@@ -179,7 +179,7 @@ impl Ring {
     /// `flock(2)`. Use for processes that consume ring samples while
     /// the aggregator holds the exclusive write lock (e.g. the `sy
     /// mon` popup reading sparkline history). The returned [`Ring`]
-    /// supports [`Self::read_metric`] / [`Self::seq`] / [`Self::head`]
+    /// supports [`Self::read_metric`] / [`Self::seq`] / `Self::head`
     /// but [`Self::push`] is a logic error from the caller — the mmap
     /// is technically writable but two writers stomp on each other.
     /// Errors if the file is missing, the size doesn't match

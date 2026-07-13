@@ -10,7 +10,7 @@
 //!    for the eleven SPEC §4.3 ops (`file.open`, `file.cd`,
 //!    `file.select`, `file.copy`, `file.move`, `file.trash`,
 //!    `file.restore`, `file.search`, `file.preview`, `file.ops_list`,
-//!    `file.op_cancel`) plus the [`file.state`](FileMethod::State)
+//!    `file.op_cancel`) plus the `file.state`
 //!    snapshot the journey-J8 agent-mirror test reads.
 //! 2. The accept loop runs under `tokio::select!` against
 //!    `signal::ctrl_c` and `signal::unix::signal(SIGTERM)`; on either
@@ -26,10 +26,13 @@
 //!
 //! * `file.move` cross-fs ladder — Step 21+ (today: cross-fs returns
 //!   exit-code 4 / [`ErrorCode::Cancelled`] per SPEC §4.3 table).
-//! * `file.search` knowledge-backed branch — Step 30 wires qdrant;
-//!   today the `knowledge: true` request still returns the filename-
-//!   match result set and logs a `knowledge backend not yet wired`
-//!   notice.
+//! * `file.search` knowledge-backed branch — `knowledge: true` dials
+//!   the live `sy-knowledge` daemon through the same
+//!   [`crate::file::search::knowledge::KnowledgeBackend`] the GUI `:k`
+//!   palette uses and merges the qdrant hits ahead of the filename
+//!   tier. When the daemon is unreachable / times out / returns
+//!   nothing the merge degrades cleanly to filename-only (SPEC §6 risk
+//!   row 3), so the agent still gets a result set.
 //! * `file.preview` `png_base64` body — Step 27's plugin-routed
 //!   previewer dispatcher fills this; today the field is the empty
 //!   string and the `mime` field is the
@@ -54,6 +57,7 @@ use tokio::sync::{broadcast, oneshot, Mutex, RwLock};
 use ulid::Ulid;
 
 use crate::file::fs::{copy, mime, trash, walk};
+use crate::file::search::knowledge::{self, KnowledgeBackend, RealKnowledgeBackend};
 use crate::file::state::{ConflictPolicy, OpEvent, State};
 
 /// SPEC §4.3 op-method namespace. One source of truth for the wire
@@ -107,6 +111,12 @@ pub const SOCKET_MODE: u32 = 0o600;
 /// `tokio::select!` and observes the signal on its next progress
 /// tick).
 const CANCEL_CHANNEL_DEPTH: usize = 16;
+
+/// Hit cap the `file.search` knowledge branch passes to the
+/// `sy-knowledge` daemon. Matches the GUI `:k` palette's working set —
+/// enough to fill a result pane without dragging the whole index over
+/// the wire.
+const KNOWLEDGE_SEARCH_LIMIT: usize = 64;
 
 /// Per-row snapshot of an in-flight or recently-completed op. The
 /// `file.ops_list` op returns a `Vec<OpRow>` (one entry per running
@@ -299,6 +309,12 @@ struct FileHandler {
     cancel_tx: broadcast::Sender<u64>,
     next_op_id: Arc<AtomicU64>,
     system: SystemMethods,
+    /// Knowledge backend the `file.search` `knowledge: true` branch
+    /// dials. Production wires [`RealKnowledgeBackend`] (the live
+    /// `sy-knowledge` daemon); tests inject a stub through
+    /// `FileHandler::with_knowledge` so the merge contract can be
+    /// pinned without standing up qdrant.
+    knowledge: Arc<dyn KnowledgeBackend>,
 }
 
 impl FileHandler {
@@ -329,7 +345,18 @@ impl FileHandler {
             cancel_tx,
             next_op_id: Arc::new(AtomicU64::new(1)),
             system,
+            knowledge: Arc::new(RealKnowledgeBackend),
         }
+    }
+
+    /// Swap the knowledge backend — the injection seam the in-source
+    /// `file.search` test uses to plant canned qdrant hits without a
+    /// live daemon. Production never calls this; `new` wires
+    /// [`RealKnowledgeBackend`].
+    #[cfg(test)]
+    fn with_knowledge(mut self, knowledge: Arc<dyn KnowledgeBackend>) -> Self {
+        self.knowledge = knowledge;
+        self
     }
 }
 
@@ -681,28 +708,62 @@ struct SearchParams {
     knowledge: bool,
 }
 
-async fn handle_search(_this: &FileHandler, req: Request) -> Response {
+async fn handle_search(this: &FileHandler, req: Request) -> Response {
     let params: SearchParams = match parse_params(&req) {
         Ok(p) => p,
         Err(r) => return r,
     };
-    if params.knowledge {
-        // Step 30 — knowledge-backed branch wires qdrant. Today the
-        // request still returns filename results so the agent can
-        // still drive the journey; emit a notice so the operator
-        // sees why the result set is filename-only.
-        tracing::info!(target: "sy::file::ipc", "file.search: knowledge backend not yet wired (Step 30)");
-    }
+    // Filename tier always runs: it is both the result set for the
+    // plain (`knowledge: false`) request and the fall-through tier the
+    // knowledge branch merges under qdrant. Scored at 0.0 so the merge
+    // (which sorts descending) ranks every qdrant hit — scores in the
+    // [0, 1] band — above the filename matches.
     let entries = match walk::walk(&params.root, false).await {
         Ok(e) => e,
         Err(e) => return err(req.request_id, ErrorCode::Internal, format!("walk: {e}")),
     };
     let needle = params.query.to_lowercase();
-    let results: Vec<String> = entries
+    let filename_hits: Vec<(PathBuf, f32)> = entries
         .into_iter()
         .filter(|e| e.name.to_lowercase().contains(&needle))
-        .map(|e| params.root.join(&e.name).display().to_string())
+        .map(|e| (params.root.join(&e.name), 0.0_f32))
         .collect();
+
+    let ranked: Vec<PathBuf> = if params.knowledge {
+        // Knowledge-backed branch: dial the live `sy-knowledge` daemon
+        // through the same `KnowledgeBackend` the GUI `:k` palette uses,
+        // then merge qdrant-first over the filename tier. `query`
+        // collapses an unreachable daemon / timeout / empty index to an
+        // empty hit list, so `merge` degrades cleanly to filename-only
+        // (SPEC §6 risk row 3 / journey J4 fallback) — but when the
+        // daemon is up an agent now gets the same semantic ranking a
+        // human does at the `:k` palette.
+        let outcome = match knowledge::query(
+            this.knowledge.clone(),
+            params.root.clone(),
+            params.query.clone(),
+            KNOWLEDGE_SEARCH_LIMIT,
+        )
+        .await
+        {
+            Ok(o) => o,
+            Err(e) => {
+                return err(
+                    req.request_id,
+                    ErrorCode::Internal,
+                    format!("knowledge query: {e}"),
+                )
+            }
+        };
+        knowledge::merge(outcome.hits, filename_hits)
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect()
+    } else {
+        filename_hits.into_iter().map(|(p, _)| p).collect()
+    };
+
+    let results: Vec<String> = ranked.iter().map(|p| p.display().to_string()).collect();
     ok(req.request_id, json!({ "results": results }))
 }
 
@@ -970,5 +1031,122 @@ mod tests {
                 "FILE_METHODS missing {needed}"
             );
         }
+    }
+
+    /// `file.search` with `knowledge: true` must consult the knowledge
+    /// backend and rank its hits ABOVE the filename tier — proving the
+    /// IPC daemon surface gives an agent the same semantic ranking the
+    /// GUI `:k` palette gives a human (not a filename-only fallback).
+    ///
+    /// The fixture lays down two files that BOTH filename-match `note`;
+    /// alphabetical walk order would surface `a_note.md` first. The
+    /// stub qdrant backend ranks `z_note.md` top, so the merged result
+    /// must lead with `z_note.md`. If the branch ignored the backend
+    /// (the pre-fix behaviour) `a_note.md` would lead and this fails.
+    #[tokio::test]
+    async fn search_knowledge_branch_ranks_qdrant_hits_above_filename() {
+        use crate::knowledge::ipc::HitRow;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a_note.md"), b"alpha").expect("write a");
+        std::fs::write(dir.path().join("z_note.md"), b"zeta").expect("write z");
+        let top = dir.path().join("z_note.md");
+
+        struct Stub {
+            top: PathBuf,
+        }
+        impl KnowledgeBackend for Stub {
+            fn search(&self, _q: &str, _k: usize, _p: Option<&str>) -> Result<Vec<HitRow>> {
+                Ok(vec![HitRow {
+                    score: 0.99,
+                    chunk_id: String::new(),
+                    file_path: self.top.display().to_string(),
+                    chunk_index: 0,
+                    chunk_text: String::new(),
+                    embed_score: None,
+                }])
+            }
+        }
+
+        let (cancel_tx, _rx) = broadcast::channel::<u64>(CANCEL_CHANNEL_DEPTH);
+        let handler = FileHandler::new(Arc::new(RwLock::new(State::default())), cancel_tx)
+            .with_knowledge(Arc::new(Stub { top: top.clone() }));
+
+        let req = Request {
+            schema_version: sy_ipc::SCHEMA_VERSION,
+            request_id: Ulid::new(),
+            trace_id: None,
+            parent_span_id: None,
+            deadline_ms: None,
+            priority: sy_core::Priority::Interactive,
+            method: METHOD_SEARCH.to_string(),
+            params: json!({
+                "query": "note",
+                "root": dir.path(),
+                "knowledge": true,
+            }),
+        };
+
+        let resp = handle_search(&handler, req).await;
+        let result = match resp {
+            Response::Ok { result, .. } => result,
+            Response::Err { error, .. } => panic!("search errored: {error:?}"),
+        };
+        let list: Vec<String> =
+            serde_json::from_value(result["results"].clone()).expect("results array");
+
+        assert_eq!(
+            list.first().map(String::as_str),
+            Some(top.display().to_string().as_str()),
+            "qdrant hit must rank first; got {list:?}"
+        );
+        assert!(
+            list.iter().any(|r| r.ends_with("a_note.md")),
+            "filename-only match must still appear under the qdrant hit; got {list:?}"
+        );
+    }
+
+    /// `knowledge: false` keeps the pure filename behaviour — no
+    /// backend call, results are the substring matches. Pins that the
+    /// merge path is gated strictly on the flag.
+    #[tokio::test]
+    async fn search_without_knowledge_flag_is_filename_only() {
+        use crate::knowledge::ipc::HitRow;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("hit.md"), b"x").expect("write hit");
+        std::fs::write(dir.path().join("miss.txt"), b"x").expect("write miss");
+
+        struct Boom;
+        impl KnowledgeBackend for Boom {
+            fn search(&self, _q: &str, _k: usize, _p: Option<&str>) -> Result<Vec<HitRow>> {
+                panic!("knowledge backend must NOT be dialled when knowledge:false");
+            }
+        }
+
+        let (cancel_tx, _rx) = broadcast::channel::<u64>(CANCEL_CHANNEL_DEPTH);
+        let handler = FileHandler::new(Arc::new(RwLock::new(State::default())), cancel_tx)
+            .with_knowledge(Arc::new(Boom));
+
+        let req = Request {
+            schema_version: sy_ipc::SCHEMA_VERSION,
+            request_id: Ulid::new(),
+            trace_id: None,
+            parent_span_id: None,
+            deadline_ms: None,
+            priority: sy_core::Priority::Interactive,
+            method: METHOD_SEARCH.to_string(),
+            params: json!({ "query": "hit", "root": dir.path() }),
+        };
+
+        let resp = handle_search(&handler, req).await;
+        let result = match resp {
+            Response::Ok { result, .. } => result,
+            Response::Err { error, .. } => panic!("search errored: {error:?}"),
+        };
+        let list: Vec<String> =
+            serde_json::from_value(result["results"].clone()).expect("results array");
+        assert_eq!(list.len(), 1, "only the substring match; got {list:?}");
+        assert!(list[0].ends_with("hit.md"), "got {list:?}");
     }
 }

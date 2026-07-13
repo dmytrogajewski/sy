@@ -4,7 +4,7 @@
 //! syntect-highlights every line under the language picked from the
 //! file extension (or `Plain Text` when the bundled grammar set
 //! doesn't know the extension), then composes an iced [`column!`] of
-//! coloured [`iced::widget::text`] spans.
+//! coloured `iced::widget::text` spans.
 //!
 //! ## Cold-start hazard
 //!
@@ -92,7 +92,11 @@ pub use crate::file::state::{HighlightedLine, HighlightedSpan};
 /// pane. Pure — no I/O, no syntect. The live window calls this from
 /// `view()` with the lines `app::resolve_preview` cached off-thread.
 pub fn render_lines<'a>(lines: &[HighlightedLine]) -> Element<'a, Message> {
-    let rendered = lines.iter().cloned().map(line_to_element).collect::<Vec<_>>();
+    let rendered = lines
+        .iter()
+        .cloned()
+        .map(line_to_element)
+        .collect::<Vec<_>>();
     let body = iced_column(rendered).spacing(1).width(Length::Fill);
     let scrolled = scrollable(body).width(Length::Fill).height(Length::Fill);
     ::iced::widget::container(scrolled)
@@ -111,7 +115,7 @@ pub fn highlight_path(path: &Path) -> Vec<HighlightedLine> {
 }
 
 /// Highlight a path's first [`MAX_TEXT_PREVIEW_BYTES`] of body.
-/// Production [`preview`] and the test / integration-test surfaces
+/// Production `preview` and the test / integration-test surfaces
 /// both route through this single entry point so the highlighter
 /// logic has one site to evolve under future grammar additions.
 fn highlight_lines(path: &Path) -> Vec<HighlightedLine> {
@@ -145,7 +149,6 @@ fn highlight_lines(path: &Path) -> Vec<HighlightedLine> {
     }
     out
 }
-
 
 /// Read at most [`MAX_TEXT_PREVIEW_BYTES`] from `path` and decode as
 /// UTF-8 (lossy on non-UTF-8 input so binary-leaning files still

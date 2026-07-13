@@ -45,7 +45,7 @@ impl Grant {
         Self::new_at(tool, scope, ttl, pid, tty, SystemTime::now())
     }
 
-    /// Test seam: same as [`new`] but with an injected `granted_at`.
+    /// Test seam: same as [`Self::new`] but with an injected `granted_at`.
     pub fn new_at(
         tool: String,
         scope: PathBuf,

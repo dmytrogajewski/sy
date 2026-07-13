@@ -2,9 +2,10 @@
 //! VRAM. Adapter over [`sy_core::sensors::gpu_amd`] and
 //! [`sy_core::sensors::gpu_nvidia`]; both sensors do the sysfs walk
 //! / `nvidia-smi` spawn so `sy mon` and the waybar tile share one
-//! read path per metric (sy-mon ROADMAP Step 5). AMD is probed
-//! first because that's the most common case on the sy reference
-//! Ryzen AI 9 HX 370; NVIDIA is the fallback.
+//! read path per metric (sy-mon ROADMAP Step 5). Both vendors are
+//! enumerated and the tile tracks the card with the most VRAM — the
+//! discrete dGPU on a hybrid box (NVIDIA RTX + AMD iGPU), or the lone
+//! card on the sy reference Ryzen AI 9 HX 370.
 
 use anyhow::Result;
 
@@ -45,30 +46,54 @@ pub fn run(waybar: bool) -> Result<()> {
     Ok(())
 }
 
-/// Probe AMD first (the sy reference platform), then NVIDIA. Returns
-/// the first card that reports a non-zero VRAM total — that's the
-/// tile's "GPU present" signal. Multi-GPU boxes are out of scope for
-/// the waybar tile (one glyph, one bar); the sy mon popup is where
-/// per-card detail goes.
+/// The GPU the tile should track: across every detected card (AMD sysfs +
+/// NVIDIA), the one with the most VRAM. On a hybrid laptop that's the
+/// discrete dGPU (e.g. an NVIDIA RTX with 24 GiB), NOT the integrated Radeon
+/// (~0.5 GiB UMA carve-out) — the iGPU's near-zero util and tiny VRAM were
+/// exactly the "strange info" the old AMD-first probe surfaced. A single-GPU
+/// box (the sy reference Ryzen AI) still picks its one card. The sy mon popup
+/// is where per-card detail for multi-GPU systems goes.
 fn read_first_gpu() -> Option<Snapshot> {
-    if let Some(card) = gpu_amd::sample().cards.into_iter().next() {
+    select_primary(all_gpus())
+}
+
+/// Every detected GPU, both vendors, normalised to [`Snapshot`]. Cards that
+/// report no VRAM total are dropped (they can't drive the VRAM-pressure
+/// class and signal "not really present").
+fn all_gpus() -> Vec<Snapshot> {
+    let mut snaps: Vec<Snapshot> = Vec::new();
+    for card in gpu_amd::sample().cards {
         let total = card.vram_total_bytes.unwrap_or(0) / MIB;
-        if total > 0 {
-            return Some(Snapshot {
-                name: card.name,
-                util_pct: u32::from(card.busy_pct.unwrap_or(0)),
-                vram_used_mib: card.vram_used_bytes.unwrap_or(0) / MIB,
-                vram_total_mib: total,
-            });
+        if total == 0 {
+            continue;
         }
+        snaps.push(Snapshot {
+            name: card.name,
+            util_pct: u32::from(card.busy_pct.unwrap_or(0)),
+            vram_used_mib: card.vram_used_bytes.unwrap_or(0) / MIB,
+            vram_total_mib: total,
+        });
     }
-    let gpu = gpu_nvidia::sample().gpus.into_iter().next()?;
-    Some(Snapshot {
-        name: gpu.name,
-        util_pct: u32::from(gpu.util_pct.unwrap_or(0)),
-        vram_used_mib: gpu.vram_used_mib.unwrap_or(0),
-        vram_total_mib: gpu.vram_total_mib.unwrap_or(0),
-    })
+    for gpu in gpu_nvidia::sample().gpus {
+        let total = gpu.vram_total_mib.unwrap_or(0);
+        if total == 0 {
+            continue;
+        }
+        snaps.push(Snapshot {
+            name: gpu.name,
+            util_pct: u32::from(gpu.util_pct.unwrap_or(0)),
+            vram_used_mib: gpu.vram_used_mib.unwrap_or(0),
+            vram_total_mib: total,
+        });
+    }
+    snaps
+}
+
+/// Pick the primary GPU: the one with the most VRAM. On a hybrid box (an
+/// NVIDIA dGPU alongside an AMD iGPU) this is the discrete card; on a
+/// single-GPU box it's the only card. `None` when nothing was detected.
+fn select_primary(snaps: Vec<Snapshot>) -> Option<Snapshot> {
+    snaps.into_iter().max_by_key(|s| s.vram_total_mib)
 }
 
 fn waybar_out(s: &Snapshot) -> String {
@@ -125,6 +150,42 @@ mod tests {
             vram_total_mib: 24576,
         };
         assert_eq!(format!("{}\n", waybar_out(&s)), GOLDEN_GPU_NV);
+    }
+
+    #[test]
+    fn select_primary_prefers_discrete_dgpu_over_integrated() {
+        // Hybrid laptop: tiny AMD iGPU (~0.5 GiB UMA) + a 24 GiB NVIDIA
+        // dGPU. The tile must track the dGPU — the card with real VRAM that
+        // the user actually cares about — not the iGPU the old AMD-first
+        // probe latched onto.
+        let igpu = Snapshot {
+            name: "card1".to_string(),
+            util_pct: 2,
+            vram_used_mib: 200,
+            vram_total_mib: 512,
+        };
+        let dgpu = Snapshot {
+            name: "NVIDIA GeForce RTX 5090 Laptop GPU".to_string(),
+            util_pct: 10,
+            vram_used_mib: 23014,
+            vram_total_mib: 24463,
+        };
+        // Order must not matter: iGPU first (AMD-probed-first ordering).
+        let picked = select_primary(vec![igpu, dgpu]).expect("a gpu");
+        assert_eq!(picked.name, "NVIDIA GeForce RTX 5090 Laptop GPU");
+        assert_eq!(picked.vram_total_mib, 24463);
+    }
+
+    #[test]
+    fn select_primary_handles_single_and_empty() {
+        assert!(select_primary(Vec::new()).is_none());
+        let only = Snapshot {
+            name: "card0".to_string(),
+            util_pct: 5,
+            vram_used_mib: 100,
+            vram_total_mib: 8192,
+        };
+        assert_eq!(select_primary(vec![only]).expect("one gpu").name, "card0");
     }
 
     #[test]

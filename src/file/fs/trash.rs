@@ -3,14 +3,14 @@
 //! [`sy-file-manager` roadmap][roadmap] / SPEC §3.3 item 5 + §3.4
 //! anti-goal "data loss". Other DEs (Nautilus, Dolphin, gnome-shell,
 //! `gio trash --list`) read the same XDG `Trash/{info,files}/` tree
-//! we write, so a `fs::trash::trash` followed by an external
+//! we write, so a `trash` followed by an external
 //! `gio trash --restore` is a no-op — the destructive-policy beat
 //! (journey **J6** `conflict=trash`) is reversible by the operator's
 //! existing tooling, not just by `sy`.
 //!
 //! ## Public surface
 //!
-//! * [`trash`] — async `spawn_blocking` wrapper around
+//! * `trash` — async `spawn_blocking` wrapper around
 //!   `trash::delete` per path. On partial failure (one src trashed,
 //!   the next denied) the helper returns the per-src error wrapped
 //!   in [`anyhow::Error`] so the caller can roll back. The success
@@ -34,7 +34,7 @@
 //! var to point at a hermetic tempdir so the test run never touches
 //! the operator's real `~/.local/share/Trash/`. Because `set_var`
 //! is process-global, every env-mutating test takes the
-//! [`TRASH_TEST_LOCK`] mutex for the duration of the assertion
+//! `TRASH_TEST_LOCK` mutex for the duration of the assertion
 //! window — same precedent as `plugin::registry::ENV_LOCK`.
 //!
 //! ## Manual `gio trash --list` interop recipe
@@ -180,7 +180,7 @@ pub async fn restore(item: TrashedItem) -> Result<PathBuf> {
     }
 }
 
-/// Sync inner of [`trash`]. Walks the input vec, calls `trash::delete`
+/// Sync inner of `trash`. Walks the input vec, calls `trash::delete`
 /// per path, snapshots `list_blocking` once at the end and matches
 /// every trashed src back to the resulting [`TrashedItem`] by
 /// `original_path`. The post-trash list call is cheap (single

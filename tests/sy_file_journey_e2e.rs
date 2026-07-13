@@ -176,6 +176,7 @@ pub mod knowledge {
         #[derive(Debug, Clone)]
         pub struct HitRow {
             pub score: f32,
+            pub chunk_id: String,
             pub file_path: String,
             pub chunk_index: u32,
             pub chunk_text: String,
@@ -6310,6 +6311,7 @@ async fn step30_k_query_returns_ranked_hits_in_indexed_cwd_full_j4() {
     let canned = vec![
         HitRow {
             score: 0.92,
+            chunk_id: String::new(),
             file_path: cwd.join("example.rs").to_string_lossy().into_owned(),
             chunk_index: 0,
             chunk_text: "example body".to_owned(),
@@ -6317,6 +6319,7 @@ async fn step30_k_query_returns_ranked_hits_in_indexed_cwd_full_j4() {
         },
         HitRow {
             score: 0.81,
+            chunk_id: String::new(),
             file_path: cwd.join("README.md").to_string_lossy().into_owned(),
             chunk_index: 0,
             chunk_text: "step30 readme".to_owned(),
@@ -7585,11 +7588,7 @@ async fn step36_full_journey_runs_with_yazi_removed() {
 
     /// Round-trip helper. Same shape as step20/step34's `call_ok` —
     /// duplicated inline so step36 stays self-contained.
-    async fn call_ok(
-        client: &mut Client,
-        method: &str,
-        params: Value,
-    ) -> Value {
+    async fn call_ok(client: &mut Client, method: &str, params: Value) -> Value {
         let resp = client
             .call(method, params, CallOpts::default())
             .await
@@ -7690,6 +7689,7 @@ async fn step36_full_journey_runs_with_yazi_removed() {
     }
     let canned = vec![HitRow {
         score: 0.91,
+        chunk_id: String::new(),
         file_path: example_rs.display().to_string(),
         chunk_index: 0,
         chunk_text: "example body".into(),
@@ -7801,9 +7801,7 @@ async fn step36_full_journey_runs_with_yazi_removed() {
     let envs: Vec<(String, String)> = std::env::vars().collect();
     for (k, v) in &envs {
         if k.starts_with("SY_") && v.contains("yazi") {
-            panic!(
-                "step36 — SY_* env must not reference yazi after Step 36; offender: {k}={v}"
-            );
+            panic!("step36 — SY_* env must not reference yazi after Step 36; offender: {k}={v}");
         }
     }
     // Touch SystemTime so the import isn't flagged dead by future

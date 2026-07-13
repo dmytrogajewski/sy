@@ -68,12 +68,46 @@ once, then incrementally synced on a schedule. Exposes the search via
 CLI and via an MCP server (`sy knowledge mcp`) auto-registered with
 your agents by `sy auto`.
 
+Retrieval is **hybrid**: a dense (embedding) leg and a sparse (BM25-style
+lexical) leg are fused server-side by qdrant's Reciprocal Rank Fusion
+(`k=60`, needs qdrant ≥1.16) and reranked, so literal tokens (`X5`,
+file paths, SHAs) land even when the embedding alone would miss them.
+Each source carries a `kind` (`telegram`, `claude-transcripts`,
+`notes`, …); per-source pipelines chunk per logical unit (one Telegram
+message, one transcript turn) with structured payload. Agent
+transcripts (`~/.claude/projects/**`, `kind=claude-transcripts`) are
+**excluded from the default search scope** so a live prompt can't
+retrieve itself — opt back in with `--kind claude-transcripts`.
+
 ```
 sy knowledge add ~/Documents/notes
 sy knowledge daemon
 sy knowledge search "rust async cancellation"
+
+# Structured pre-search filters (also `SY_KB_*` env; flags > env > default):
+sy knowledge search "новый год X5 Магнит" \
+    --date-from 2023-12-01 --date-to 2024-02-29 \
+    --kind telegram --from "Анна Лу"
+#   --include-source / --exclude-source <name>   scope by registered source
+#   (results carry a stable `chunk_id`; fetch full text with get-chunk)
+
+sy knowledge get-chunk <chunk_id>   # full, uncapped text for one result
+sy knowledge eval --json            # recall@1/5, MRR, abstain accuracy vs the golden set
 sy knowledge status --json
 ```
+
+Search responses carry a `confidence` (calibrated from the reranker)
+and honour an `abstain_threshold` — below it the tool returns no
+results with `reason: "no high-confidence match"` rather than
+quoting background noise. Natural-language time phrases ("новогодние
+праздники 2024", "last summer") auto-fill the date range when no
+explicit `--date-from/--date-to` is given, and a user-editable
+`~/.config/sy-knowledge/synonyms.yaml` (shipped by `sy apply`) expands
+known aliases (`X5 → Пятёрочка/Перекрёсток/Чижик`) into the lexical leg.
+
+Voice/video notes can be transcribed into the index (Whisper, CPU/iGPU)
+by building with `--features transcribe` (off by default — it vendors
+whisper.cpp and downloads a model).
 
 ### `power` — adaptive power governor
 
@@ -338,8 +372,13 @@ sy knowledge daemon                # supervises qdrant + scheduled embed
 sy knowledge status [--json]
 sy knowledge pause / resume / toggle-pause / cancel
 sy knowledge bench --n 1024
-sy knowledge search <query>
-sy knowledge mcp                   # MCP server (stdio) for AI agents
+sy knowledge search <query> [--date-from D --date-to D --from WHO --kind K \
+                            --include-source N --exclude-source N]
+sy knowledge get-chunk <chunk_id> # full uncapped text for one search result
+sy knowledge eval [--json]        # recall@1/5, MRR, abstain accuracy (golden set)
+sy knowledge mcp                   # MCP server (stdio): knowledge_search,
+                                   #   knowledge_get_chunk, knowledge_index,
+                                   #   knowledge_list_sources
 
 # power
 sy power status [--json]

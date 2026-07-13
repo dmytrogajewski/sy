@@ -3,7 +3,7 @@
 //! Implements the spawn → initialize → request loop → shutdown / exit
 //! → restart-on-EOF lifecycle from [plugin SPEC
 //! §4.4](../../../specs/research/sy-file-manager-plugins/SPEC.md#44-supervision--restart).
-//! Wraps a [`sandbox::build_command`] [`tokio::process::Command`] in a
+//! Wraps a [`build_command`] [`tokio::process::Command`] in a
 //! [`PluginProc`] actor; the actor owns the long-lived
 //! stdin/stdout duplex, runs the host side of the SPEC §4.2.3
 //! lifecycle protocol, and restarts the child on EOF with a
@@ -164,7 +164,7 @@ pub struct SpawnOpts {
     pub host_version: String,
     /// API set the host implements. The SPEC §4.2.3 handshake
     /// compares this to the manifest's `api_min..=api_max` interval;
-    /// disjoint sets fail with [`API_VERSION_MISMATCH`].
+    /// disjoint sets fail with `API_VERSION_MISMATCH`.
     pub host_api: Vec<String>,
     /// `ping` cadence. SPEC §4.4 calls for 30 s in production; tests
     /// pull this down to ~100 ms so the missed-ping path is reachable
@@ -923,7 +923,7 @@ impl PluginProc {
     /// already terminal-`Unhealthy`; callers expecting an in-flight
     /// reconnect must invoke this after the disruption is observed
     /// (state ≠ `Ready`) — see the
-    /// [`PluginProc::wait_state_change_then_ready`] convenience for
+    /// `PluginProc::wait_state_change_then_ready` convenience for
     /// the journey-J7 "kill mid-flight, then assert restart"
     /// pattern.
     pub async fn wait_ready(&mut self) -> std::result::Result<(), RpcError> {

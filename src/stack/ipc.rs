@@ -42,7 +42,7 @@ pub enum Op {
     Refresh,
     /// Hide if visible, show if hidden.
     Toggle,
-    /// Re-read theme (sy.toml + themes/<name>.toml) and repaint.
+    /// Re-read theme (sy.toml + `themes/<name>.toml`) and repaint.
     ReloadTheme,
 }
 

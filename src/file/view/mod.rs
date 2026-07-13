@@ -3,7 +3,7 @@
 //!
 //! `view::root(state)` is the iced `view` callback the app reactor
 //! invokes once per frame. The function picks the layout ladder
-//! ([`LayoutMode::ThreePane`] / [`TwoPane`] / [`OnePane`]) off
+//! ([`LayoutMode::ThreePane`] / [`LayoutMode::TwoPane`] / [`LayoutMode::OnePane`]) off
 //! [`State::mode`] (which the Step 24 `Message::WindowResized`
 //! reducer already wrote), then composes the appropriate
 //! 1 / 2 / 3 [`pane`] widgets inside a top-level

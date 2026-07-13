@@ -24,7 +24,7 @@
 //! `Event { kind = "snapshot", ... }` per tick on the broadcast
 //! channel, and terminate with [`Event::closed`] when the broadcast
 //! sender drops. Client disconnects bubble up as an
-//! [`io::ErrorKind::BrokenPipe`] from `event_sink.send(...)` and the
+//! [`std::io::ErrorKind::BrokenPipe`] from `event_sink.send(...)` and the
 //! per-connection task exits cleanly.
 //!
 //! ## Concurrency

@@ -2,7 +2,7 @@
 //! `snapshot` and `history` surfaces.
 //!
 //! Tools:
-//!   - `system.mon.snapshot {}` — latest [`SystemSnapshot`] as JSON.
+//!   - `system.mon.snapshot {}` — latest `SystemSnapshot` as JSON.
 //!   - `system.mon.history { metric, seconds }` — last `seconds`
 //!     samples for `metric` as `[(ts_ms, value), …]`.
 //!

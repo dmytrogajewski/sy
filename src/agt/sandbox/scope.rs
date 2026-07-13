@@ -53,7 +53,7 @@ use anyhow::{Context, Result};
 
 use crate::agt::policy::schema::Profile;
 
-/// argv[0] for the cgroup-scope wrapper.
+/// `argv[0]` for the cgroup-scope wrapper.
 const SYSTEMD_RUN: &str = "systemd-run";
 
 /// Build the full `systemd-run --user --scope` argv (without the

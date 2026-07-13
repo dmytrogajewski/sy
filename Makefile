@@ -9,7 +9,7 @@
 #   - `make lint` is the gate before any commit. The Stop hook
 #     (.claude/hooks/stop-verify.sh) re-runs the lint subset.
 
-.PHONY: build release test test-npu lint fmt fmt-check audit bench install install-system-npu install-system-syauth-selinux docs-lint help
+.PHONY: build release test test-npu eval lint fmt fmt-check audit bench install install-system-npu install-system-syauth-selinux docs-lint help
 
 build:
 	cargo build --workspace
@@ -22,6 +22,13 @@ test:
 
 test-npu:
 	cargo test --workspace --all-targets --features test-npu
+
+# Retrieval-eval golden set (REQ-9). Runs the labelled queries through
+# the live index and reports recall@1/5, MRR, abstain accuracy. Exits
+# non-zero (drift, code 3) when a metric regresses past tolerance, so CI
+# gates on it. Needs the sy-knowledge daemon running with an index.
+eval:
+	cargo run --quiet -- knowledge eval --json
 
 lint:
 	./scripts/check_main_rs_loc.sh 1097
@@ -106,6 +113,8 @@ help:
 	@echo "  release     — release build"
 	@echo "  test        — unit + integration tests (no NPU)"
 	@echo "  test-npu    — also run NPU-backed tests (daemon must be stopped)"
+	@echo "  eval        — retrieval-eval golden set (recall@1/5, MRR,"
+	@echo "                abstain accuracy); non-zero on regression (REQ-9)"
 	@echo "  lint        — cargo clippy --all-targets -- -D warnings"
 	@echo "  fmt         — cargo fmt --all"
 	@echo "  fmt-check   — cargo fmt --all -- --check"

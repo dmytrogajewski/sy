@@ -127,7 +127,7 @@ pub struct InstalledPlugin {
 }
 
 /// Error kinds surfaced from the install flow. SPEC §4.5 maps each
-/// to a stable CLI exit code; the [`install_error_exit_code`] helper
+/// to a stable CLI exit code; the `install_error_exit_code` helper
 /// is the single chokepoint translating these to integers so the
 /// table in `cli.rs` and the table in SPEC §4.5 can't drift.
 #[derive(Debug)]
@@ -276,8 +276,8 @@ fn staging_token() -> String {
     id.to_string()
 }
 
-/// Materialise an [`InstallSource`] into `dst`. For [`Path`] we copy
-/// the tree; for [`Git`] we shell out to `/usr/bin/git clone --depth
+/// Materialise an [`InstallSource`] into `dst`. For `Path` we copy
+/// the tree; for `Git` we shell out to `/usr/bin/git clone --depth
 /// 1 [-b rev]`.
 fn materialise_source(source: &InstallSource, dst: &Path) -> Result<(), InstallError> {
     match source {

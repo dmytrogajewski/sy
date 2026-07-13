@@ -154,7 +154,7 @@ pub enum PluginCmd {
     ///
     /// Example:
     ///   sy plugin install ./crates/sy-plugin-md
-    ///   sy plugin install git+https://github.com/example/sy-plugin-foo.git --rev v0.1.0
+    ///   sy plugin install `git+https://github.com/example/sy-plugin-foo.git` --rev v0.1.0
     Install {
         /// Local path or `git+<url>` source.
         source: String,

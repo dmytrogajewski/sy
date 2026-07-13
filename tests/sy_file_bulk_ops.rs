@@ -60,6 +60,50 @@ mod bookmarks;
 #[allow(dead_code)]
 mod file_keymap;
 
+// Step 30 — knowledge-search module mirror so the `#[path]`-imported
+// `ipc.rs`'s `file.search` `knowledge:true` branch
+// (`crate::file::search::knowledge::{KnowledgeBackend,
+// RealKnowledgeBackend, query, merge}`) compiles. The real source is
+// pulled in via `#[path]`; its `crate::knowledge::{ipc::HitRow,
+// cli::search_hits}` references resolve against the inline `knowledge`
+// shim below.
+#[path = "../src/file/search/knowledge.rs"]
+#[allow(dead_code)]
+mod file_search_knowledge;
+
+/// `crate::knowledge::…` mirror for the two symbols
+/// `file/search/knowledge.rs` names: `ipc::HitRow` (the qdrant hit row
+/// the backend returns) and `cli::search_hits` (the live-daemon dial
+/// `RealKnowledgeBackend` wraps — never invoked under test, which
+/// injects a stub backend instead). `HitRow` mirrors
+/// `src/aiplane/ipc.rs::HitRow` field-for-field; a drift surfaces
+/// immediately as a field error in the `ipc.rs`
+/// `search_knowledge_branch_*` tests.
+#[allow(dead_code)]
+mod knowledge {
+    pub(crate) mod ipc {
+        #[derive(Debug, Clone)]
+        pub struct HitRow {
+            pub score: f32,
+            pub chunk_id: String,
+            pub file_path: String,
+            pub chunk_index: u32,
+            pub chunk_text: String,
+            pub embed_score: Option<f32>,
+        }
+    }
+    pub(crate) mod cli {
+        use super::ipc::HitRow;
+        pub fn search_hits(
+            _query: &str,
+            _limit: usize,
+            _prefix: Option<&str>,
+        ) -> anyhow::Result<Vec<HitRow>> {
+            Ok(Vec::new())
+        }
+    }
+}
+
 /// `crate::file::…` mirror so the `#[path]`-imported sources compile
 /// under the integration-test binary. Same idiomatic shim
 /// `tests/sy_file_ipc.rs` declares for Step 20.
@@ -103,6 +147,9 @@ mod file {
         pub(crate) use super::super::file_fs_watch as watch;
     }
     pub(crate) use super::file_keymap as keymap;
+    pub(crate) mod search {
+        pub(crate) use super::super::file_search_knowledge as knowledge;
+    }
 }
 
 use std::path::PathBuf;

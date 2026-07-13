@@ -264,7 +264,7 @@ fn describe_one(recorder: &impl Recorder, entry: &CoreMetric) {
 }
 
 /// Per-name description string. Duplicates
-/// [`crate::metrics::describe_text`] (which is `fn`-private) so the
+/// `crate::metrics::describe_text` (which is `fn`-private) so the
 /// local recorder gets the same prose as the global facade emits in
 /// `register_core_metrics`.
 fn describe_text(name: &str) -> &'static str {

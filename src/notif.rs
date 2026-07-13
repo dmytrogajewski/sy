@@ -4,7 +4,7 @@
 //! Storage layout (XDG data):
 //!   ~/.local/share/sy/notifications/YYYY/MM/DD/notifications.json
 //! one JSON array per day, each entry:
-//!   {"id":"uuid","ts":<unix>, "app","icon","summary","body","read":bool}
+//!   {"id":"uuid","ts":`<unix>`, "app","icon","summary","body","read":bool}
 //!
 //! Bar count = number of unread entries across the most recent 30 days.
 

@@ -27,7 +27,7 @@ use crate::file::search::knowledge::KnowledgeStatus;
 #[derive(Debug, Default, Clone)]
 pub struct KnowledgeState {
     /// Current daemon reachability — read by
-    /// [`crate::file::view::statusbar::knowledge_chip`].
+    /// `crate::file::view::statusbar::knowledge_chip`.
     pub status: KnowledgeStatus,
     /// The query string the operator last fired via `:k`. `None`
     /// until the first query lands; surviving across queries lets

@@ -1,5 +1,9 @@
 # PLAN: full
 
+> **Status: COMPLETE — archived 2026-05-31.** All 70 items done
+> (Item 26 closed via `BUG-20260521-2255`). Moved under
+> `specs/archive/` and excluded from `/march` walks.
+
 ## Mode
 docs-roadmap
 
@@ -267,9 +271,9 @@ Items are ordered so prerequisites land before dependants:
 - Description: Per the skill's `<rules>` clause 11, this skill audits the *existence* of rustdoc coverage; authoring belongs to `/implement`. Run `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items` and `cargo test --doc`, file each warning / missing doctest as a `/implement` step.
 - DoR: none
 - DoD:
-  - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items` exits 0 — FORWARD-LOOKING. Currently exits 101 with 52 errors (37 broken intra-doc links + 14 unclosed HTML tags + 1 public→private intra-doc link, plus two `could not document` rollups). Each error is enumerated category-by-category in `specs/bugs/BUG-20260521-2255.md` with a per-batch fix shape; the next `/implement` pass closes the BUG and flips this bullet to ticked. The CI gate added under the third DoD bullet below ensures regressions surface immediately once the BUG is resolved.
+  - [x] `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items` exits 0 — landed by closing `specs/bugs/BUG-20260521-2255.md`. The error count had grown past the originally-triaged 52 (code added since triage) to 107 individual errors (75 broken intra-doc links + 16 unclosed HTML tags + 4 public→private links + 8 ambiguous/redundant-link/non-hyperlink, plus four `could not document` rollups); all fixed as doc-comment-only edits across ~50 files. Both build shapes now exit 0: `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --workspace` AND the docs.rs shape `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` (no `--document-private-items`, which is the Batch-C gate). The CI gate (third DoD bullet) was flipped from `continue-on-error: true` to a hard gate so regressions block the push.
   - [x] `cargo test --doc` exits 0 — verified by `cargo test --doc --workspace` (0 doctests in any workspace member at this point; `sy-core`, `sy-ipc`, `sy-testutils` each report `0 passed; 0 failed`). When `/implement` adds doctests as part of closing `specs/bugs/BUG-20260521-2255.md`, this bullet stays ticked because the CI step under the third bullet runs both commands on every Rust-touching PR.
-  - [x] CI step in `.github/workflows/docs.yml` (under Item 19) calls both — landed as a `rust-doc` job in `.github/workflows/docs.yml` (gated to fire on `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `crates/**` changes via a new `changes` setup job using `dorny/paths-filter@v3`). The job installs `dtolnay/rust-toolchain@stable`, caches cargo registry + target, then runs `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --workspace` followed by `cargo test --doc --workspace`. Markdown-only PRs still skip the `rust-doc` job and Rust-only PRs skip the four Markdown jobs (markdownlint, vale, cspell, lychee) via per-job `if: needs.changes.outputs.<docs|rust> == 'true'` gates. YAML validity confirmed via `python3 -c "yaml.safe_load(...)"`.
+  - [x] CI step in `.github/workflows/docs.yml` (under Item 19) calls both — landed as a `rust-doc` job in `.github/workflows/docs.yml` (gated to fire on `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `crates/**` changes via a new `changes` setup job using `dorny/paths-filter@v3`). The job installs `dtolnay/rust-toolchain@stable`, caches cargo registry + target, then runs `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --workspace` followed by `cargo test --doc --workspace`. Markdown-only PRs still skip the `rust-doc` job and Rust-only PRs skip the four Markdown jobs (markdownlint, vale, cspell, lychee) via per-job `if: needs.changes.outputs.<docs|rust> == 'true'` gates. YAML validity confirmed via `python3 -c "yaml.safe_load(...)"`. Flipped from `continue-on-error: true` to a hard gate when `BUG-20260521-2255` closed (2026-05-31) — a new broken link / unclosed tag now fails the job.
 - Files likely affected: `src/**`, `crates/**`
 - Driver: `/implement` (one step per warning batch — but this pass only FILES the steps via `specs/bugs/BUG-20260521-2255.md`; execution is deferred to a future `/implement` pass picking up that BUG)
 

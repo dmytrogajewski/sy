@@ -6,7 +6,7 @@
 //! `define_plugin!` wrapper that calls the same entry point.
 //!
 //! Pipeline: `pulldown_cmark::Parser` → in-memory `Block` list
-//! ([`render::layout`]) → `cosmic-text::Buffer` layout per block →
+//! (`render::layout`) → `cosmic-text::Buffer` layout per block →
 //! `tiny-skia::Pixmap` rasterisation → `Pixmap::encode_png`. No
 //! chrome, no keyring, no terminal image protocol; the test
 //! `no_chrome_no_keyring` locks that contract.

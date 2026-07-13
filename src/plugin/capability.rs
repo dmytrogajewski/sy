@@ -12,7 +12,7 @@
 //! and the plugin's response carries back:
 //!
 //! * the `api` value it selected (must be ∈ host's advertised set —
-//!   else [`API_VERSION_MISMATCH`][crate::plugin::rpc::API_VERSION_MISMATCH]),
+//!   else [`API_VERSION_MISMATCH`]),
 //! * its `[[capability]]` set (must be ⊆ manifest's declared
 //!   `[[capability]]` rows — else [`RpcError::Protocol`]), and
 //! * the host methods it `offers` to call (unknown names get a

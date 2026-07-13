@@ -37,6 +37,7 @@ pub fn default_checks() -> Vec<Box<dyn Check>> {
         Box::new(NpuDevice),
         Box::new(VitisaiCachePresent),
         Box::new(QdrantReachable),
+        Box::new(QdrantVersionMin),
         Box::new(IpcEndpoint::knowledge()),
         Box::new(IpcEndpoint::aiplane()),
         Box::new(IpcEndpoint::agt()),
@@ -177,6 +178,82 @@ impl Check for QdrantReachable {
                 details: None,
             },
         }
+    }
+}
+
+// -- knowledge.qdrant.version_min_1_16 ------------------------------------
+
+/// Probe the live qdrant version against the minimum the hybrid Universal
+/// Query needs. qdrant < 1.16 silently ignores the configurable RRF `k`
+/// (`query.rrf.k = 60`), so hybrid search regresses with no error
+/// (knowledge-retrieval-iter1 cross-cutting DoD). `GET /` returns
+/// `{"version":"1.x.y",...}`; we classify it pass/fail and treat an
+/// unreachable qdrant as `warn` (the daemon may simply be down — hard
+/// reachability is `knowledge.qdrant_reachable`'s job).
+pub struct QdrantVersionMin;
+
+const QDRANT_ROOT_TIMEOUT_MS: u64 = 500;
+
+impl QdrantVersionMin {
+    /// Fetch the qdrant root `GET /` body, or `None` when unreachable.
+    fn fetch_root() -> Option<String> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_millis(QDRANT_ROOT_TIMEOUT_MS))
+            .build()
+            .ok()?;
+        let resp = client
+            .get(format!("http://{QDRANT_HOST}:{QDRANT_PORT}/"))
+            .send()
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        resp.text().ok()
+    }
+
+    /// Classify a (possibly absent) root body into a `CheckResult`. Pure
+    /// over its input so the pass/fail/warn mapping is unit-testable.
+    fn classify(&self, root_body: Option<String>) -> CheckResult {
+        use crate::knowledge::qdrant::{MIN_HYBRID_VERSION, meets_min_version, parse_version};
+        let (min_major, min_minor) = MIN_HYBRID_VERSION;
+        match root_body.as_deref().and_then(parse_version) {
+            Some(v) if meets_min_version(v, MIN_HYBRID_VERSION) => CheckResult {
+                name: self.name(),
+                status: Status::Pass,
+                message: Some(format!(
+                    "qdrant {}.{} ≥ {min_major}.{min_minor} (hybrid RRF k ok)",
+                    v.0, v.1
+                )),
+                fix: None,
+                details: Some(json!({ "major": v.0, "minor": v.1 })),
+            },
+            Some(v) => CheckResult {
+                name: self.name(),
+                status: Status::Fail,
+                message: Some(format!(
+                    "qdrant {}.{} < {min_major}.{min_minor}; hybrid RRF k silently ignored",
+                    v.0, v.1
+                )),
+                fix: Some("run `sy apply` to upgrade qdrant".into()),
+                details: Some(json!({ "major": v.0, "minor": v.1 })),
+            },
+            None => CheckResult {
+                name: self.name(),
+                status: Status::Warn,
+                message: Some("qdrant not running or version unreadable".into()),
+                fix: Some("start qdrant: `systemctl --user start sy-qdrant.service`".into()),
+                details: None,
+            },
+        }
+    }
+}
+
+impl Check for QdrantVersionMin {
+    fn name(&self) -> &'static str {
+        "knowledge.qdrant.version_min_1_16"
+    }
+    fn run(&self) -> CheckResult {
+        self.classify(Self::fetch_root())
     }
 }
 
@@ -783,6 +860,28 @@ fn unit_is_enabled(stdout: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qdrant_version_check_classifies_body() {
+        // knowledge-retrieval-iter1 cross-cutting DoD: the doctor check
+        // maps a live qdrant root-body version to pass (≥1.16) / fail
+        // (<1.16, with the `sy apply` hint) and tolerates an unreachable
+        // qdrant (warn). The HTTP fetch is exercised end-to-end by the
+        // `e2e_runs_and_emits_summary` runner test; here we pin the pure
+        // classification a real `GET /` body drives.
+        let ok = QdrantVersionMin.classify(Some(r#"{"version":"1.18.1"}"#.into()));
+        assert_eq!(ok.status, Status::Pass);
+
+        let old = QdrantVersionMin.classify(Some(r#"{"version":"1.12.4"}"#.into()));
+        assert_eq!(old.status, Status::Fail);
+        assert!(old.fix.as_deref().unwrap_or("").contains("sy apply"));
+        assert!(old.message.as_deref().unwrap_or("").contains("1.12"));
+
+        // Unreachable qdrant → warn, not fail (the daemon may simply be down;
+        // `knowledge.qdrant_reachable` already covers hard reachability).
+        let down = QdrantVersionMin.classify(None);
+        assert_eq!(down.status, Status::Warn);
+    }
 
     #[test]
     fn landlock_version_parses_lsm() {

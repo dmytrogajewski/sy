@@ -4,7 +4,7 @@
 //!
 //! * `image/*` → [`image::preview`] (iced::widget::image, decoded
 //!   off the runtime via [`image::load`]).
-//! * `text/*` + `application/json` → [`text::preview`] (syntect-
+//! * `text/*` + `application/json` → `text::preview` (syntect-
 //!   highlighted text spans, clamped at
 //!   [`text::MAX_TEXT_PREVIEW_BYTES`]).
 //! * anything else → a fallback container with the literal "no
@@ -51,7 +51,7 @@ use crate::file::state::{Entry, EntryKind, PreviewPayload, State};
 pub enum PreviewKind {
     /// Routed to [`image::preview`].
     Image,
-    /// Routed to [`text::preview`].
+    /// Routed to `text::preview`.
     Text,
     /// No built-in preview. Step 27 will dispatch through the plugin
     /// `Registry`'s `(previewer, mime|url)` lookup; today the
@@ -140,7 +140,7 @@ pub fn preview<'a>(state: &'a State, entry: &'a Entry, path: PathBuf) -> Element
 /// `plugin_crash_falls_back_to_built_in_text` is honoured here: the
 /// `Message::PreviewFailed` reducer clears the text slot, so the
 /// next paint walks through this branch and falls back via
-/// [`text::preview`] (which reads the raw file body).
+/// `text::preview` (which reads the raw file body).
 fn render_no_builtin<'a>(state: &'a State, path: &std::path::Path) -> Element<'a, Message> {
     if let Some((cached_path, body)) = state.preview.text_preview.as_ref() {
         if cached_path == path {

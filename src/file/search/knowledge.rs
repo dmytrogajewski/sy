@@ -33,7 +33,7 @@ use crate::knowledge::ipc::HitRow;
 pub const KNOWLEDGE_QUERY_BUDGET: Duration = Duration::from_millis(250);
 
 /// Statusbar chip discriminator. Surfaces in
-/// [`crate::file::view::statusbar::knowledge_chip`] so the operator
+/// `crate::file::view::statusbar::knowledge_chip` so the operator
 /// can see whether `sy-knowledge.service` is currently reachable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KnowledgeStatus {

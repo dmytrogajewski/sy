@@ -172,8 +172,8 @@ pub fn resolve_profile(
 }
 
 /// Locate the `policy/` directory at runtime. Used by both
-/// [`crate::agt::acp::resolve_spawn_command`] (parent process,
-/// daemon-side) and [`crate::agt::mod::sandbox_exec`] /
+/// `resolve_spawn_command` (parent process,
+/// daemon-side) and `sandbox_exec` /
 /// `sandbox_run` (sandboxed child re-exec) so the daemon and the
 /// `systemd-run --user --scope -- sy agt sandbox-exec` child agree
 /// on which `profiles/` directory holds the active policy.

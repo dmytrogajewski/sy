@@ -86,7 +86,7 @@ enum Cmd {
     ///   sy apply --yes                # confirm destructive ops
     ///   sy apply                      # apply everything
     Apply {
-        /// Theme name (resolved as themes/<name>.toml)
+        /// Theme name (resolved as `themes/<name>.toml`)
         #[arg(short, long)]
         theme: Option<String>,
         /// Don't write anything — print what would change.
@@ -363,7 +363,7 @@ enum Cmd {
     ///   sy service start aiplane
     ///   sy service status knowledge --json
     ///   sy service logs aiplane -f -n 200
-    ///   sy service logs agentd --trace <uuid>
+    ///   sy service logs agentd --trace `<uuid>`
     Service {
         #[command(subcommand)]
         cmd: supervision::service::ServiceCmd,
@@ -688,7 +688,7 @@ fn apply_units(root: &Path, dry: bool, json: bool, yes: bool) -> Result<()> {
     supervision::apply::run_cli(root, &default_target()?, dry, json, yes)
 }
 
-const QDRANT_VERSION: &str = "1.12.4";
+const QDRANT_VERSION: &str = "1.18.1";
 
 /// Download the qdrant binary into `~/.local/bin/qdrant` if missing or
 /// out-of-date. Mirrors `ensure_bridges` for the ACP-bridge npm package.

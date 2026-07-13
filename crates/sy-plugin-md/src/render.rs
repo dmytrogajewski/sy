@@ -3,7 +3,7 @@
 //! Stages:
 //!
 //! 1. Parse markdown via `pulldown_cmark::Parser` into a flat list of
-//!    [`Block`]s. Each block carries its kind (heading level, paragraph,
+//!    `Block`s. Each block carries its kind (heading level, paragraph,
 //!    code, list, blockquote, rule, image) and inline spans.
 //! 2. Lay each block out into a `cosmic_text::Buffer` with the right
 //!    font size + colour for its style.

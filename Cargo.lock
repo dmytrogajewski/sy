@@ -5805,6 +5805,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5be167a7af36ee22fe3115051bc51f6e6c7054c9348e28deb4f49bd6f705a315"
 
 [[package]]
+name = "pidgin"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28a2a37d2d894d50891a12fba6dd7b84292caf2f14fd0086a2af2404be2d8ebb"
+dependencies = [
+ "lazy_static",
+ "regex",
+ "serde",
+ "serde_regex",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7099,6 +7111,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_regex"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8136f1a4ea815d7eac4101cfd0b16dc0cb5e1fe1b8609dfd728058656b7badf"
+dependencies = [
+ "regex",
+ "serde",
+]
+
+[[package]]
 name = "serde_repr"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7632,6 +7654,7 @@ dependencies = [
  "regex",
  "reqwest",
  "resvg",
+ "rustfft",
  "rustix 1.1.4",
  "safetensors 0.4.5",
  "sd-notify",
@@ -7657,6 +7680,7 @@ dependencies = [
  "tract-onnx",
  "trash",
  "tree_magic_mini",
+ "two_timer",
  "ulid",
  "uuid",
  "walkdir",
@@ -8615,6 +8639,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 dependencies = [
  "core_maths",
+]
+
+[[package]]
+name = "two_timer"
+version = "2.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75e22270f53d0cc86e580617796a681e89d5d5c22fa3774d70ba1592915404ee"
+dependencies = [
+ "chrono",
+ "lazy_static",
+ "pidgin",
+ "regex",
+ "serde_json",
 ]
 
 [[package]]

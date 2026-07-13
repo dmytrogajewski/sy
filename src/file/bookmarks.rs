@@ -221,7 +221,7 @@ impl Bookmarks {
 
     /// Parse the XBEL recent-dirs log into a flat [`Bookmark`] list
     /// (most-recent first). Surfaces to the view layer's recent-dirs
-    /// palette and to the [`bookmarks::tests::xbel_written_on_open`]
+    /// palette and to the `bookmarks::tests::xbel_written_on_open`
     /// DoD via a quick-xml round-trip parse.
     pub fn read_recent(&self) -> Result<Vec<Bookmark>> {
         read_recent_from(&self.xbel_dir.join(RECENTLY_USED_XBEL))

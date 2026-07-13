@@ -191,7 +191,7 @@ pub struct Dispatcher {
 }
 
 /// Snapshot of the dispatcher's currently-executing request.
-/// Surfaced through [`Scheduler::inflight_snapshot`] for the
+/// Surfaced through `Scheduler::inflight_snapshot` for the
 /// cross-class hard-escape watchdog (SPEC §4.3 / arch-aiplane-scheduler
 /// Step 8) and any future status surface that wants to attribute
 /// inflight latency.

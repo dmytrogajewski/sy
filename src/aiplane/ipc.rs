@@ -7,7 +7,7 @@
 //!     method, write a single envelope, close. Used for IndexNow,
 //!     FullResync, Pause, etc. The daemon acks with an empty `Ok`;
 //!     the client ignores it.
-//!   * Request-response `Req`/`Resp` ([`request`]): write one
+//!   * Request-response `Req`/`Resp` ([`request_with_priority`]): write one
 //!     envelope, read one back. Used for Run / Search / SearchRerank
 //!     so the CLI and MCP surfaces can offload all NPU inference to
 //!     the daemon — the only process with the device bound.
@@ -18,7 +18,7 @@
 //! directly (see [`KNOWLEDGE_METHODS`]).
 //!
 //! Missing socket = daemon not running; [`send`] is a silent no-op,
-//! [`request`] returns `IpcError::DaemonDown` so the caller can fall
+//! [`request_with_priority`] returns `IpcError::DaemonDown` so the caller can fall
 //! back to in-process embedding.
 
 use std::{
@@ -27,8 +27,9 @@ use std::{
     os::unix::net::UnixStream,
     path::PathBuf,
     sync::{
+        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
+        mpsc,
     },
     thread,
     time::Duration,
@@ -40,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use sy_core::{ErrorCode, Priority};
 use sy_ipc::{
     BuildInfo, CancelRegistry, Capabilities, ErrorBody, Handler, HealthFn, HealthSnapshot,
-    HealthState, RequestCodec, ResponseCodec, SystemMethods, SCHEMA_VERSION,
+    HealthState, RequestCodec, ResponseCodec, SCHEMA_VERSION, SystemMethods,
 };
 use tokio::sync::oneshot;
 use tokio_util::codec::{FramedRead, FramedWrite};
@@ -53,7 +54,7 @@ use super::scheduler::{Request as SchedRequest, Scheduler};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
 pub enum Op {
-    /// Re-read sy.toml [knowledge] sources + schedule.
+    /// Re-read sy.toml `[knowledge]` sources + schedule.
     RefreshSources,
     /// Run an incremental index pass right now.
     IndexNow,
@@ -77,6 +78,38 @@ pub enum Op {
     Cancel,
     /// Graceful shutdown.
     Shutdown,
+}
+
+/// Pre-search payload filter (REQ-2). Compiled into a qdrant `Filter`
+/// downstream (Step 7); here it is pure wire format. Every field is
+/// optional/empty by default so an absent filter serializes compactly
+/// and pre-Step-6 payloads still deserialize.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SearchFilter {
+    /// Inclusive lower bound, ISO-8601 / RFC-3339.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date_from: Option<String>,
+    /// Inclusive upper bound, ISO-8601 / RFC-3339.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date_to: Option<String>,
+    /// Sender match set (any-of).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub from: Vec<String>,
+    /// `SourceKind` kebab strings (any-of).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kind: Vec<String>,
+    /// Source names that must be present (must).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include_sources: Vec<String>,
+    /// Source names that must be absent (must-not).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_sources: Vec<String>,
+    /// `SourceKind` kebab strings that must be absent (must-not). Carries
+    /// the REQ-1 default-exclude of `claude-transcripts`, injected by the
+    /// CLI/MCP boundary unless the caller opts that kind in. Additive +
+    /// defaulted so pre-Step-11 payloads still deserialize.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_kinds: Vec<String>,
 }
 
 /// Request-response op. Distinct from `Op` because callers wait for
@@ -105,6 +138,12 @@ pub enum Req {
         /// time.
         #[serde(default = "default_search_priority")]
         priority: Priority,
+        /// REQ-2 pre-search filter. `None` ⇒ unfiltered (back-compat).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter: Option<SearchFilter>,
+        /// REQ-6 abstain cutoff in [0,1]. `None` ⇒ server default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        abstain_threshold: Option<f32>,
     },
     /// Two-stage retrieval: embed → qdrant top-`candidates` →
     /// bge-reranker cross-encoder scores every (query, doc) pair →
@@ -124,7 +163,18 @@ pub enum Req {
         /// semantics as on [`Req::Search`].
         #[serde(default = "default_search_priority")]
         priority: Priority,
+        /// REQ-2 pre-search filter. `None` ⇒ unfiltered (back-compat).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter: Option<SearchFilter>,
+        /// REQ-6 abstain cutoff in [0,1]. `None` ⇒ server default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        abstain_threshold: Option<f32>,
     },
+    /// REQ-10 fetch-by-id: resolve a single chunk's full (uncapped)
+    /// text + payload by the stable `chunk_id` a bounded search result
+    /// carries. `chunk_id` is the qdrant point id (blake3-derived in
+    /// `chunk::point_id`); the daemon answers with [`Resp::Chunk`].
+    GetChunk { chunk_id: String },
 }
 
 /// Default priority for legacy [`Req::Search`] / [`Req::SearchRerank`]
@@ -138,9 +188,53 @@ fn default_search_priority() -> Priority {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "resp", rename_all = "kebab-case")]
 pub enum Resp {
-    Run { output: WorkloadOutput },
-    Search { hits: Vec<HitRow> },
-    Error { msg: String },
+    Run {
+        output: WorkloadOutput,
+    },
+    Search {
+        hits: Vec<HitRow>,
+        /// REQ-6 calibrated confidence in [0,1]. Computed in Step 12;
+        /// here it is plumbing-only. Legacy payloads without the field
+        /// deserialize to the neutral default `1.0` (uncalibrated /
+        /// not-abstained) so a Step-6 daemon and an older CLI interop.
+        #[serde(default = "default_search_confidence")]
+        confidence: f32,
+        /// REQ-6 abstain flag. `false` ⇒ a normal (non-abstained)
+        /// response; legacy payloads default to `false`.
+        #[serde(default)]
+        abstained: bool,
+    },
+    /// REQ-10 fetch-by-id reply: the full (uncapped) chunk for a
+    /// `Req::GetChunk`. `chunk` is `None` when no point matched the id.
+    Chunk {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chunk: Option<ChunkRow>,
+    },
+    Error {
+        msg: String,
+    },
+}
+
+/// Full (uncapped) chunk returned by [`Resp::Chunk`] for a fetch-by-id.
+/// Mirrors the SPEC §4 `knowledge_get_chunk` shape — the `payload` carries
+/// the source-kind metadata, `text` is the complete chunk text (never the
+/// MCP-capped form).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkRow {
+    pub chunk_id: String,
+    pub file_path: String,
+    pub chunk_index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_name: Option<String>,
+    pub text: String,
+}
+
+/// Neutral confidence for [`Resp::Search`] payloads that predate the
+/// Step-6 wire format (and for producers that don't calibrate yet).
+pub fn default_search_confidence() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,6 +242,12 @@ pub struct HitRow {
     /// Final score callers should rank by. Cosine similarity for
     /// `Req::Search`; rerank sigmoid for `Req::SearchRerank`.
     pub score: f32,
+    /// Stable qdrant point id (blake3-derived, `chunk::point_id`). REQ-10:
+    /// a bounded search result carries this so the agent can fetch the
+    /// full chunk on demand via `Req::GetChunk`. Defaulted so a pre-Step-14
+    /// daemon's hits still deserialize.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub chunk_id: String,
     pub file_path: String,
     pub chunk_index: u32,
     pub chunk_text: String,
@@ -282,7 +382,30 @@ fn v1_response_to_legacy(method: &str, v1: sy_ipc::Response) -> Result<Resp> {
                 let hits: Vec<HitRow> =
                     serde_json::from_value(result.get("hits").cloned().unwrap_or_default())
                         .context("decode Resp::Search hits")?;
-                Ok(Resp::Search { hits })
+                let confidence = result
+                    .get("confidence")
+                    .and_then(|v| v.as_f64())
+                    .map(|v| v as f32)
+                    .unwrap_or_else(default_search_confidence);
+                let abstained = result
+                    .get("abstained")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(Resp::Search {
+                    hits,
+                    confidence,
+                    abstained,
+                })
+            }
+            M_GET_CHUNK => {
+                let chunk: Option<ChunkRow> = serde_json::from_value(
+                    result
+                        .get("chunk")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                )
+                .context("decode Resp::Chunk")?;
+                Ok(Resp::Chunk { chunk })
             }
             _ => {
                 // Fire-and-forget ack reaching here is a bug: send()
@@ -687,7 +810,7 @@ impl Handler for KnowledgeBridge {
                     Req::Search { priority, .. } | Req::SearchRerank { priority, .. } => {
                         *priority = req.priority;
                     }
-                    Req::Run { .. } => {}
+                    Req::Run { .. } | Req::GetChunk { .. } => {}
                 }
                 let (tx, rx) = oneshot::channel();
                 if self.req_tx.send((legacy_req, tx)).is_err() {
@@ -1011,10 +1134,24 @@ fn legacy_resp_to_v1(request_id: Ulid, resp: Resp) -> sy_ipc::Response {
             result: serde_json::json!({ "output": output }),
             blob: None,
         },
-        Resp::Search { hits } => sy_ipc::Response::Ok {
+        Resp::Search {
+            hits,
+            confidence,
+            abstained,
+        } => sy_ipc::Response::Ok {
             schema_version: SCHEMA_VERSION,
             request_id,
-            result: serde_json::json!({ "hits": hits }),
+            result: serde_json::json!({
+                "hits": hits,
+                "confidence": confidence,
+                "abstained": abstained,
+            }),
+            blob: None,
+        },
+        Resp::Chunk { chunk } => sy_ipc::Response::Ok {
+            schema_version: SCHEMA_VERSION,
+            request_id,
+            result: serde_json::json!({ "chunk": chunk }),
             blob: None,
         },
         Resp::Error { msg } => v1_err(request_id, ErrorCode::Internal, &msg),
@@ -1043,6 +1180,7 @@ const M_SHUTDOWN: &str = "knowledge.shutdown";
 const M_RUN: &str = "knowledge.run";
 const M_SEARCH: &str = "knowledge.search";
 const M_SEARCH_RERANK: &str = "knowledge.search_rerank";
+const M_GET_CHUNK: &str = "knowledge.get_chunk";
 
 const M_AIPLANE_RUN: &str = "aiplane.run";
 const M_AIPLANE_BATCH: &str = "aiplane.batch";
@@ -1058,6 +1196,7 @@ pub const AIPLANE_METHODS: &[&str] = &[M_AIPLANE_BATCH, M_AIPLANE_CANCEL, M_AIPL
 pub const KNOWLEDGE_METHODS: &[&str] = &[
     M_CANCEL,
     M_FULL_RESYNC,
+    M_GET_CHUNK,
     M_INDEX_NOW,
     M_PAUSE,
     M_REFRESH_SOURCES,
@@ -1124,12 +1263,16 @@ pub fn req_to_v1(req: &Req) -> (&'static str, serde_json::Value) {
             // method params — the bridge restamps it on the inverse
             // translation.
             priority: _,
+            filter,
+            abstain_threshold,
         } => (
             M_SEARCH,
             serde_json::json!({
                 "query": query,
                 "limit": limit,
                 "prefix": prefix,
+                "filter": filter,
+                "abstain_threshold": abstain_threshold,
             }),
         ),
         Req::SearchRerank {
@@ -1138,6 +1281,8 @@ pub fn req_to_v1(req: &Req) -> (&'static str, serde_json::Value) {
             prefix,
             candidates,
             priority: _,
+            filter,
+            abstain_threshold,
         } => (
             M_SEARCH_RERANK,
             serde_json::json!({
@@ -1145,8 +1290,11 @@ pub fn req_to_v1(req: &Req) -> (&'static str, serde_json::Value) {
                 "limit": limit,
                 "prefix": prefix,
                 "candidates": candidates,
+                "filter": filter,
+                "abstain_threshold": abstain_threshold,
             }),
         ),
+        Req::GetChunk { chunk_id } => (M_GET_CHUNK, serde_json::json!({ "chunk_id": chunk_id })),
     }
 }
 
@@ -1173,17 +1321,25 @@ pub fn try_method_to_req(method: &str, params: &serde_json::Value) -> Result<Opt
                 limit: usize,
                 #[serde(default)]
                 prefix: Option<String>,
+                #[serde(default)]
+                filter: Option<SearchFilter>,
+                #[serde(default)]
+                abstain_threshold: Option<f32>,
             }
             let SearchParams {
                 query,
                 limit,
                 prefix,
+                filter,
+                abstain_threshold,
             } = serde_json::from_value(params.clone()).map_err(|e| e.to_string())?;
             Ok(Some(Req::Search {
                 query,
                 limit,
                 prefix,
                 priority: default_search_priority(),
+                filter,
+                abstain_threshold,
             }))
         }
         M_SEARCH_RERANK => {
@@ -1194,12 +1350,18 @@ pub fn try_method_to_req(method: &str, params: &serde_json::Value) -> Result<Opt
                 #[serde(default)]
                 prefix: Option<String>,
                 candidates: usize,
+                #[serde(default)]
+                filter: Option<SearchFilter>,
+                #[serde(default)]
+                abstain_threshold: Option<f32>,
             }
             let RerankParams {
                 query,
                 limit,
                 prefix,
                 candidates,
+                filter,
+                abstain_threshold,
             } = serde_json::from_value(params.clone()).map_err(|e| e.to_string())?;
             Ok(Some(Req::SearchRerank {
                 query,
@@ -1207,7 +1369,18 @@ pub fn try_method_to_req(method: &str, params: &serde_json::Value) -> Result<Opt
                 prefix,
                 priority: default_search_priority(),
                 candidates,
+                filter,
+                abstain_threshold,
             }))
+        }
+        M_GET_CHUNK => {
+            #[derive(Deserialize)]
+            struct GetChunkParams {
+                chunk_id: String,
+            }
+            let GetChunkParams { chunk_id } =
+                serde_json::from_value(params.clone()).map_err(|e| e.to_string())?;
+            Ok(Some(Req::GetChunk { chunk_id }))
         }
         _ => Ok(None),
     }
@@ -1267,6 +1440,8 @@ mod tests {
             limit: 3,
             prefix: None,
             priority: Priority::Interactive,
+            filter: None,
+            abstain_threshold: None,
         };
         let s = serde_json::to_string(&r).unwrap();
         assert!(!s.contains("prefix"), "prefix=None must be omitted");
@@ -1280,6 +1455,8 @@ mod tests {
             prefix: None,
             candidates: 30,
             priority: Priority::Interactive,
+            filter: None,
+            abstain_threshold: None,
         };
         let s = serde_json::to_string(&r).unwrap();
         assert!(s.contains("\"req\":\"search-rerank\""));
@@ -1292,6 +1469,7 @@ mod tests {
                 candidates,
                 prefix,
                 priority: _,
+                ..
             } => {
                 assert_eq!(query, "Анна Лу");
                 assert_eq!(limit, 5);
@@ -1306,6 +1484,7 @@ mod tests {
     fn hit_row_embed_score_omitted_when_none() {
         let h = HitRow {
             score: 0.5,
+            chunk_id: String::new(),
             file_path: "/x".into(),
             chunk_index: 0,
             chunk_text: "".into(),
@@ -1392,6 +1571,8 @@ mod tests {
             prefix: Some("scope:".into()),
             candidates: 30,
             priority: Priority::Interactive,
+            filter: None,
+            abstain_threshold: None,
         };
         let (method, params) = req_to_v1(&r);
         assert_eq!(method, "knowledge.search_rerank");
@@ -1405,6 +1586,7 @@ mod tests {
                 prefix,
                 candidates,
                 priority: _,
+                ..
             } => {
                 assert_eq!(query, "Анна Лу");
                 assert_eq!(limit, 5);
@@ -1412,6 +1594,112 @@ mod tests {
                 assert_eq!(candidates, 30);
             }
             other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn getchunk_req_roundtrips() {
+        // REQ-10 fetch-by-id: `Req::GetChunk` survives the v1
+        // `(method, params)` round-trip with its `chunk_id` intact.
+        let r = Req::GetChunk {
+            chunk_id: "deadbeef-0000-1111-2222-333344445555".into(),
+        };
+        let (method, params) = req_to_v1(&r);
+        assert_eq!(method, "knowledge.get_chunk");
+        let back = try_method_to_req(method, &params)
+            .expect("ok")
+            .expect("some");
+        match back {
+            Req::GetChunk { chunk_id } => {
+                assert_eq!(chunk_id, "deadbeef-0000-1111-2222-333344445555");
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn search_req_roundtrips_with_filter_and_threshold() {
+        let filter = SearchFilter {
+            date_from: Some("2024-12-31T00:00:00Z".into()),
+            date_to: Some("2025-01-08T00:00:00Z".into()),
+            from: vec!["Анна".into()],
+            kind: vec!["telegram".into()],
+            include_sources: vec!["tg-main".into()],
+            exclude_sources: vec!["claude-transcripts".into()],
+            ..Default::default()
+        };
+        let r = Req::Search {
+            query: "новый год".into(),
+            limit: 5,
+            prefix: None,
+            priority: Priority::Interactive,
+            filter: Some(filter.clone()),
+            abstain_threshold: Some(0.5),
+        };
+        let s = serde_json::to_string(&r).expect("serialize");
+        let back: Req = serde_json::from_str(&s).expect("deserialize");
+        match back {
+            Req::Search {
+                filter: Some(f),
+                abstain_threshold: Some(t),
+                ..
+            } => {
+                assert_eq!(f, filter);
+                assert_eq!(t, 0.5);
+            }
+            other => panic!("wrong variant or missing fields: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resp_search_carries_confidence() {
+        let r = Resp::Search {
+            hits: Vec::new(),
+            confidence: 0.73,
+            abstained: true,
+        };
+        let s = serde_json::to_string(&r).expect("serialize");
+        let back: Resp = serde_json::from_str(&s).expect("deserialize");
+        match back {
+            Resp::Search {
+                confidence,
+                abstained,
+                ..
+            } => {
+                assert_eq!(confidence, 0.73);
+                assert!(abstained);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn method_to_req_parses_filter_params() {
+        let params = serde_json::json!({
+            "query": "новый год",
+            "limit": 5,
+            "filter": {
+                "date_from": "2024-12-31T00:00:00Z",
+                "kind": ["telegram"],
+                "exclude_sources": ["claude-transcripts"]
+            },
+            "abstain_threshold": 0.5
+        });
+        let back = try_method_to_req(M_SEARCH, &params)
+            .expect("ok")
+            .expect("some");
+        match back {
+            Req::Search {
+                filter: Some(f),
+                abstain_threshold: Some(t),
+                ..
+            } => {
+                assert_eq!(f.date_from.as_deref(), Some("2024-12-31T00:00:00Z"));
+                assert_eq!(f.kind, vec!["telegram".to_string()]);
+                assert_eq!(f.exclude_sources, vec!["claude-transcripts".to_string()]);
+                assert_eq!(t, 0.5);
+            }
+            other => panic!("wrong variant or missing fields: {other:?}"),
         }
     }
 
@@ -1460,6 +1748,8 @@ mod tests {
                 limit: 1,
                 prefix: None,
                 priority: Priority::Interactive,
+                filter: None,
+                abstain_threshold: None,
             },
             Req::SearchRerank {
                 query: "q".into(),
@@ -1467,6 +1757,11 @@ mod tests {
                 prefix: None,
                 candidates: 1,
                 priority: Priority::Interactive,
+                filter: None,
+                abstain_threshold: None,
+            },
+            Req::GetChunk {
+                chunk_id: "id".into(),
             },
         ] {
             emitted.insert(req_to_v1(&req).0);
@@ -1566,6 +1861,9 @@ mod tests {
                     },
                     Req::SearchRerank { .. } => Resp::Error {
                         msg: "search-rerank not exercised by smoke".into(),
+                    },
+                    Req::GetChunk { .. } => Resp::Error {
+                        msg: "get-chunk not exercised by smoke".into(),
                     },
                 };
                 let _ = tx.send(resp);
@@ -1688,6 +1986,7 @@ mod tests {
                         candidates,
                         prefix: _,
                         priority: _,
+                        ..
                     } => {
                         // Synthetic candidate set with descending
                         // cosine score so we can verify the rerank
@@ -1727,13 +2026,18 @@ mod tests {
                             .enumerate()
                             .map(|(i, (rerank, cos, path, doc))| HitRow {
                                 score: rerank,
+                                chunk_id: String::new(),
                                 file_path: path,
                                 chunk_index: i as u32,
                                 chunk_text: doc,
                                 embed_score: Some(cos),
                             })
                             .collect();
-                        Resp::Search { hits }
+                        Resp::Search {
+                            hits,
+                            confidence: default_search_confidence(),
+                            abstained: false,
+                        }
                     }
                     other => Resp::Error {
                         msg: format!("unexpected variant: {other:?}"),
@@ -1750,13 +2054,15 @@ mod tests {
                 prefix: None,
                 candidates: 10,
                 priority: Priority::Interactive,
+                filter: None,
+                abstain_threshold: None,
             },
             Priority::Interactive,
         )
         .expect("request");
 
         match resp {
-            Resp::Search { hits } => {
+            Resp::Search { hits, .. } => {
                 assert!(hits.len() <= 3, "limit truncation");
                 assert!(!hits.is_empty(), "non-empty result");
                 // Scores monotonically non-increasing.
@@ -1819,11 +2125,14 @@ mod tests {
                     Req::Search { query, .. } => Resp::Search {
                         hits: vec![HitRow {
                             score: 0.99,
+                            chunk_id: String::new(),
                             file_path: "/tmp/match.md".into(),
                             chunk_index: 0,
                             chunk_text: format!("hit for: {query}"),
                             embed_score: None,
                         }],
+                        confidence: default_search_confidence(),
+                        abstained: false,
                     },
                     _ => Resp::Error {
                         msg: "unexpected req in roundtrip test".into(),

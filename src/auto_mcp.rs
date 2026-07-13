@@ -29,6 +29,7 @@ pub enum McpAgent {
     Gemini,
     Codex,
     Goose,
+    Hermes,
     Antigravity,
     Agents,
 }
@@ -41,6 +42,7 @@ impl McpAgent {
             McpAgent::Gemini => "gemini",
             McpAgent::Codex => "codex",
             McpAgent::Goose => "goose",
+            McpAgent::Hermes => "hermes",
             McpAgent::Antigravity => "antigravity",
             McpAgent::Agents => "agents",
         }
@@ -53,6 +55,7 @@ impl McpAgent {
             McpAgent::Gemini => "Gemini CLI",
             McpAgent::Codex => "OpenAI Codex CLI",
             McpAgent::Goose => "Goose",
+            McpAgent::Hermes => "Hermes Agent",
             McpAgent::Antigravity => "Google Antigravity",
             McpAgent::Agents => "Custom agents (~/.agents/)",
         }
@@ -142,6 +145,18 @@ pub fn read_state(agent: McpAgent) -> Option<CurrentState> {
                 path,
             })
         }
+        McpAgent::Hermes => {
+            let hermes_home = home.join(".hermes");
+            if !hermes_home.is_dir() {
+                return None;
+            }
+            let path = hermes_home.join("config.yaml");
+            Some(CurrentState {
+                registered: read_hermes_entry(&path, SERVER_NAME),
+                writable: true,
+                path,
+            })
+        }
         McpAgent::Antigravity => {
             let p = home.join(".antigravity");
             if !p.is_dir() {
@@ -191,6 +206,7 @@ pub fn apply_add(agent: McpAgent, entry: &McpEntry) -> Result<bool> {
         }
         McpAgent::Codex => write_codex_entry(&state.path, SERVER_NAME, entry)?,
         McpAgent::Goose => write_goose_entry(&state.path, SERVER_NAME, entry)?,
+        McpAgent::Hermes => write_hermes_entry(&state.path, SERVER_NAME, entry)?,
         McpAgent::Antigravity | McpAgent::Agents => unreachable!(),
     }
     Ok(true)
@@ -212,6 +228,7 @@ pub fn apply_remove(agent: McpAgent) -> Result<bool> {
         }
         McpAgent::Codex => remove_codex_entry(&state.path, SERVER_NAME),
         McpAgent::Goose => remove_goose_entry(&state.path, SERVER_NAME),
+        McpAgent::Hermes => remove_hermes_entry(&state.path, SERVER_NAME),
         McpAgent::Antigravity | McpAgent::Agents => Ok(false),
     }
 }
@@ -521,6 +538,126 @@ fn remove_goose_entry(path: &Path, name: &str) -> Result<bool> {
     Ok(true)
 }
 
+// ── YAML (~/.hermes/config.yaml) ───────────────────────────────────────
+//
+// Hermes Agent registers MCP servers under a top-level `mcp_servers:` map,
+// with the shape:
+//   mcp_servers:
+//     sy-knowledge:
+//       command: <command>
+//       args: [knowledge, mcp]
+//       enabled: true
+// `config.yaml` is the agent's single mode-0600 config (provider settings,
+// display prefs, the lot), so the writer (a) round-trips the whole mapping
+// via `serde_yml` — matching the goose approach — and (b) preserves the
+// file's private permission bits instead of letting an atomic-rename widen
+// them to the umask default. We only ever toggle the one `mcp_servers`
+// entry; every other key the user (or `hermes`) authored survives.
+
+fn read_hermes_entry(path: &Path, name: &str) -> Option<McpEntry> {
+    if !path.is_file() {
+        return None;
+    }
+    let body = fs::read_to_string(path).ok()?;
+    let v: serde_yml::Value = serde_yml::from_str(&body).ok()?;
+    let entry = v.get("mcp_servers")?.get(name)?;
+    let command = entry.get("command").and_then(|x| x.as_str())?.to_string();
+    let args = entry
+        .get("args")
+        .and_then(|x| x.as_sequence())
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Some(McpEntry { command, args })
+}
+
+fn write_hermes_entry(path: &Path, name: &str, entry: &McpEntry) -> Result<()> {
+    use serde_yml::{Mapping, Value};
+    let mut root: Value = if path.is_file() {
+        let body = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        if body.trim().is_empty() {
+            Value::Mapping(Mapping::new())
+        } else {
+            serde_yml::from_str(&body).with_context(|| format!("parse {}", path.display()))?
+        }
+    } else {
+        Value::Mapping(Mapping::new())
+    };
+    let root_map = root
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow::anyhow!("{}: top-level is not a YAML mapping", path.display()))?;
+    let servers = root_map
+        .entry(Value::String("mcp_servers".into()))
+        .or_insert_with(|| Value::Mapping(Mapping::new()));
+    let servers = servers
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow::anyhow!("{}: `mcp_servers` is not a YAML mapping", path.display()))?;
+
+    // Mirror what `hermes mcp add` writes: command + args + enabled. We do
+    // not touch per-tool selection — `enabled: true` enables the server and
+    // Hermes manages tool toggles in its own state.
+    let mut e = Mapping::new();
+    e.insert(
+        Value::String("command".into()),
+        Value::String(entry.command.clone()),
+    );
+    let args_seq = entry
+        .args
+        .iter()
+        .map(|a| Value::String(a.clone()))
+        .collect();
+    e.insert(Value::String("args".into()), Value::Sequence(args_seq));
+    e.insert(Value::String("enabled".into()), Value::Bool(true));
+    servers.insert(Value::String(name.into()), Value::Mapping(e));
+
+    atomic_write_str_private(path, &serde_yml::to_string(&root)?)
+}
+
+fn remove_hermes_entry(path: &Path, name: &str) -> Result<bool> {
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let body = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let mut root: serde_yml::Value =
+        serde_yml::from_str(&body).with_context(|| format!("parse {}", path.display()))?;
+    let Some(servers) = root.get_mut("mcp_servers").and_then(|v| v.as_mapping_mut()) else {
+        return Ok(false);
+    };
+    let key = serde_yml::Value::String(name.into());
+    if servers.remove(&key).is_none() {
+        return Ok(false);
+    }
+    atomic_write_str_private(path, &serde_yml::to_string(&root)?)?;
+    Ok(true)
+}
+
+/// Like [`atomic_write_str`] but preserves the destination's existing Unix
+/// permission bits (falling back to 0600 for a fresh file). Used for private
+/// agent configs such as Hermes' `config.yaml` so an atomic rename never
+/// widens a mode-0600 file to the umask default.
+fn atomic_write_str_private(path: &Path, body: &str) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = fs::metadata(path)
+        .map(|m| m.permissions().mode() & 0o777)
+        .unwrap_or(0o600);
+    let tmp = path.with_extension(format!(
+        "{}.sy-tmp",
+        path.extension().and_then(|s| s.to_str()).unwrap_or("yaml")
+    ));
+    {
+        let mut f = File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
+        f.write_all(body.as_bytes())?;
+        f.sync_all()?;
+    }
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(mode))
+        .with_context(|| format!("chmod {}", tmp.display()))?;
+    fs::rename(&tmp, path).with_context(|| format!("rename to {}", path.display()))?;
+    Ok(())
+}
+
 // ── helpers ────────────────────────────────────────────────────────────
 
 fn home_dir() -> Option<PathBuf> {
@@ -562,6 +699,70 @@ pub const ALL_AGENTS: &[McpAgent] = &[
     McpAgent::Codex,
     McpAgent::Gemini,
     McpAgent::Goose,
+    McpAgent::Hermes,
     McpAgent::Antigravity,
     McpAgent::Agents,
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn entry() -> McpEntry {
+        McpEntry {
+            command: "/home/u/.local/bin/sy".into(),
+            args: vec!["knowledge".into(), "mcp".into()],
+        }
+    }
+
+    #[test]
+    fn hermes_round_trips_into_mcp_servers_map() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let cfg = dir.path().join("config.yaml");
+        // Seed a minimal pre-existing hermes config with unrelated keys
+        // that must survive the edit.
+        fs::write(&cfg, "model: ''\nproviders: {}\n").expect("seed");
+
+        assert!(read_hermes_entry(&cfg, SERVER_NAME).is_none());
+        write_hermes_entry(&cfg, SERVER_NAME, &entry()).expect("write");
+
+        let got = read_hermes_entry(&cfg, SERVER_NAME).expect("registered");
+        assert_eq!(got.command, "/home/u/.local/bin/sy");
+        assert_eq!(got.args, vec!["knowledge".to_string(), "mcp".to_string()]);
+
+        // Unrelated keys preserved, and the server is marked enabled.
+        let body = fs::read_to_string(&cfg).expect("read");
+        assert!(body.contains("providers"));
+        assert!(body.contains("enabled: true"));
+    }
+
+    #[test]
+    fn hermes_preserves_private_0600_mode() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let cfg = dir.path().join("config.yaml");
+        fs::write(&cfg, "model: ''\n").expect("seed");
+        fs::set_permissions(&cfg, fs::Permissions::from_mode(0o600)).expect("chmod");
+
+        write_hermes_entry(&cfg, SERVER_NAME, &entry()).expect("write");
+
+        let mode = fs::metadata(&cfg).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "atomic rewrite must not widen a private config");
+    }
+
+    #[test]
+    fn hermes_remove_is_idempotent() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let cfg = dir.path().join("config.yaml");
+        fs::write(&cfg, "model: ''\n").expect("seed");
+
+        // Removing when absent is a no-op.
+        assert!(!remove_hermes_entry(&cfg, SERVER_NAME).expect("remove-absent"));
+
+        write_hermes_entry(&cfg, SERVER_NAME, &entry()).expect("write");
+        assert!(remove_hermes_entry(&cfg, SERVER_NAME).expect("remove"));
+        assert!(read_hermes_entry(&cfg, SERVER_NAME).is_none());
+        // Second remove is a no-op again.
+        assert!(!remove_hermes_entry(&cfg, SERVER_NAME).expect("remove-again"));
+    }
+}

@@ -13,6 +13,12 @@ command = "goose"
 args = ["acp"]
 version_args = ["--version"]
 
+[[agent]]
+name = "hermes"
+command = "hermes"
+args = ["acp"]
+version_args = ["--version"]
+
 # Uncomment after installing the corresponding CLI:
 #
 # [[agent]]

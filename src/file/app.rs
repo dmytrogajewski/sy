@@ -3,20 +3,20 @@
 //! Unlike `sy mon` (which is a layer-shell popup, see
 //! [`crate::mon::app`]), `sy file` is a normal xdg-toplevel window —
 //! it tiles inside niri, takes focus, and can be Mod+E-spawned like
-//! any other GUI. We use plain [`iced::application`] here, NOT
+//! any other GUI. We use plain `iced::application` here, NOT
 //! `iced_layershell::application`, exactly so niri can tile us
 //! alongside Firefox / Alacritty / wezterm.
 //!
 //! ## Scope through Step 24 (this module)
 //!
-//! - Spin up the window (1280×800, gruvbox-dark, title `sy file —
-//!   <cwd>`), paint the responsive layout ladder (Step 24), exit
+//! - Spin up the window (1280×800, gruvbox-dark, title
+//!   `sy file — <cwd>`), paint the responsive layout ladder (Step 24), exit
 //!   cleanly on close.
 //! - Provide a headless harness ([`run_headless_once`]) that exercises
 //!   the `boot → update(Tick) → view()` lifecycle without a display
 //!   server so the journey-J1 250 ms wall-clock budget can be
 //!   asserted on a CI worker that has no compositor.
-//! - Reduce [`Message::WindowResized`] events to a [`LayoutMode`]
+//! - Reduce [`Message::WindowResized`] events to a [`super::state::LayoutMode`]
 //!   transition. The width thresholds (SPEC §3.2 row 2) live in
 //!   [`super::view::mode_for_width`]; the reducer is the single point
 //!   the `state.mode` ever changes.
@@ -66,7 +66,7 @@ pub enum Message {
     /// IPC frames, etc.). For now it's the headless-harness anchor.
     Tick,
     /// Initial cwd from `sy file [PATH]`. The reducer plants it on
-    /// the current pane so the title bar's "sy file — <cwd>"
+    /// the current pane so the title bar's "sy file — `<cwd>`"
     /// rendering ([`view`]) reflects the launch argument.
     Loaded(PathBuf),
     /// Window dimensions changed (`width, height` in logical pixels).
@@ -252,18 +252,21 @@ fn resolve_preview(state: &mut State) -> Task<Message> {
     match super::view::preview::kind_for(&mime) {
         super::view::preview::PreviewKind::Image => {
             let p = path.clone();
-            Task::perform(super::view::preview::image::load(path), move |res| match res {
-                Ok((path, _handle)) => Message::PreviewResolved {
-                    path,
-                    payload: super::state::PreviewPayload::Image,
+            Task::perform(
+                super::view::preview::image::load(path),
+                move |res| match res {
+                    Ok((path, _handle)) => Message::PreviewResolved {
+                        path,
+                        payload: super::state::PreviewPayload::Image,
+                    },
+                    Err(_) => Message::PreviewResolved {
+                        path: p.clone(),
+                        payload: super::state::PreviewPayload::Info(
+                            super::view::preview::format_file_info(&p),
+                        ),
+                    },
                 },
-                Err(_) => Message::PreviewResolved {
-                    path: p.clone(),
-                    payload: super::state::PreviewPayload::Info(
-                        super::view::preview::format_file_info(&p),
-                    ),
-                },
-            })
+            )
         }
         super::view::preview::PreviewKind::Text => {
             let p = path.clone();
@@ -285,11 +288,9 @@ fn resolve_preview(state: &mut State) -> Task<Message> {
             let p = path.clone();
             Task::perform(
                 async move {
-                    tokio::task::spawn_blocking(move || {
-                        super::view::preview::format_file_info(&p)
-                    })
-                    .await
-                    .unwrap_or_default()
+                    tokio::task::spawn_blocking(move || super::view::preview::format_file_info(&p))
+                        .await
+                        .unwrap_or_default()
                 },
                 move |body| Message::PreviewResolved {
                     path: path.clone(),
@@ -306,7 +307,10 @@ fn resolve_preview(state: &mut State) -> Task<Message> {
 fn refresh_panes(cwd: &std::path::Path) -> Task<Message> {
     let current = cwd.to_path_buf();
     let parent = cwd.parent().map(|p| p.to_path_buf());
-    let mut tasks = vec![Task::perform(walk_for_pane(PaneId::Current, current), |m| m)];
+    let mut tasks = vec![Task::perform(
+        walk_for_pane(PaneId::Current, current),
+        |m| m,
+    )];
     if let Some(p) = parent {
         tasks.push(Task::perform(walk_for_pane(PaneId::Parent, p), |m| m));
     }
@@ -493,13 +497,7 @@ pub fn update(state: &mut State, msg: Message) -> Task<Message> {
             Task::none()
         }
         Message::CursorTo(id) => {
-            if let Some(idx) = state
-                .panes
-                .current
-                .entries
-                .iter()
-                .position(|e| e.id == id)
-            {
+            if let Some(idx) = state.panes.current.entries.iter().position(|e| e.id == id) {
                 state.panes.current.cursor = idx;
             }
             resolve_preview(state)

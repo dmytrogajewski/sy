@@ -215,7 +215,7 @@ impl std::error::Error for RpcError {}
 /// Functions in this module are async because they post a request
 /// onto the runtime's outbound writer and await the matching response
 /// in the supervisor's request-id table. The runtime gives each
-/// plugin author a [`HostHandle`] reference at handler-call time via
+/// plugin author a [`crate::runtime::HostHandle`] reference at handler-call time via
 /// the macro DSL; reach for these helpers through that handle.
 pub mod host {
     use super::RpcError;

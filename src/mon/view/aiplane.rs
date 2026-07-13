@@ -2,7 +2,7 @@
 //! gauges, and a p99 latency sparkline across kinds.
 //!
 //! Bar count matches the snapshot's `queue_depth` `BTreeMap` cardinality;
-//! one [`Op::FillRect`] per workload kind. Warm-pool size per kind renders
+//! one `Op::FillRect` per workload kind. Warm-pool size per kind renders
 //! as a small gauge below the bar so an operator can see at a glance
 //! which workload is over-subscribed.
 

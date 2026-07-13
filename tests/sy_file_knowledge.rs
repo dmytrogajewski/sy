@@ -35,6 +35,7 @@ pub mod knowledge {
         #[derive(Debug, Clone)]
         pub struct HitRow {
             pub score: f32,
+            pub chunk_id: String,
             pub file_path: String,
             pub chunk_index: u32,
             pub chunk_text: String,
@@ -93,6 +94,7 @@ async fn end_to_end_with_stubbed_qdrant() {
     let canned = vec![
         HitRow {
             score: 0.91,
+            chunk_id: String::new(),
             file_path: "/sources/sy/src/aiplane/ipc.rs".to_owned(),
             chunk_index: 0,
             chunk_text: "tuned override carrier".to_owned(),
@@ -100,6 +102,7 @@ async fn end_to_end_with_stubbed_qdrant() {
         },
         HitRow {
             score: 0.83,
+            chunk_id: String::new(),
             file_path: "/sources/sy/src/file/app.rs".to_owned(),
             chunk_index: 0,
             chunk_text: "Step 30 reducer arm".to_owned(),

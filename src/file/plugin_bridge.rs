@@ -23,7 +23,7 @@
 //!    so the GUI layer never sees the base64 wire shape.
 //!
 //! Plugin crash handling: when [`PluginProc::request`] returns an
-//! [`RpcError`] the bridge evicts the supervisor from the cache and
+//! `RpcError` the bridge evicts the supervisor from the cache and
 //! surfaces [`BridgeError::PluginCrashed`]. The dispatcher's calling
 //! site (Step 27 [`crate::file::view::preview`]) routes the fall-back
 //! into the built-in syntect text path per the Step 27 DoD
@@ -68,7 +68,7 @@ pub enum BridgeError {
     NoMatch,
     /// Looking up the plugin succeeded but spawning / handshaking
     /// failed (binary missing, sandbox refused, …). Carries the
-    /// upstream [`RpcError`] for diagnostics; the view treats this the
+    /// upstream `RpcError` for diagnostics; the view treats this the
     /// same as `PluginCrashed` (fall back to built-in text).
     SpawnFailed(String),
     /// The plugin crashed mid-request or returned a peer error. The
@@ -183,7 +183,7 @@ impl PluginBridge {
     }
 
     /// Send `preview` to the plugin (spawning it on cache miss). On
-    /// [`RpcError`] the supervisor is evicted from the cache so the
+    /// `RpcError` the supervisor is evicted from the cache so the
     /// next hover re-handshakes a fresh child.
     async fn request_preview(
         &self,
