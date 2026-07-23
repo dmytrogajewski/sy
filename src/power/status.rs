@@ -343,7 +343,7 @@ pub fn format_waybar(
     // BUG-20260712-1530: the waybar `onboarding` class + "learning Xd
     // Yh" countdown must track the daemon's live gate, not the bar
     // process's own re-computation.
-    let (onboarding, target_days) = effective_onboarding(resp, cfg, onboarding);
+    let (onboarding, _target_days) = effective_onboarding(resp, cfg, onboarding);
     let onboarding = &onboarding;
     let arm = applied_arm_or_baseline(resp, cfg, shield);
     let baseline =
@@ -356,7 +356,7 @@ pub fn format_waybar(
         .map(|(_, s)| *s as f64)
         .unwrap_or(0.0);
     let class = waybar_class(&resp.drift, shield, onboarding, &arm, &baseline);
-    let text = waybar_text(class, &arm, ucb, onboarding, target_days);
+    let text = waybar_text(class, &arm, ucb, onboarding);
     let tooltip = format!(
         "arm: {arm}\nshield: {shield_s}\nucb: {ucb:.2}\nbaseline: {baseline}",
         shield_s = shield.as_str(),
@@ -421,24 +421,14 @@ fn waybar_class(
 
 /// Render the per-class text shape documented in the Step 32
 /// implementation guidance. The onboarding form surfaces the
-/// days-remaining countdown (target_days − days_collected) plus the
-/// residual hours so the operator can answer "when does the ML kick
-/// in" without opening `--json`.
-fn waybar_text(
-    class: WaybarClass,
-    arm: &str,
-    ucb: f64,
-    onboarding: &OnboardingStatus,
-    target_days: u32,
-) -> String {
+/// remaining-time countdown so the operator can answer "when does the
+/// ML kick in" without opening `--json`.
+fn waybar_text(class: WaybarClass, arm: &str, ucb: f64, onboarding: &OnboardingStatus) -> String {
     match class {
         WaybarClass::Drift => "sy: retraining".to_string(),
         WaybarClass::Meeting => "sy: call".to_string(),
         WaybarClass::Onboarding => {
-            let target = target_days as i64;
-            let collected = onboarding.days_collected as i64;
-            let days_left = (target - collected).max(0);
-            let hours_left = onboarding_hours_remainder(onboarding);
+            let (days_left, hours_left) = onboarding_countdown(onboarding);
             format!("sy: learning {days_left}d {hours_left}h")
         }
         WaybarClass::Rules => format!("sy: {arm}"),
@@ -447,13 +437,17 @@ fn waybar_text(
     }
 }
 
-/// Hour-of-day residual between `now` and `onboarding.ready_at`.
-/// Caps at 0 so a clock-skew event that lands `ready_at` in the past
-/// doesn't render a negative `Xh` in the bar pill.
-fn onboarding_hours_remainder(onboarding: &OnboardingStatus) -> i64 {
+/// `(days, hours)` remaining until `onboarding.ready_at`, both split
+/// from the SAME `ready_at - now` delta (BUG-20260720-2358: deriving
+/// days from `target_days - days_collected` ceils the remaining time
+/// — `days_collected` floors the *elapsed* delta — so gluing it to
+/// this hour residual double-counted the partial day). Caps at 0 so a
+/// clock-skew event that lands `ready_at` in the past doesn't render
+/// a negative countdown in the bar pill.
+fn onboarding_countdown(onboarding: &OnboardingStatus) -> (i64, i64) {
     let delta = onboarding.ready_at - chrono::Utc::now();
     let total_hours = delta.num_hours().max(0);
-    total_hours % 24
+    (total_hours / 24, total_hours % 24)
 }
 
 /// "learning Xd Yh" hint for callers outside the `custom/sy-power`
@@ -461,14 +455,11 @@ fn onboarding_hours_remainder(onboarding: &OnboardingStatus) -> i64 {
 /// Returns `None` once onboarding is complete so the tooltip drops
 /// the line cleanly without per-caller arithmetic. Pure-fn so a unit
 /// test can pin both branches without filesystem state.
-pub fn onboarding_hint(onboarding: &OnboardingStatus, cfg: &PowerConfig) -> Option<String> {
+pub fn onboarding_hint(onboarding: &OnboardingStatus) -> Option<String> {
     if !onboarding.active {
         return None;
     }
-    let target = cfg.onboarding.days as i64;
-    let collected = onboarding.days_collected as i64;
-    let days_left = (target - collected).max(0);
-    let hours_left = onboarding_hours_remainder(onboarding);
+    let (days_left, hours_left) = onboarding_countdown(onboarding);
     Some(format!("learning {days_left}d {hours_left}h"))
 }
 
@@ -489,7 +480,7 @@ pub fn live_onboarding_hint() -> Option<String> {
         cfg.onboarding.days,
         anchor,
     );
-    onboarding_hint(&onboarding, &cfg)
+    onboarding_hint(&onboarding)
 }
 
 /// Daemon-down soft-error envelope. The Step 32 implementation
@@ -1099,8 +1090,8 @@ mod tests {
     /// Step 32 DoD: the waybar JSON pill on `sy power status --waybar`
     /// carries `class="onboarding"` while the onboarding window is
     /// active, and the `text` slot includes the days-remaining hint
-    /// (`target_days - days_collected`). With `days_collected=3` and
-    /// the default 14-day window, the hint must include `"11d"`.
+    /// derived from `ready_at - now` (BUG-20260720-2358). With 11d 1h
+    /// until `ready_at`, the hint must include `"11d"`.
     #[test]
     fn waybar_class_onboarding_during_first_14d() {
         const DAYS_COLLECTED: u32 = 3;
@@ -1110,7 +1101,7 @@ mod tests {
         let onb = OnboardingStatus {
             active: true,
             days_collected: DAYS_COLLECTED,
-            ready_at: chrono::Utc::now() + chrono::Duration::days(11),
+            ready_at: chrono::Utc::now() + chrono::Duration::days(11) + chrono::Duration::hours(1),
         };
         let out = format_waybar(&resp, &cfg, ShieldState::CoolAc, &onb);
         let v: Value = serde_json::from_str(&out).expect("waybar JSON parses");
@@ -1132,9 +1123,9 @@ mod tests {
         let onb_active = OnboardingStatus {
             active: true,
             days_collected: 3,
-            ready_at: chrono::Utc::now() + chrono::Duration::days(11),
+            ready_at: chrono::Utc::now() + chrono::Duration::days(11) + chrono::Duration::hours(1),
         };
-        let hint = onboarding_hint(&onb_active, &cfg).expect("active hint");
+        let hint = onboarding_hint(&onb_active).expect("active hint");
         assert!(
             hint.starts_with("learning ") && hint.contains("11d"),
             "active hint should mention the 11d remainder: {hint}"
@@ -1145,7 +1136,47 @@ mod tests {
             days_collected: cfg.onboarding.days,
             ready_at: chrono::Utc::now(),
         };
-        assert_eq!(onboarding_hint(&onb_done, &cfg), None);
+        assert_eq!(onboarding_hint(&onb_done), None);
+    }
+
+    /// BUG-20260720-2358: the countdown must derive BOTH components
+    /// from the single `ready_at - now` delta. The buggy shape glued
+    /// `target_days - days_collected` (a floor of *elapsed*, hence a
+    /// ceil of *remaining*) to the hour residual of the true delta,
+    /// double-counting the partial day: 13.65 days into a 14-day
+    /// window (8.5h remaining) it rendered "1d 8h" instead of "0d 8h".
+    #[test]
+    fn onboarding_hint_counts_down_from_ready_at() {
+        let onb = OnboardingStatus {
+            active: true,
+            days_collected: 13,
+            ready_at: chrono::Utc::now() + chrono::Duration::hours(8) + chrono::Duration::minutes(30),
+        };
+        let hint = onboarding_hint(&onb).expect("active hint");
+        assert_eq!(
+            hint, "learning 0d 8h",
+            "8.5h remaining must render 0d 8h, not double-count the partial day",
+        );
+    }
+
+    /// BUG-20260720-2358: same double-count through the waybar pill —
+    /// the `text` slot must render the true remaining time.
+    #[test]
+    fn waybar_onboarding_text_counts_down_from_ready_at() {
+        let cfg = PowerConfig::default();
+        let resp = empty_response();
+        let onb = OnboardingStatus {
+            active: true,
+            days_collected: 13,
+            ready_at: chrono::Utc::now() + chrono::Duration::hours(8) + chrono::Duration::minutes(30),
+        };
+        let out = format_waybar(&resp, &cfg, ShieldState::CoolAc, &onb);
+        let v: Value = serde_json::from_str(&out).expect("waybar JSON parses");
+        assert_eq!(v["class"], "onboarding");
+        assert_eq!(
+            v["text"], "sy: learning 0d 8h",
+            "8.5h remaining must render 0d 8h in the pill",
+        );
     }
 
     /// Step 32: precedence test — `shield_state == Meeting` must
