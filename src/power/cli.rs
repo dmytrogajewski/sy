@@ -1271,8 +1271,13 @@ fn train_cmd(in_path: Option<PathBuf>, out_path: Option<PathBuf>) -> Result<()> 
     }
     match super::trainer::retrain_gru(&in_path, &out_path) {
         Ok(report) => {
+            let excluded = if report.excluded_classes.is_empty() {
+                String::new()
+            } else {
+                format!(" excluded={}", report.excluded_classes.join(","))
+            };
             println!(
-                "sy power train: ok rows={} epochs={} loss={:.3} val_acc={:.3} sha={} wall_ms={} out={}",
+                "sy power train: ok rows={} epochs={} loss={:.3} val_acc={:.3} sha={} wall_ms={} out={}{excluded}",
                 report.rows_used,
                 report.epochs,
                 report.final_loss,

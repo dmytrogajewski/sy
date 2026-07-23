@@ -463,4 +463,20 @@ mod tests {
             "retention > window is fine",
         );
     }
+
+    /// BUG-20260723-2210 follow-up: the production defaults must not
+    /// trip the guard rail — a stock install should never boot into
+    /// the "retention sweep starves the onboarding window" WARN the
+    /// live host logged on every IPC tick.
+    #[test]
+    fn default_retention_covers_default_onboarding_window() {
+        assert!(
+            retention_guard(
+                crate::power::log::DEFAULT_RETENTION_DAYS,
+                crate::power::config::DEFAULT_ONBOARDING_DAYS,
+            )
+            .is_none(),
+            "default retention must cover the default onboarding window",
+        );
+    }
 }

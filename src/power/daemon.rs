@@ -176,6 +176,11 @@ impl RetrainTrigger for SpawnBlockingRetrainTrigger {
         tokio::task::spawn_blocking(move || {
             match crate::power::trainer::retrain_gru(&telemetry, &out) {
                 Ok(report) => {
+                    let excluded: Vec<String> = report
+                        .excluded_classes
+                        .iter()
+                        .map(|s| (*s).to_string())
+                        .collect();
                     tracing::info!(
                         target: "sy::power::daemon",
                         rows = report.rows_used,
@@ -184,9 +189,18 @@ impl RetrainTrigger for SpawnBlockingRetrainTrigger {
                         wall_ms = report.wall_time_ms as u64,
                         version_sha = %report.version_sha,
                         cause = ?cause,
+                        excluded_classes = ?excluded,
                         "trainer retrain completed",
                     );
-                    publish_model_status(&model_status, crate::power::ipc::ModelStatus::default());
+                    // BUG-20260723-2210: a partial train keeps its
+                    // blind spots visible on `sy power status` —
+                    // excluded classes publish as missing_classes.
+                    publish_model_status(
+                        &model_status,
+                        crate::power::ipc::ModelStatus {
+                            missing_classes: excluded,
+                        },
+                    );
                 }
                 Err(e) => {
                     log_and_publish_retrain_error(&model_status, cause, &e);

@@ -60,7 +60,13 @@ pub const SCHEMA_ID: &str = "sy.power.audit/v1";
 pub const DEFAULT_MAX_SIZE_BYTES: u64 = 200 * 1024 * 1024;
 
 /// Default retention horizon. SPEC §4 "Migration & Compatibility".
-pub const DEFAULT_RETENTION_DAYS: u32 = 7;
+/// Must be ≥ [`crate::power::config::DEFAULT_ONBOARDING_DAYS`]
+/// (BUG-20260723-2210 follow-up): a shorter horizon lets the retention
+/// sweep delete raw telemetry before the onboarding gate can trip,
+/// and the daemon WARNs about the mismatch on every IPC tick. At the
+/// observed ~58–82 MiB/day this is ~1 GiB worst-case on disk, inside
+/// the [`MIN_FREE_BYTES`] guard's comfort zone.
+pub const DEFAULT_RETENTION_DAYS: u32 = 14;
 
 /// Refuse to write when the mountpoint has less than this much free
 /// space. SPEC §4 "Migration & Compatibility" — the daemon must never
@@ -817,13 +823,13 @@ mod tests {
         let today = at(2026, 5, 19, 12, 0, 0).date_naive();
         let mut kept = Vec::new();
         let mut gone = Vec::new();
-        for offset in 0..9_i64 {
+        for offset in 0..(DEFAULT_RETENTION_DAYS as i64 + 2) {
             let day = today - chrono::Duration::days(offset);
             let p = root.join(format!("telemetry-{day}.ndjson"));
             fs::write(&p, "{}\n").unwrap();
-            // "Older than 7 days" is strictly more than 7 days:
-            // cutoff = today − 7, delete iff `day < cutoff`. Offsets
-            // 0..=7 are within the window (kept); offset 8+ falls
+            // "Older than N days" is strictly more than N days:
+            // cutoff = today − N, delete iff `day < cutoff`. Offsets
+            // 0..=N are within the window (kept); offset N+1 falls
             // outside (deleted).
             if offset <= DEFAULT_RETENTION_DAYS as i64 {
                 kept.push(p);
@@ -860,8 +866,8 @@ mod tests {
         let root = tmp.path().join("power");
         fs::create_dir_all(&root).unwrap();
         let today = at(2026, 5, 19, 12, 0, 0).date_naive();
-        // 8 days ago is outside the 7-day window → base + overflow gone.
-        let old = today - chrono::Duration::days(8);
+        // One day past the retention window → base + overflow gone.
+        let old = today - chrono::Duration::days(DEFAULT_RETENTION_DAYS as i64 + 1);
         let old_base = root.join(format!("telemetry-{old}.ndjson"));
         let old_ovf = root.join(format!("telemetry-{old}.1.ndjson"));
         // Today is inside the window → base + overflow kept.
