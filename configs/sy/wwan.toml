@@ -1,0 +1,37 @@
+# managed by `sy wwan` — mobile-broadband (WWAN / 4G-LTE) profiles.
+#
+# Each [[profile]] is reconciled into a NetworkManager `gsm` connection
+# named `sy-wwan-<name>` by `sy wwan enable`. sy owns exactly the
+# connections it creates (the `sy-wwan-` prefix); your hand-made
+# NetworkManager profiles are never touched.
+#
+# The APN is the one setting your carrier requires. For most SIMs the
+# username/password are empty — leave them unset. Do NOT commit real
+# secrets here; NetworkManager stores them in its own keystore. If your
+# carrier needs credentials, set them once with:
+#   nmcli connection modify sy-wwan-<name> gsm.username U gsm.password P
+#
+# Look up your SIM's operator/APN after inserting it:
+#   mmcli -L          # find the modem
+#   mmcli -m 0        # operator name, registration, signal
+#
+# Fibocom L850-GL / Intel XMM7360 ("Vertell 4G") with a MegaFon SIM.
+#
+# IMPORTANT: this modem must be in MBIM mode for a stable link. Out of the
+# box it enumerated as USB id 8087:095a (Intel generic, NCM+ACM) and
+# ModemManager drove it as legacy AT+PPP dialup, which runs PPP over the
+# AT control port; MM's follow-up AT commands then time out, MM marks the
+# modem invalid, and NB re-dials in a loop — the modem churned every ~25s.
+# `sy wwan modeswitch --yes` switches it to MBIM (AT+GTUSBMODE=7): it then
+# re-enumerates as 2cb7:0007 (Fibocom L850-GL) exposing cdc_mbim/cdc-wdm0,
+# MM picks the `fibocom` plugin, the bearer becomes `method: static`, and
+# the link is rock-stable. The switch persists across power cycles, so it
+# is a one-time operation per modem. With MBIM in place, autoconnect is
+# safe.
+[[profile]]
+name = "megafon"
+apn = "internet"
+autoconnect = true
+# home_only = true refuses to attach while roaming (avoids surprise
+# roaming charges). false allows data on visited networks.
+home_only = false

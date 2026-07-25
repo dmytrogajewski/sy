@@ -57,6 +57,7 @@ mod vol;
 mod wallpaper;
 mod waybar;
 mod wifi;
+mod wwan;
 
 /// sy — apply niri rice configs with themes and templating.
 #[derive(Parser)]
@@ -261,6 +262,20 @@ enum Cmd {
     Fido {
         /// enable | disable | status (default: status)
         action: Option<String>,
+    },
+    /// Mobile-broadband (WWAN / 4G-LTE USB modem) plane: declares carrier
+    /// APN profiles in `configs/sy/wwan.toml` and reconciles them into
+    /// NetworkManager `gsm` connections.
+    /// Subcommands: enable | disable | up | down | status (+ `--json`).
+    Wwan {
+        /// enable | disable | up | down | status | modeswitch (default: status)
+        action: Option<String>,
+        /// Emit machine-readable JSON (status only).
+        #[arg(long)]
+        json: bool,
+        /// Confirm the one-time, persistent MBIM mode switch (modeswitch only).
+        #[arg(long)]
+        yes: bool,
     },
     /// Silent hours — quiet output during a configurable time window.
     Silent {
@@ -524,6 +539,7 @@ fn run() -> Result<()> {
         Cmd::Pwr { waybar } => pwr::run(waybar),
         Cmd::Power { cmd } => power::dispatch(cmd),
         Cmd::Fido { action } => fido::run(action.as_deref()),
+        Cmd::Wwan { action, json, yes } => wwan::run(action.as_deref(), json, yes),
         Cmd::Silent { action, waybar } => silent::run(action.as_deref(), waybar),
         Cmd::Snd { action } => match action.as_str() {
             "login" => sound::login(),

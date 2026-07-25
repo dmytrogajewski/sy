@@ -11,6 +11,7 @@ enum Action {
     Nmtui,
     ConnUp(String),
     ConnDown(String),
+    WwanUp(String),
     Wifi(String),
 }
 
@@ -78,6 +79,19 @@ pub fn menu() -> Result<()> {
                 Action::ConnDown(name.clone())
             } else {
                 Action::ConnUp(name.clone())
+            },
+        ));
+    }
+
+    for (name, up) in saved_wwan(&active) {
+        let mark = if up { "*" } else { " " };
+        let verb = if up { "down" } else { "up  " };
+        items.push((
+            format!("{mark} wwan {verb}  {name}"),
+            if up {
+                Action::ConnDown(name.clone())
+            } else {
+                Action::WwanUp(name.clone())
             },
         ));
     }
@@ -154,6 +168,23 @@ pub fn menu() -> Result<()> {
             );
             Ok(())
         }
+        Action::WwanUp(name) => {
+            // A gsm device stays `unavailable` while the wwan radio is off, so
+            // the activation would fail with "no suitable device". Flip it on
+            // first (idempotent) before dialling.
+            let _ = Command::new("nmcli")
+                .args(["radio", "wwan", "on"])
+                .status();
+            let ok = Command::new("nmcli")
+                .args(["connection", "up", "id", &name])
+                .status()?
+                .success();
+            wifi::notify(
+                "net",
+                &format!("{name} up{}", if ok { "" } else { " (failed)" }),
+            );
+            Ok(())
+        }
         Action::Wifi(ssid) => wifi::connect(&ssid),
     }
 }
@@ -205,6 +236,19 @@ fn active_connections() -> Vec<(String, String, String)> {
 }
 
 fn saved_vpns(active: &[(String, String, String)]) -> Vec<(String, bool)> {
+    saved_by_type(active, |t| t == "vpn" || t == "wireguard")
+}
+
+fn saved_wwan(active: &[(String, String, String)]) -> Vec<(String, bool)> {
+    saved_by_type(active, |t| t == "gsm")
+}
+
+/// List saved connections whose TYPE matches `want`, each paired with whether
+/// it is currently active. Shared by the VPN and WWAN menu sections.
+fn saved_by_type(
+    active: &[(String, String, String)],
+    want: impl Fn(&str) -> bool,
+) -> Vec<(String, bool)> {
     let Some(out) = Command::new("nmcli")
         .args(["-t", "-f", "NAME,TYPE", "connection", "show"])
         .output()
@@ -213,15 +257,53 @@ fn saved_vpns(active: &[(String, String, String)]) -> Vec<(String, bool)> {
         return Vec::new();
     };
     let up: HashSet<&str> = active.iter().map(|(n, _, _)| n.as_str()).collect();
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
+    parse_saved_by_type(&String::from_utf8_lossy(&out.stdout), &up, &want)
+}
+
+/// Pure parser for `nmcli -t -f NAME,TYPE connection show` output: keep the
+/// rows whose type satisfies `want`, tagging each with its active state.
+fn parse_saved_by_type(
+    out: &str,
+    up: &HashSet<&str>,
+    want: &impl Fn(&str) -> bool,
+) -> Vec<(String, bool)> {
+    out.lines()
         .filter_map(|l| {
             let p = wifi::parse_colon_fields(l);
             if p.len() < 2 {
                 return None;
             }
-            let is_vpn = p[1] == "vpn" || p[1] == "wireguard";
-            is_vpn.then(|| (p[0].clone(), up.contains(p[0].as_str())))
+            want(&p[1]).then(|| (p[0].clone(), up.contains(p[0].as_str())))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wwan_rows_are_selected_and_active_state_tagged() {
+        let out = "watson:802-11-wireless\nsy-wwan-megafon:gsm\nDigitalocean-USA:vpn\n";
+        let up: HashSet<&str> = ["sy-wwan-megafon"].into_iter().collect();
+        let gsm = parse_saved_by_type(out, &up, &|t| t == "gsm");
+        assert_eq!(gsm, vec![("sy-wwan-megafon".to_string(), true)]);
+    }
+
+    #[test]
+    fn inactive_wwan_is_offered_as_bring_up() {
+        let out = "sy-wwan-megafon:gsm\n";
+        let up: HashSet<&str> = HashSet::new();
+        let gsm = parse_saved_by_type(out, &up, &|t| t == "gsm");
+        assert_eq!(gsm, vec![("sy-wwan-megafon".to_string(), false)]);
+    }
+
+    #[test]
+    fn vpn_and_wireguard_types_match_but_gsm_does_not() {
+        let out = "wg0:wireguard\ncorp:vpn\nsy-wwan-megafon:gsm\n";
+        let up: HashSet<&str> = HashSet::new();
+        let vpns = parse_saved_by_type(out, &up, &|t| t == "vpn" || t == "wireguard");
+        let names: Vec<&str> = vpns.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["wg0", "corp"]);
+    }
 }

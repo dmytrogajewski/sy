@@ -65,6 +65,15 @@
 # `Cmd::File { path, cmd }` clap variant (six-line docstring + two
 # positional/`#[command(subcommand)]` fields) + dispatch arm; heavy
 # lifting lives in `src/file/cli.rs::dispatch`. Running total: 1097.
+# Plus 13 lines for the sy-wwan roadmap (4G/LTE modem plane): `mod
+# wwan;` declaration + `Cmd::Wwan { action, json }` clap variant
+# (four-line docstring + two fields) + dispatch arm; heavy lifting
+# (config parse, `nmcli` reconcile, `mmcli` status) lives in
+# `src/wwan.rs`. Running total: 1110. Plus 3 lines for the
+# `sy wwan modeswitch --yes` gate (the `--yes` clap field + docstring
+# on `Cmd::Wwan`, destructured in the one-line dispatch shim); the
+# AT+GTUSBMODE orchestration lives in `src/wwan.rs` +
+# `scripts/wwan_modeswitch.py`. Running total: 1113.
 # Pass a lower value as $1 when later zones extract logic out of
 # main.rs and the budget should ratchet.
 #
