@@ -31,7 +31,7 @@ eval:
 	cargo run --quiet -- knowledge eval --json
 
 lint:
-	./scripts/check_main_rs_loc.sh 1113
+	./scripts/check_main_rs_loc.sh 1118
 	cargo clippy --workspace --all-targets -- -D warnings
 
 fmt:

@@ -18,7 +18,7 @@
     // sy-mon's ground; the power orchestrator's onboarding hint
     // (`sy: learning Xd Yh`) now surfaces on hover of the `custom/pwr`
     // (perf) tile's tooltip instead of as its own permanent slot.
-    "modules-right":  ["cpu", "memory", "custom/sy-gpu", "custom/sy-npu", "custom/sy-disk", "custom/sy-silent", "custom/sy-vol", "custom/sy-bl", "custom/sy-knowledge", "custom/agents", "custom/bt", "network", "custom/notif", "clock", "custom/sy-syauth", "custom/pwr", "custom/sy-bat"],
+    "modules-right":  ["cpu", "memory", "custom/sy-gpu", "custom/sy-npu", "custom/sy-disk", "custom/sy-silent", "custom/sy-vol", "custom/sy-bl", "custom/sy-knowledge", "custom/agents", "custom/bt", "network", "custom/sy-portal", "custom/notif", "clock", "custom/sy-syauth", "custom/pwr", "custom/sy-bat"],
 
     "niri/workspaces": {
         "format": "{value}",
@@ -50,6 +50,22 @@
         "tooltip-format-disconnected": "disconnected\nleft-click: network menu · right-click: nmtui",
         "on-click": "{{ home }}/.local/bin/sy net",
         "on-click-right": "{{ home }}/.local/bin/sy popup nmtui"
+    },
+
+    // Captive-portal / no-internet indicator. Hidden (zero width) whenever any
+    // uplink has real internet; shows ⚠ when wifi or gsm is behind a captive
+    // portal (login / top-up required) or connected without a route out.
+    // Left-click opens a plain-HTTP page to surface the portal; right-click
+    // opens the network menu. interval=10 reads NM's cached per-device
+    // connectivity (no extra probe traffic).
+    "custom/sy-portal": {
+        "exec":           "{{ home }}/.local/bin/sy net --waybar",
+        "return-type":    "json",
+        "interval":       10,
+        "signal":         17,
+        "tooltip":        true,
+        "on-click":       "xdg-open http://neverssl.com",
+        "on-click-right": "{{ home }}/.local/bin/sy net"
     },
 
     "custom/agents": {

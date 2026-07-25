@@ -152,8 +152,13 @@ enum Cmd {
     Cal,
     /// Fuzzel-based wifi picker via nmcli
     Wifi,
-    /// Fuzzel-based network dropdown (wifi, VPN, toggles, nmtui)
-    Net,
+    /// Fuzzel network dropdown (wifi, VPN, WWAN, toggles); `--waybar` emits
+    /// the captive-portal indicator tile as JSON.
+    Net {
+        /// Emit the captive-portal / no-internet indicator as waybar JSON.
+        #[arg(long)]
+        waybar: bool,
+    },
     /// Copy the running sy binary into ~/.local/bin (real file, SELinux-safe)
     Install,
     /// Open the rendered Telegram palette in Telegram Desktop to apply it
@@ -501,7 +506,7 @@ fn run() -> Result<()> {
         Cmd::Popup { key } => popup::toggle(&key),
         Cmd::Cal => cal::run(),
         Cmd::Wifi => wifi::pick(),
-        Cmd::Net => net::menu(),
+        Cmd::Net { waybar } => net::run(waybar),
         Cmd::Install => install(false),
         Cmd::TgTheme => tg_theme(),
         Cmd::Wallpaper {

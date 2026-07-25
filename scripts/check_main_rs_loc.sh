@@ -73,7 +73,11 @@
 # `sy wwan modeswitch --yes` gate (the `--yes` clap field + docstring
 # on `Cmd::Wwan`, destructured in the one-line dispatch shim); the
 # AT+GTUSBMODE orchestration lives in `src/wwan.rs` +
-# `scripts/wwan_modeswitch.py`. Running total: 1113.
+# `scripts/wwan_modeswitch.py`. Running total: 1113. Plus 5 lines to
+# grow `Cmd::Net` from a unit variant into `Net { waybar }` (docstring
+# + `--waybar` flag) so `sy net --waybar` can emit the captive-portal
+# indicator tile; the classifier + JSON live in `src/net.rs`. Running
+# total: 1118.
 # Pass a lower value as $1 when later zones extract logic out of
 # main.rs and the budget should ratchet.
 #
