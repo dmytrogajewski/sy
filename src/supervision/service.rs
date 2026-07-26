@@ -24,7 +24,7 @@ use clap::Subcommand;
 ///   sy service start aiplane                # systemctl --user start sy-aiplane.service
 ///   sy service status knowledge --json      # machine-readable §4.5 state
 ///   sy service logs aiplane -f -n 200       # journalctl --user -u … -f -n 200
-///   sy service logs agentd --trace <uuid>   # filter by SY_TRACE_ID=<uuid>
+///   sy service logs agentd --trace `<uuid>`   # filter by SY_TRACE_ID=`<uuid>`
 ///   sy service enable sy.target             # enable the whole group
 #[derive(Debug, Subcommand)]
 pub enum ServiceCmd {

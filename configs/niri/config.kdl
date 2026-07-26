@@ -199,11 +199,17 @@ window-rule {
 // --- Keybindings ------------------------------------------------------------
 binds {
     Mod+Shift+Slash { show-hotkey-overlay; }
-    Mod+Slash        { spawn-sh "P=/tmp/sy-cheatsheet.pid; if [ -s $P ] && kill -0 $(cat $P) 2>/dev/null; then kill $(cat $P); rm -f $P; else waybar -c ~/.config/waybar/cheatsheet.jsonc -s ~/.config/waybar/style.css & echo $! > $P; fi"; }
+    // Roadmap Step 34 (SPEC §3.3 item 18 + journey J1): `Mod+Slash`
+    // launches `sy file` on `$HOME` as an alternative to `Mod+E`. The
+    // legacy cheatsheet popup is gone — `Mod+Shift+Slash` already
+    // shows niri's native hotkey overlay, so the third binding was
+    // redundant. Operators who relied on the floating cheatsheet can
+    // still reach it via `waybar -c ~/.config/waybar/cheatsheet.jsonc`
+    // by hand; the productivised binding is the file manager now.
+    Mod+Slash        { spawn "{{ home }}/.local/bin/sy" "file" "--ipc" "open" "~"; }
 
     // Launchers
     Mod+Return       { spawn "foot"; }
-    Mod+N            { spawn "foot" "-e" "yazi"; }
     Mod+D            { spawn "fuzzel"; }
     Mod+Shift+D      { spawn-sh "fuzzel --dmenu --prompt='» '"; }
     Mod+C            { spawn-sh "cliphist list | fuzzel --dmenu --prompt='clip » ' | cliphist decode | wl-copy"; }
@@ -216,8 +222,15 @@ binds {
     // Session
     Mod+Shift+Q      { close-window; }
     Mod+Shift+C      { spawn "niri" "msg" "action" "load-config-file"; }
-    // Logout jingle plays first; the sound itself is the confirmation cue.
-    Mod+Shift+E      { spawn-sh "{{ home }}/.local/bin/sy snd logout && niri msg action quit --skip-confirmation"; }
+    // Roadmap Step 34 (SPEC §3.3 item 18 + journey J1): `Mod+Shift+E`
+    // launches `sy file` rooted at the niri process's PWD (typically
+    // `$HOME` — niri's argv-spawned cwd is the user-session cwd at
+    // login). The legacy logout jingle + quit chord moved to
+    // `Mod+Shift+G` (symmetric with the new column-centre on `Mod+G`
+    // below; G is "go" — go-home / go-quit). Logout jingle plays
+    // first; the sound itself is the confirmation cue.
+    Mod+Shift+E      { spawn "{{ home }}/.local/bin/sy" "file" "--ipc" "open" "."; }
+    Mod+Shift+G      { spawn-sh "{{ home }}/.local/bin/sy snd logout && niri msg action quit --skip-confirmation"; }
 
     // Focus
     Mod+H            { focus-column-left; }
@@ -270,7 +283,14 @@ binds {
     Mod+B            { consume-or-expel-window-right; }
     Mod+V            { consume-or-expel-window-left; }
     Mod+W            { toggle-column-tabbed-display; }
-    Mod+E            { center-column; }
+    // Roadmap Step 34 (SPEC §3.3 item 18 + journey J1): `Mod+E` now
+    // launches `sy file` on `$HOME` (the journey-J1 entry point).
+    // The legacy `center-column` action moved to `Mod+G` — adjacent
+    // on the keyboard and free of any other binding. Operators rolling
+    // their own keymap can swap back in `~/.config/niri/config.kdl`
+    // (which `sy apply` only rewrites when the contents drift).
+    Mod+E            { spawn "{{ home }}/.local/bin/sy" "file" "--ipc" "open" "~"; }
+    Mod+G            { center-column; }
     Mod+F            { maximize-column; }
     Mod+Shift+F      { fullscreen-window; }
     Mod+Shift+Space  { toggle-window-floating; }

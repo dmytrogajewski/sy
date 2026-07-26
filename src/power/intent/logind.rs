@@ -15,14 +15,19 @@
 //!    case-insensitively (casing varies by app).
 //!
 //! Step 5 ships the pure-fn classifier + a `zbus::blocking`-backed
-//! `LogindChannel` that drains a single pending event per `poll()`
-//! call. Background subscription to `PrepareForSleep` /
-//! `PropertyChanged` lands together with the daemon loop in Step 10 —
-//! today, the channel re-polls `ListInhibitors` on every `poll()`
-//! tick, which is fine for the 1 Hz daemon cadence.
+//! `LogindChannel`. `poll()` reports the **level**, not an edge: it
+//! re-runs `ListInhibitors` every tick and returns `CallActive`
+//! whenever a whitelisted idle-inhibitor is currently held, and `None`
+//! the moment it is released. `call_active` in the snapshot must track
+//! the lock being held for its full duration (BUG-20260712-1200) — an
+//! earlier `last_emitted` de-dup collapsed the signal to a single
+//! grab-edge tick, so telemetry saw `call_active` flip false while the
+//! inhibitor was still held. The `InhibitorSource` seam abstracts the
+//! bus call so the level semantics are testable without a live system
+//! bus. Background subscription to `PrepareForSleep` / `PropertyChanged`
+//! is deferred; at 1 Hz re-polling adds no observable latency.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 
@@ -128,20 +133,48 @@ pub fn classify_inhibitor(what: &str, who: &str, whitelist: &Whitelist) -> Optio
     None
 }
 
-/// Stateful logind inhibitor channel. Holds a `zbus::blocking`
-/// connection + the loaded whitelist; `poll()` calls `ListInhibitors`,
-/// classifies each entry, and returns the first new `CallActive`
-/// event. The "background subscriber" plumbing (PrepareForSleep +
-/// PropertyChanged) lives in Step 10 — at 1 Hz daemon cadence,
-/// re-polling on the tick is sufficient and adds no observable
-/// latency vs an epoll-driven subscription.
+/// One row of `ListInhibitors()`: `(what, who, why, mode, uid, pid)`.
+type InhibitorEntry = (String, String, String, String, u32, u32);
+
+/// Source of the currently-held inhibitor list. Abstracted so
+/// `LogindChannel::poll` is a pure level read — testable without a
+/// live system bus (BUG-20260712-1200's level regression test injects
+/// a scripted source). `Send + Sync` so `LogindChannel` keeps the same
+/// auto-trait shape it had when it stored a `zbus` proxy directly.
+trait InhibitorSource: Send + Sync {
+    /// Snapshot the inhibitors held right now. A bus error surfaces as
+    /// `Err(ListInhibitorsFailed)`; `poll` degrades that to "no lock
+    /// held" so a transient bus hiccup can't pin `call_active` true.
+    fn list(&self) -> Result<Vec<InhibitorEntry>, LogindError>;
+}
+
+/// Production [`InhibitorSource`] — one `ListInhibitors` round-trip
+/// over the `zbus::blocking` system-bus proxy.
+struct ZbusInhibitorSource {
+    proxy: zbus::blocking::Proxy<'static>,
+}
+
+impl InhibitorSource for ZbusInhibitorSource {
+    fn list(&self) -> Result<Vec<InhibitorEntry>, LogindError> {
+        self.proxy
+            .call("ListInhibitors", &())
+            .map_err(|_| LogindError::ListInhibitorsFailed)
+    }
+}
+
+/// Stateful logind inhibitor channel. Holds the loaded whitelist + an
+/// [`InhibitorSource`]; `poll()` lists the currently-held inhibitors,
+/// classifies each entry, and returns `CallActive` whenever a
+/// whitelisted idle-inhibitor is held — the **level**, re-derived from
+/// the bus every tick. There is no cross-tick de-dup: a sustained lock
+/// reports `CallActive` on every tick it is held, and `None` the tick
+/// it is released, so downstream `call_active` tracks the lock's full
+/// lifetime (BUG-20260712-1200). The "background subscriber" plumbing
+/// (PrepareForSleep + PropertyChanged) is deferred — at 1 Hz daemon
+/// cadence re-polling adds no observable latency.
 pub struct LogindChannel {
     whitelist: Whitelist,
-    proxy: zbus::blocking::Proxy<'static>,
-    /// Tracks the `who` of the last emitted event so a sustained
-    /// inhibitor doesn't re-fire `CallActive` every tick. Cleared
-    /// when the inhibitor disappears.
-    last_emitted: Arc<Mutex<Option<String>>>,
+    source: Box<dyn InhibitorSource>,
 }
 
 impl LogindChannel {
@@ -157,52 +190,92 @@ impl LogindChannel {
             .map_err(|_| LogindError::BusUnreachable)?;
         Ok(Self {
             whitelist,
-            proxy,
-            last_emitted: Arc::new(Mutex::new(None)),
+            source: Box::new(ZbusInhibitorSource { proxy }),
         })
-    }
-
-    /// One ListInhibitors round-trip → first whitelist match.
-    fn poll_bus(&self) -> Result<Option<IntentEvent>, LogindError> {
-        let entries: Vec<(String, String, String, String, u32, u32)> = self
-            .proxy
-            .call("ListInhibitors", &())
-            .map_err(|_| LogindError::ListInhibitorsFailed)?;
-        for (what, who, _why, _mode, _uid, _pid) in &entries {
-            if let Some(ev) = classify_inhibitor(what, who, &self.whitelist) {
-                return Ok(Some(ev));
-            }
-        }
-        Ok(None)
     }
 }
 
 impl IntentChannel for LogindChannel {
+    /// Level read: `Some(CallActive { who })` while a whitelisted
+    /// idle-inhibitor is held, `None` otherwise. A bus error degrades
+    /// to `None` (no lock held) rather than latching the previous
+    /// value.
     fn poll(&mut self) -> Option<IntentEvent> {
-        let next = self.poll_bus().ok().flatten();
-        let mut slot = self.last_emitted.lock().ok()?;
-        match (&next, slot.as_deref()) {
-            // No active inhibitor → reset state, emit nothing.
-            (None, _) => {
-                *slot = None;
-                None
-            }
-            // Already reported this exact `who` last tick → suppress.
-            (Some(IntentEvent::CallActive { who }), Some(prev)) if who == prev => None,
-            // New (or changed) inhibitor → emit + remember.
-            (Some(IntentEvent::CallActive { who }), _) => {
-                *slot = Some(who.clone());
-                Some(IntentEvent::CallActive { who: who.clone() })
-            }
-            // Defensive: classifier never returns non-CallActive events.
-            (Some(other), _) => Some(other.clone()),
-        }
+        let entries = self.source.list().ok()?;
+        entries
+            .iter()
+            .find_map(|(what, who, ..)| classify_inhibitor(what, who, &self.whitelist))
+    }
+}
+
+#[cfg(test)]
+impl LogindChannel {
+    /// Construct a channel over an injected [`InhibitorSource`] so the
+    /// level-semantics tests can script the held-inhibitor list without
+    /// a live system bus.
+    fn with_source(whitelist: Whitelist, source: Box<dyn InhibitorSource>) -> Self {
+        Self { whitelist, source }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// Scripted [`InhibitorSource`]: reports a single held `zoom`
+    /// idle-inhibitor while `held` is true, an empty list once the flag
+    /// flips — models a whitelisted app grabbing then releasing
+    /// `Inhibit("idle")`.
+    struct HeldSource {
+        held: Arc<AtomicBool>,
+    }
+
+    impl InhibitorSource for HeldSource {
+        fn list(&self) -> Result<Vec<InhibitorEntry>, LogindError> {
+            if self.held.load(Ordering::SeqCst) {
+                Ok(vec![(
+                    "idle".to_string(),
+                    "zoom".to_string(),
+                    "In a meeting".to_string(),
+                    "block".to_string(),
+                    1000,
+                    4242,
+                )])
+            } else {
+                Ok(Vec::new())
+            }
+        }
+    }
+
+    /// BUG-20260712-1200: `call_active` is a LEVEL, not a one-tick
+    /// edge. A held whitelisted idle-inhibitor must make `poll()` return
+    /// `CallActive` on EVERY tick it is held (not just the grab edge),
+    /// and `None` only once the inhibitor is released. Under the old
+    /// `last_emitted` de-dup the second poll returned `None` while the
+    /// lock was still held, so telemetry saw `call_active` flip false
+    /// after a single tick with no observable release edge.
+    #[test]
+    fn call_active_is_level_across_ticks() {
+        let held = Arc::new(AtomicBool::new(true));
+        let mut ch = LogindChannel::with_source(
+            canonical_whitelist(),
+            Box::new(HeldSource { held: held.clone() }),
+        );
+        // Held for many ticks → CallActive every single tick.
+        for tick in 0..12 {
+            assert!(
+                matches!(ch.poll(), Some(IntentEvent::CallActive { .. })),
+                "tick {tick}: held inhibitor must report CallActive (level)",
+            );
+        }
+        // Release → the very next poll is None (release edge visible).
+        held.store(false, Ordering::SeqCst);
+        assert_eq!(ch.poll(), None, "released inhibitor must clear call_active");
+        // Still None on subsequent ticks — no latched stale value.
+        assert_eq!(ch.poll(), None);
+    }
 
     /// The four canonical Step 5 whitelist entries (SPEC §2). Keeps
     /// the test independent of `configs/sy/intent_whitelist.toml`
@@ -339,5 +412,27 @@ mod tests {
         let wl = Whitelist::load(Path::new("/nonexistent/intent_whitelist.toml"))
             .expect("missing file is non-fatal");
         assert!(wl.call.who.is_empty());
+    }
+
+    /// Regression test for BUG-20260608-2244: `LogindChannel::new` opens
+    /// a `zbus::blocking` connection, and the powerd daemon constructs it
+    /// from `build_live_intent` while already driving a `current_thread`
+    /// tokio runtime. With zbus's `tokio` feature the blocking `block_on`
+    /// built its own runtime and aborted the process with "Cannot start a
+    /// runtime from within a runtime"; with the `async-io` backend it is
+    /// runtime-agnostic and safe. A live system bus is not required —
+    /// `Err(BusUnreachable)` (CI / minimal containers) is an acceptable,
+    /// non-panicking outcome; only a panic is the regression.
+    #[test]
+    fn new_does_not_panic_inside_tokio_runtime() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current-thread runtime");
+        rt.block_on(async {
+            // The result is intentionally discarded: success and
+            // BusUnreachable are both fine; a panic is the failure.
+            let _ = LogindChannel::new(Path::new("/nonexistent/intent_whitelist.toml"));
+        });
     }
 }

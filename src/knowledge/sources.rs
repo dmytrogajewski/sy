@@ -67,6 +67,49 @@ pub enum SourceMode {
     Discover,
 }
 
+/// What kind of corpus a source holds. Drives per-kind indexing
+/// pipelines (later steps) and default-scope exclusion (e.g.
+/// `claude-transcripts` is excluded from default search). Auto-classified
+/// from the path on insert; see [`classify_kind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+#[clap(rename_all = "kebab-case")]
+pub enum SourceKind {
+    Telegram,
+    ClaudeTranscripts,
+    /// Session logs / history / caches under an agent's dotfile home
+    /// (`~/.claude`, `~/.codex`, `~/.cursor`, `~/.gemini`, `~/.agents`,
+    /// `~/.antigravity`, `~/.hermes`). This is the agent's OWN output, so it
+    /// is default-excluded from search to prevent self-poisoning — the model
+    /// quoting its own prior answers as if they were the user's data. Still
+    /// searchable on explicit opt-in (`kind:["agent-history"]`).
+    AgentHistory,
+    Email,
+    Slack,
+    Notes,
+    Code,
+    #[default]
+    Generic,
+}
+
+impl SourceKind {
+    /// Kebab-case wire string (matches the serde `rename_all` form). This is
+    /// what lands in the qdrant `kind` payload and what Step 11
+    /// default-excludes (`claude-transcripts`).
+    pub fn as_kebab(self) -> &'static str {
+        match self {
+            SourceKind::Telegram => "telegram",
+            SourceKind::ClaudeTranscripts => "claude-transcripts",
+            SourceKind::AgentHistory => "agent-history",
+            SourceKind::Email => "email",
+            SourceKind::Slack => "slack",
+            SourceKind::Notes => "notes",
+            SourceKind::Code => "code",
+            SourceKind::Generic => "generic",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Source {
     pub path: String,
@@ -74,10 +117,60 @@ pub struct Source {
     pub enabled: bool,
     #[serde(default)]
     pub mode: SourceMode,
+    /// Stable, human-friendly identifier (used by `include_sources` /
+    /// `exclude_sources`). Defaults to the path's last component.
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub kind: SourceKind,
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// Auto-classify a source by its path. Heuristics are intentionally
+/// narrow this iteration: only `claude-transcripts` (path contains
+/// `.claude/projects`) and `telegram` (path contains `telegram`, or a
+/// `result.json` / `ChatExport` export marker) are precise; everything
+/// else is [`SourceKind::Generic`].
+pub(crate) fn classify_kind(path: &str) -> SourceKind {
+    let lower = path.to_ascii_lowercase();
+    if lower.contains(".claude/projects") {
+        return SourceKind::ClaudeTranscripts;
+    }
+    // Any file under a known agent dotfile home is that agent's own session
+    // history / cache → AgentHistory (default-excluded from search). Checked
+    // before the telegram/Generic fall-through so e.g. a `result.json` an
+    // agent happened to write under `~/.codex` is still treated as agent
+    // history, not a Telegram export.
+    const AGENT_HOMES: &[&str] = &[
+        "/.claude/",
+        "/.codex/",
+        "/.cursor/",
+        "/.gemini/",
+        "/.agents/",
+        "/.antigravity/",
+        "/.hermes/",
+    ];
+    if AGENT_HOMES.iter().any(|home| lower.contains(home)) {
+        return SourceKind::AgentHistory;
+    }
+    if lower.contains("telegram") || lower.contains("result.json") || lower.contains("chatexport") {
+        return SourceKind::Telegram;
+    }
+    SourceKind::Generic
+}
+
+/// Derive a stable, deterministic source name from a path: its last
+/// non-empty component, or the whole path if it has none.
+fn default_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|c| c.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(path)
+        .to_string()
 }
 
 /// Locate the sy repo root. Walks up from cwd; falls back to ~/sources/sy.
@@ -147,6 +240,8 @@ pub fn add(path: &Path, disabled: bool, mode: SourceMode) -> Result<bool> {
         return Ok(false);
     }
     k.sources.push(Source {
+        name: default_name(&abs),
+        kind: classify_kind(&abs),
         path: abs,
         enabled: !disabled,
         mode,
@@ -244,10 +339,10 @@ fn same_path(a: &str, b: &str) -> bool {
     fs::canonicalize(&pa).unwrap_or(pa) == fs::canonicalize(&pb).unwrap_or(pb)
 }
 
-/// Atomically rewrite sy.toml's [knowledge] section in-place, preserving
+/// Atomically rewrite sy.toml's `[knowledge]` section in-place, preserving
 /// every comment, blank line, and ordering. We edit existing fields in
 /// place where possible and only insert/remove keys that actually changed,
-/// so leading-comment decoration on the [knowledge] table itself survives.
+/// so leading-comment decoration on the `[knowledge]` table itself survives.
 fn write(section: &KnowledgeSection) -> Result<()> {
     use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
 
@@ -307,6 +402,14 @@ fn write(section: &KnowledgeSection) -> Result<()> {
             let mut t = Table::new();
             t.insert("path", value(s.path.clone()));
             t.insert("enabled", value(s.enabled));
+            // Only emit `name`/`kind` when set / non-default, so pre-existing
+            // `[[knowledge.sources]]` rows stay byte-identical on rewrite.
+            if !s.name.is_empty() {
+                t.insert("name", value(s.name.clone()));
+            }
+            if s.kind != SourceKind::Generic {
+                t.insert("kind", value(s.kind.as_kebab()));
+            }
             // Only emit `mode` when non-default, to keep sy.toml tidy for
             // pre-existing `[[knowledge.sources]]` entries.
             if s.mode != SourceMode::Explicit {
@@ -369,6 +472,21 @@ pub fn discover_roots() -> Result<Vec<PathBuf>> {
         .filter(|s| s.enabled && s.mode == SourceMode::Discover)
         .map(|s| expand(&s.path).unwrap_or_else(|_| PathBuf::from(s.path)))
         .collect())
+}
+
+/// Resolve the [`SourceKind`] for an (expanded) source root. Prefers a
+/// registered source's stored `kind`; falls back to path classification so
+/// manifest-discovered / ad-hoc roots still get a kind. Defaults to
+/// [`SourceKind::Generic`] when nothing matches.
+pub fn kind_for_path(root: &Path) -> SourceKind {
+    if let Ok(k) = load() {
+        for s in &k.sources {
+            if same_path(&s.path, &root.display().to_string()) {
+                return s.kind;
+            }
+        }
+    }
+    classify_kind(&root.display().to_string())
 }
 
 /// Whether shallow-`$HOME` (depth ≤ 2) auto-discovery is on. Defaults to
@@ -436,4 +554,110 @@ pub fn set_mcp_enabled(value: bool) -> Result<()> {
     let mut k = load()?;
     k.mcp_enabled = Some(value);
     write(&k)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kind_auto_classifies_claude_projects() {
+        assert_eq!(
+            classify_kind("~/.claude/projects/foo/bar.jsonl"),
+            SourceKind::ClaudeTranscripts
+        );
+    }
+
+    #[test]
+    fn kind_auto_classifies_telegram_export() {
+        assert_eq!(
+            classify_kind("~/knowledge/telegram/ChatExport_2024/result.json"),
+            SourceKind::Telegram
+        );
+    }
+
+    #[test]
+    fn kind_defaults_to_generic_for_unknown_paths() {
+        assert_eq!(classify_kind("~/notes/journal"), SourceKind::Generic);
+    }
+
+    #[test]
+    fn classify_transcript_file_under_projects() {
+        // A transcript file deep under a `~/.claude` manifest root must
+        // classify as ClaudeTranscripts from its OWN full path (REQ-1
+        // regression: per-file kind, not per-job-root kind).
+        assert_eq!(
+            classify_kind("/home/dmitriy/.claude/projects/abc/sess.jsonl"),
+            SourceKind::ClaudeTranscripts
+        );
+    }
+
+    #[test]
+    fn classify_claude_settings_is_agent_history_not_transcripts() {
+        // A non-projects file directly under `.claude` is NOT a transcript,
+        // but it IS the agent's own dotfile content → AgentHistory (default-
+        // excluded from search), not Generic.
+        assert_eq!(
+            classify_kind("/home/dmitriy/.claude/settings.json"),
+            SourceKind::AgentHistory
+        );
+    }
+
+    #[test]
+    fn classify_agent_dotfile_homes_as_agent_history() {
+        for p in [
+            "/home/dmitriy/.claude/paste-cache/x.txt",
+            "/home/dmitriy/.codex/.tmp/plugins/y.md",
+            "/home/dmitriy/.cursor/projects/p/agent-tools/z.txt",
+            "/home/dmitriy/.gemini/history/h.jsonl",
+            "/home/dmitriy/.hermes/sessions/s.json",
+        ] {
+            assert_eq!(classify_kind(p), SourceKind::AgentHistory, "{p}");
+        }
+        // A real personal Telegram export is unaffected.
+        assert_eq!(
+            classify_kind("/home/dmitriy/knowledge/telegram/result.json"),
+            SourceKind::Telegram
+        );
+    }
+
+    #[test]
+    fn classify_telegram_file_path() {
+        assert_eq!(
+            classify_kind("/home/dmitriy/knowledge/telegram/export/result.json"),
+            SourceKind::Telegram
+        );
+    }
+
+    #[test]
+    fn default_name_is_last_path_component() {
+        assert_eq!(default_name("~/knowledge/telegram"), "telegram");
+    }
+
+    #[test]
+    fn source_toml_roundtrips_with_name_and_kind() {
+        let src = Source {
+            path: "~/knowledge/telegram".to_string(),
+            enabled: true,
+            mode: SourceMode::Explicit,
+            name: "telegram".to_string(),
+            kind: SourceKind::Telegram,
+        };
+        let serialised = toml::to_string(&src).expect("serialise");
+        let back: Source = toml::from_str(&serialised).expect("deserialise");
+        assert_eq!(back.name, "telegram");
+        assert_eq!(back.kind, SourceKind::Telegram);
+    }
+
+    #[test]
+    fn old_source_row_without_name_or_kind_still_loads() {
+        // A pre-Step-1 sy.toml row: only path/enabled/mode.
+        let old = r#"path = "~/docs"
+enabled = true
+"#;
+        let src: Source = toml::from_str(old).expect("back-compat deserialise");
+        assert_eq!(src.name, "");
+        assert_eq!(src.kind, SourceKind::Generic);
+        assert!(src.enabled);
+    }
 }

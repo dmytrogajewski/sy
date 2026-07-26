@@ -120,6 +120,12 @@ pub fn detectors() -> Vec<Detector> {
             probe: probe_mcp_goose,
         },
         Detector {
+            id: "mcp-hermes",
+            label: "Wire `sy-knowledge` MCP into Hermes Agent (~/.hermes/config.yaml)",
+            default_on: true,
+            probe: probe_mcp_hermes,
+        },
+        Detector {
             id: "mcp-antigravity",
             label: "Wire `sy-knowledge` MCP into Google Antigravity",
             default_on: false,
@@ -615,6 +621,15 @@ fn probe_agent_histories(env: &ProbeEnv) -> Vec<Suggestion> {
         // loop where searches surface cached search results.
         "**/tool-results/mcp-sy-knowledge-*".into(),
         "**/tool_results/mcp-sy-knowledge-*".into(),
+        // Transient / pasted / third-party junk observed polluting the index:
+        // pasted clipboard dumps (Claude), scratch tmp trees (Codex), bundled
+        // plugin docs, and per-session agent-tool logs (Cursor). None of these
+        // are the user's own knowledge; they only add noise + encrypted blobs.
+        "**/paste-cache/**".into(),
+        "**/.tmp/**".into(),
+        "**/tmp/**".into(),
+        "**/plugins/**".into(),
+        "**/agent-tools/**".into(),
     ];
     for (rel, label) in &[
         (".claude", "claude"),
@@ -623,6 +638,7 @@ fn probe_agent_histories(env: &ProbeEnv) -> Vec<Suggestion> {
         (".cursor", "cursor"),
         (".antigravity", "antigravity"),
         (".agents", "agents"),
+        (".hermes", "hermes"),
     ] {
         let folder = env.home.join(rel);
         if !folder.is_dir() {
@@ -719,6 +735,7 @@ fn mcp_suggestion(agent: McpAgent, _env: &ProbeEnv) -> Vec<Suggestion> {
         McpAgent::Codex => "mcp-codex",
         McpAgent::Gemini => "mcp-gemini",
         McpAgent::Goose => "mcp-goose",
+        McpAgent::Hermes => "mcp-hermes",
         McpAgent::Antigravity => "mcp-antigravity",
         McpAgent::Agents => "mcp-agents",
     };
@@ -804,6 +821,10 @@ fn probe_mcp_gemini(env: &ProbeEnv) -> Vec<Suggestion> {
 
 fn probe_mcp_goose(env: &ProbeEnv) -> Vec<Suggestion> {
     mcp_suggestion(McpAgent::Goose, env)
+}
+
+fn probe_mcp_hermes(env: &ProbeEnv) -> Vec<Suggestion> {
+    mcp_suggestion(McpAgent::Hermes, env)
 }
 
 fn probe_mcp_antigravity(env: &ProbeEnv) -> Vec<Suggestion> {

@@ -16,4 +16,4 @@ pub mod dfa;
 pub mod project;
 
 pub use dfa::{transition, ShieldState};
-pub use project::{project, ThrashTracker};
+pub use project::{project, project_forced, ThrashTracker};

@@ -17,15 +17,16 @@
 //!
 //! `xrt-smi` is shelled out via the [`CommandRunner`] trait so tests
 //! never touch the real binary; hermetic test fixtures inject
-//! [`MockRunner`] and assert call counts + arg shape.
+//! `MockRunner` and assert call counts + arg shape.
 
 use std::fmt;
 use std::path::Path;
 use std::process::Command;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 use super::super::bandit::NpuPmode;
 use super::{Actuator, Applied};
@@ -64,7 +65,7 @@ impl std::error::Error for NpuError {}
 
 /// Abstract shell-out so tests can assert call counts + arg shape
 /// without invoking the real binary. The production impl is
-/// [`SystemRunner`]; tests build [`MockRunner`].
+/// [`SystemRunner`]; tests build `MockRunner`.
 pub trait CommandRunner: Send + Sync {
     /// Run `cmd args…`. Returns `Ok(())` on exit code 0;
     /// `Err(NpuError::XrtSmiFailed)` on non-zero with captured stderr.
@@ -138,6 +139,78 @@ const IOCTL_PERMISSION_PATTERNS: &[&str] = &["Permission denied", "err=-13", "IO
 /// the lowest-impact value to write during startup.
 const PROBE_RUNTIME_VALUE: &str = "default";
 
+/// Basename of the persisted probe cache under the power state dir.
+const PROBE_CACHE_FILE: &str = "npu-probe-cache.json";
+
+/// Process-level memo so repeated actuator constructions in one process
+/// reuse the first probe verdict instead of re-shelling to `xrt-smi`.
+static PROCESS_PROBE: OnceLock<XrtSmiProbe> = OnceLock::new();
+
+/// Persisted result of the two-phase `xrt-smi` pmode probe. Written by
+/// the daemon's real (`SystemRunner`) probe; read by every later
+/// process (daemon restart, and any `probe_cached` caller) so the probe
+/// runs at most once per `(binary, mtime)` generation. `runtime_stderr`
+/// carries the captured runtime-phase diagnostic so the NPU-lever gap
+/// (help advertises `--pmode`, the amdxdna IOCTL denies it) stays
+/// inspectable without re-running the probe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedProbe {
+    xrt_smi_path: String,
+    mtime_unix_ns: u128,
+    flag: Option<String>,
+    runtime_stderr: String,
+}
+
+/// Locate the `xrt-smi` binary on `PATH` and stat its mtime. `None`
+/// when the binary is absent (non-AMD host / dev VM) — there is no
+/// cache key, so callers probe without persisting.
+fn locate_xrt_smi() -> Option<(std::path::PathBuf, SystemTime)> {
+    let paths = std::env::var_os("PATH")?;
+    let bin = std::env::split_paths(&paths)
+        .map(|dir| dir.join(XRT_SMI))
+        .find(|cand| cand.is_file())?;
+    let mtime = std::fs::metadata(&bin).ok()?.modified().ok()?;
+    Some((bin, mtime))
+}
+
+/// `SystemTime` → nanoseconds since the Unix epoch (0 on a pre-epoch
+/// clock). The exact value is opaque; it only needs to change when the
+/// binary is rewritten.
+fn mtime_unix_ns(t: SystemTime) -> u128 {
+    t.duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
+/// Map a persisted flag string back to the `'static` candidate it came
+/// from, so the reconstructed [`XrtSmiProbe::flag`] keeps the
+/// `&'static str` shape the actuator's argv builder expects. An
+/// unknown string (forward-compat with a future candidate) resolves to
+/// `None` — the lever stays disabled rather than passing an unvetted
+/// flag to `xrt-smi`.
+fn flag_from_str(s: &str) -> Option<&'static str> {
+    PMODE_FLAG_CANDIDATES.iter().copied().find(|c| *c == s)
+}
+
+fn probe_cache_path(state_dir: &Path) -> std::path::PathBuf {
+    state_dir.join(PROBE_CACHE_FILE)
+}
+
+fn read_probe_cache(state_dir: &Path) -> Option<CachedProbe> {
+    let raw = std::fs::read(probe_cache_path(state_dir)).ok()?;
+    serde_json::from_slice(&raw).ok()
+}
+
+/// Best-effort persist: a status-dir write failure must never break the
+/// actuator (containers, read-only `/`, CI). The next process just
+/// re-probes.
+fn write_probe_cache(state_dir: &Path, cache: &CachedProbe) {
+    if let Ok(bytes) = serde_json::to_vec_pretty(cache) {
+        let _ = std::fs::create_dir_all(state_dir);
+        let _ = std::fs::write(probe_cache_path(state_dir), bytes);
+    }
+}
+
 /// Startup probe that asks the installed `xrt-smi` which pmode flag it
 /// accepts and caches the answer. The actuator consults the cached
 /// flag on every `apply`; if the probe found nothing (`flag = None`),
@@ -180,6 +253,26 @@ impl XrtSmiProbe {
     /// Emits one INFO log line per branch so operators see exactly one
     /// observation at startup.
     pub fn probe(runner: &dyn CommandRunner) -> Self {
+        Self::probe_capturing(runner).0
+    }
+
+    /// Two-phase probe that also returns the captured runtime-phase
+    /// stderr. Same resolution as [`Self::probe`], with two behavioural
+    /// changes that keep the read-only status/waybar path quiet:
+    ///
+    /// - The runtime-test failure (the amdxdna `DRM_IOCTL_AMDXDNA_SET_STATE
+    ///   IOCTL failed (err=-13): Permission denied` gap on XRT 2.21.75)
+    ///   is logged at `debug`, not `info`, and its stderr is returned so
+    ///   the caller can persist it in the probe cache. The NPU-lever gap
+    ///   stays diagnosable (`SY_LOG_FORMAT=json` + debug) without
+    ///   re-running the probe on every invocation.
+    /// - The "no pmode flag" branch only logs when the runner actually
+    ///   inspected `xrt-smi` (`help` non-empty). A no-op runner (the
+    ///   read-only `sy power status` / waybar probe returns an empty
+    ///   help string) resolves silently — this is what killed the 1 Hz
+    ///   journal flood and the stray stderr document prepended to
+    ///   `sy power status --json` under `2>&1` (BUG-20260712-*).
+    fn probe_capturing(runner: &dyn CommandRunner) -> (Self, String) {
         let help = runner
             .run_capturing(XRT_SMI, &["configure", "--help"])
             .or_else(|_| runner.run_capturing(XRT_SMI, &["--help"]))
@@ -188,6 +281,7 @@ impl XrtSmiProbe {
             .iter()
             .copied()
             .find(|f| help.contains(f));
+        let mut runtime_stderr = String::new();
         let flag = match scanned {
             Some(f) => match runner.run(XRT_SMI, &["configure", f, PROBE_RUNTIME_VALUE]) {
                 Ok(()) => {
@@ -195,24 +289,103 @@ impl XrtSmiProbe {
                     Some(f)
                 }
                 Err(e) if ioctl_permission_denied(&e) => {
-                    tracing::info!(
+                    runtime_stderr = err_stderr(&e);
+                    tracing::debug!(
                         target: "sy::power::npu",
                         flag = f,
+                        stderr = %runtime_stderr,
                         "xrt-smi IOCTL permission denied; NPU lever disabled (needs CAP_SYS_ADMIN)",
                     );
                     None
                 }
-                Err(_) => {
-                    tracing::info!(target: "sy::power::npu", flag = f, "xrt-smi pmode flag resolved");
+                Err(e) => {
+                    runtime_stderr = err_stderr(&e);
+                    tracing::debug!(
+                        target: "sy::power::npu",
+                        flag = f,
+                        stderr = %runtime_stderr,
+                        "xrt-smi runtime probe failed; keeping lever armed",
+                    );
                     Some(f)
                 }
             },
             None => {
-                tracing::info!(target: "sy::power::npu", "xrt-smi has no pmode flag; NPU lever disabled");
+                if !help.is_empty() {
+                    tracing::debug!(target: "sy::power::npu", "xrt-smi has no pmode flag; NPU lever disabled");
+                }
                 None
             }
         };
-        Self { flag }
+        (Self { flag }, runtime_stderr)
+    }
+
+    /// Probe `xrt-smi`, memoized once per process (`OnceLock`) and
+    /// persisted across processes under `state_dir`, keyed by the
+    /// resolved `xrt-smi` binary's path + mtime. The daemon calls this
+    /// (via [`NpuActuator::new_cached`]) so a restart — or any second
+    /// process — reuses the last (binary, mtime) verdict instead of
+    /// re-shelling to `xrt-smi`. A toolchain/firmware upgrade moves the
+    /// mtime and re-arms the probe automatically.
+    pub fn probe_cached(runner: &dyn CommandRunner, state_dir: &Path) -> Self {
+        if let Some(p) = PROCESS_PROBE.get() {
+            return *p;
+        }
+        let resolved = Self::resolve_with_disk_cache(runner, state_dir);
+        let _ = PROCESS_PROBE.set(resolved);
+        PROCESS_PROBE.get().copied().unwrap_or(resolved)
+    }
+
+    /// Disk-cache layer behind [`Self::probe_cached`], without the per-process
+    /// memo so it stays unit-testable as an independent "second
+    /// process". Resolves the `xrt-smi` cache key (path + mtime); on a
+    /// non-AMD host where the binary is absent there is no key, so it
+    /// probes without persisting.
+    fn resolve_with_disk_cache(runner: &dyn CommandRunner, state_dir: &Path) -> Self {
+        match locate_xrt_smi() {
+            Some((path, mtime)) => Self::resolve_with_key(
+                runner,
+                state_dir,
+                &path.to_string_lossy(),
+                mtime_unix_ns(mtime),
+            ),
+            None => Self::probe_capturing(runner).0,
+        }
+    }
+
+    /// Cache lookup + fill for an explicit `(key_path, key_mtime)`.
+    /// Split out from [`Self::resolve_with_disk_cache`] so tests can drive the
+    /// persistence contract with a synthetic key (no real `xrt-smi`).
+    fn resolve_with_key(
+        runner: &dyn CommandRunner,
+        state_dir: &Path,
+        key_path: &str,
+        key_mtime: u128,
+    ) -> Self {
+        if let Some(cache) = read_probe_cache(state_dir) {
+            if cache.xrt_smi_path == key_path && cache.mtime_unix_ns == key_mtime {
+                if cache.flag.is_none() && !cache.runtime_stderr.is_empty() {
+                    tracing::debug!(
+                        target: "sy::power::npu",
+                        stderr = %cache.runtime_stderr,
+                        "xrt-smi NPU lever disabled (cached probe)",
+                    );
+                }
+                return Self {
+                    flag: cache.flag.as_deref().and_then(flag_from_str),
+                };
+            }
+        }
+        let (probe, runtime_stderr) = Self::probe_capturing(runner);
+        write_probe_cache(
+            state_dir,
+            &CachedProbe {
+                xrt_smi_path: key_path.to_string(),
+                mtime_unix_ns: key_mtime,
+                flag: probe.flag.map(|f| f.to_string()),
+                runtime_stderr,
+            },
+        );
+        probe
     }
 
     /// Build a probe with an explicit flag — escape hatch for tests
@@ -290,6 +463,25 @@ impl NpuActuator {
         }
     }
 
+    /// Construct an actuator whose probe is memoized per-process and
+    /// persisted across processes under `state_dir` (see
+    /// [`XrtSmiProbe::probe_cached`]). The daemon uses this so a config
+    /// reload / restart reuses the last `(binary, mtime)` probe verdict
+    /// instead of re-shelling to `xrt-smi` and re-logging the lever gap.
+    pub fn new_cached(
+        runner: Box<dyn CommandRunner>,
+        time: Box<dyn TimeSource>,
+        state_dir: &Path,
+    ) -> Self {
+        let probe = XrtSmiProbe::probe_cached(runner.as_ref(), state_dir);
+        Self {
+            runner,
+            time,
+            probe,
+            last_applied: Mutex::new(None),
+        }
+    }
+
     /// Resolved pmode flag — `None` when the installed `xrt-smi`
     /// doesn't expose a pmode lever. Test-only introspection; the
     /// production code path consults `self.probe` directly in `apply`.
@@ -349,11 +541,19 @@ impl Actuator for NpuActuator {
 /// `Display` text on any other error type so future runners that wrap
 /// the failure differently still trigger the same downgrade.
 fn ioctl_permission_denied(err: &anyhow::Error) -> bool {
-    let stderr = match err.downcast_ref::<NpuError>() {
+    let stderr = err_stderr(err);
+    IOCTL_PERMISSION_PATTERNS.iter().any(|p| stderr.contains(p))
+}
+
+/// Extract the captured stderr from a runner error. Prefers the
+/// structured [`NpuError::XrtSmiFailed`] payload; falls back to the
+/// `Display` text so a future runner that wraps the failure differently
+/// still yields a usable diagnostic for the probe cache.
+fn err_stderr(err: &anyhow::Error) -> String {
+    match err.downcast_ref::<NpuError>() {
         Some(NpuError::XrtSmiFailed { stderr }) => stderr.clone(),
         None => err.to_string(),
-    };
-    IOCTL_PERMISSION_PATTERNS.iter().any(|p| stderr.contains(p))
+    }
 }
 
 /// Canonical wire string for an [`NpuPmode`]. Matches AMD's
@@ -784,6 +984,113 @@ mod tests {
         assert_eq!(
             XrtSmiProbe::with_flag(Some("--mode")).flag(),
             Some("--mode")
+        );
+    }
+
+    /// Counts `run_capturing` invocations so the caching tests can
+    /// assert the two-phase probe shelled out at most once.
+    struct CountingRunner {
+        help: String,
+        capturing: Mutex<usize>,
+    }
+
+    impl CountingRunner {
+        fn new(help: &str) -> Self {
+            Self {
+                help: help.to_string(),
+                capturing: Mutex::new(0),
+            }
+        }
+        fn capturing_count(&self) -> usize {
+            *self.capturing.lock().expect("capturing count")
+        }
+    }
+
+    impl CommandRunner for CountingRunner {
+        fn run(&self, _cmd: &str, _args: &[&str]) -> Result<()> {
+            Ok(())
+        }
+        fn run_capturing(&self, _cmd: &str, _args: &[&str]) -> Result<String> {
+            *self.capturing.lock().expect("capturing count") += 1;
+            Ok(self.help.clone())
+        }
+    }
+
+    /// Panics if invoked — proves the disk cache satisfied the second
+    /// "process" without any shell-out.
+    struct PanicRunner;
+    impl CommandRunner for PanicRunner {
+        fn run(&self, _cmd: &str, _args: &[&str]) -> Result<()> {
+            panic!("run must not be called on a probe-cache hit");
+        }
+        fn run_capturing(&self, _cmd: &str, _args: &[&str]) -> Result<String> {
+            panic!("run_capturing must not be called on a probe-cache hit");
+        }
+    }
+
+    /// S5 DoD: `probe_cached` runs the two-phase probe at most once per
+    /// process — the second call is served by the `OnceLock` memo, so
+    /// the runner is never re-invoked and the lever-gap log never
+    /// re-fires (the waybar-poll flood).
+    #[test]
+    fn probe_cached_runs_once_per_process() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let runner = CountingRunner::new("xrt-smi configure  --pmode <mode>");
+        let s1 = XrtSmiProbe::probe_cached(&runner, tmp.path());
+        let s2 = XrtSmiProbe::probe_cached(&runner, tmp.path());
+        assert_eq!(s1.flag(), s2.flag(), "memoized verdict must be stable");
+        assert_eq!(
+            runner.capturing_count(),
+            1,
+            "probe must shell out at most once per process",
+        );
+    }
+
+    /// S5 DoD: the persisted cache (keyed by the xrt-smi path + mtime)
+    /// short-circuits a second process — a fresh runner that panics on
+    /// any shell-out still resolves the flag from disk.
+    #[test]
+    fn persisted_probe_cache_short_circuits_second_process() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        const KEY_PATH: &str = "/opt/xilinx/xrt/bin/xrt-smi";
+        const KEY_MTIME: u128 = 123_456_789;
+        let first = CountingRunner::new("xrt-smi configure  --pmode <mode>");
+        let p1 = XrtSmiProbe::resolve_with_key(&first, tmp.path(), KEY_PATH, KEY_MTIME);
+        assert_eq!(p1.flag(), Some("--pmode"));
+        assert_eq!(first.capturing_count(), 1, "first process probes once");
+        // Second "process": the disk cache must answer without probing.
+        let p2 = XrtSmiProbe::resolve_with_key(&PanicRunner, tmp.path(), KEY_PATH, KEY_MTIME);
+        assert_eq!(
+            p2.flag(),
+            Some("--pmode"),
+            "second process must read the persisted verdict",
+        );
+        // A different mtime (toolchain upgrade) re-arms the probe.
+        let third = CountingRunner::new("xrt-smi configure  --pmode <mode>");
+        let _ = XrtSmiProbe::resolve_with_key(&third, tmp.path(), KEY_PATH, KEY_MTIME + 1);
+        assert_eq!(
+            third.capturing_count(),
+            1,
+            "a changed mtime must invalidate the cache and re-probe",
+        );
+    }
+
+    /// S5 DoD: the runtime-phase failure stderr (the amdxdna IOCTL
+    /// Permission-denied gap on XRT 2.21.75) is captured and returned so
+    /// it can be persisted in the cache and surfaced at debug level.
+    #[test]
+    fn probe_capturing_captures_runtime_stderr() {
+        let help = "xrt-smi configure [options]\n  --pmode <mode>   set power mode";
+        let runner = MockRunner::with_help(help);
+        runner.fail_on(
+            &["xrt-smi", "configure", "--pmode", "default"],
+            "ERROR: DRM_IOCTL_AMDXDNA_SET_STATE IOCTL failed (err=-13): Permission denied",
+        );
+        let (probe, stderr) = XrtSmiProbe::probe_capturing(&runner);
+        assert_eq!(probe.flag(), None, "IOCTL denial disables the lever");
+        assert!(
+            stderr.contains("Permission denied"),
+            "runtime stderr must be captured for the cache: {stderr}",
         );
     }
 }

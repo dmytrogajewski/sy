@@ -2,10 +2,10 @@
 //!
 //! Layout:
 //!   $XDG_STATE_HOME/sy/stack/
-//!     items.json             ← Vec<Item>, app + user pools (clipboard NOT stored)
-//!     blobs/<id>/payload     ← raw bytes for content items
-//!     blobs/<id>/meta.json   ← optional metadata (mime, original name)
-//!     links/<id>             ← stable temp paths for `sy stack link` of content items
+//!     items.json             ← `Vec<Item>`, app + user pools (clipboard NOT stored)
+//!     `blobs/<id>/payload`     ← raw bytes for content items
+//!     `blobs/<id>/meta.json`   ← optional metadata (mime, original name)
+//!     `links/<id>`             ← stable temp paths for `sy stack link` of content items
 //!
 //! Writes are atomic via temp-file + rename.
 
@@ -27,7 +27,7 @@ pub struct Item {
     pub id: String,
     pub kind: Kind,
     /// File items reference an absolute path on disk; content items have None
-    /// here and store payload under blobs/<id>/payload.
+    /// here and store payload under `blobs/<id>/payload`.
     pub path: Option<PathBuf>,
     /// Display name (basename for files, snippet head for content).
     pub name: String,
@@ -183,7 +183,7 @@ pub fn read_payload(id: &str) -> Result<Vec<u8>> {
 }
 
 /// Resolve an item to a filesystem path. For content items, materialise the
-/// payload under links/<id>[.ext] and return that — stable across calls.
+/// payload under `links/<id>[.ext]` and return that — stable across calls.
 pub fn link_path(item: &Item) -> Result<PathBuf> {
     if let Some(p) = &item.path {
         return Ok(p.clone());

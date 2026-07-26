@@ -1,0 +1,44 @@
+# Socket-activation entry point for the `sy file` daemon (SPEC §4.3 /
+# Step 22 of `specs/roadmaps/sy-file-manager/ROADMAP.md`).
+#
+# Activation flow (the literal boot path `Mod+E` in Step 34 will hit):
+#
+#   1. `sy apply` symlinks this file (and `sy-file.service`) into
+#      `~/.config/systemd/user/`.
+#   2. `systemctl --user start sy-file.socket` (or, after Step 35,
+#      `WantedBy=sockets.target` brings it up on user login).
+#   3. First client `connect()` on `%t/sy-file.sock` triggers systemd
+#      to spawn the matching `.service` — the daemon owns the socket
+#      thereafter, and emits `READY=1` once bind + chmod are done.
+#
+# Shape mirrors `sy-knowledge.socket` byte-for-byte where it makes
+# sense (`%t` resolves to `$XDG_RUNTIME_DIR`, `SocketMode=0600` and
+# `DirectoryMode=0700` keep other local users out without leaning on
+# PAM/seccomp). `RemoveOnStop=yes` is added because `sy file` writes a
+# fresh socket on every start — without it a crash-restart trips
+# EADDRINUSE the way Step 20 verified.
+#
+# Manual recipe (rice-level):
+#
+#   sy apply --yes
+#   systemctl --user daemon-reload
+#   systemctl --user start sy-file.socket
+#   # First IPC (`sy file ipc serve` from another shell triggers
+#   # activation via systemd, NOT an in-process bind):
+#   sy file ipc state
+#
+# Source: specs/research/sy-file-manager/SPEC.md §4.5.
+
+[Unit]
+Description=sy file plane IPC socket
+Documentation=https://github.com/dmytrogajewski/sy
+PartOf=sy.target
+
+[Socket]
+ListenStream=%t/sy-file.sock
+DirectoryMode=0700
+SocketMode=0600
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

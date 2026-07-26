@@ -5,7 +5,7 @@
 //! Step 14 alongside the bandit arm enumeration.
 //!
 //! Step 1 ships the scaffold: every handler except `status` prints a
-//! one-line "unimplemented — see roadmap step <N>" diagnostic to
+//! one-line "unimplemented — see roadmap step `<N>`" diagnostic to
 //! stderr and exits 0. `status --json` emits the SPEC §4
 //! `sy.power.status/v1` schema with stub values so downstream
 //! consumers can lock against the contract today.
@@ -18,7 +18,7 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Subcommand;
 
-use super::clock::SystemClock;
+use super::clock::{Clock, SystemClock};
 use super::config::PowerConfig;
 use super::intent::{
     AiplaneIntentChannel, CgroupAncestryChannel, IdleChannel, LogindChannel, MprisChannel,
@@ -34,7 +34,7 @@ use super::report::{
 use super::shield::{self, ShieldState};
 use super::snapshot::{self, Intent, Sensors};
 use super::status::{format_explain, format_status, format_waybar, format_waybar_daemon_down};
-use super::{PowerError, EXIT_DAEMON_UNREACHABLE, EXIT_DRIFT_ACTIVE};
+use super::{PowerError, EXIT_DAEMON_UNREACHABLE, EXIT_DECODE_ERROR, EXIT_DRIFT_ACTIVE};
 
 /// CLIG exit code for a malformed flag value (`--since=garbage`).
 const EXIT_USAGE: i32 = 2;
@@ -176,6 +176,12 @@ pub enum PowerCmd {
     ///   sy power show --since=24h --no-open     # CI / headless
     ///   sy power show --out=/tmp/report.pdf     # explicit path
     ///   sy power show --json --since=1d         # agent path
+    ///
+    /// Reproducible output: over the same NDJSON window the PDF is
+    /// byte-identical once its two wall-clock inputs are pinned via env:
+    ///   `SY_POWER_REPORT_TIMESTAMP=<RFC3339>`  pins the "Generated" line
+    ///                                        (e.g. 2026-05-19T12:00:00Z)
+    ///   `SY_POWER_REPORT_MODEL_SHA=<sha>`      pins the "Model version" line
     Show {
         /// Filter to entries newer than this duration (e.g. `7d`,
         /// `1h`). Default: 7 days, per SPEC §RV.2.
@@ -265,7 +271,7 @@ fn status(json_out: bool, waybar_out: bool) -> Result<()> {
     let sysfs = sysfs_root();
     let local_snap = snapshot::collect_tick(
         &live_sensors(),
-        &mut live_intent(Path::new("/proc/pressure")),
+        &mut probe_intent(Path::new("/proc/pressure")),
         &SystemClock,
         sysfs.as_path(),
     );
@@ -274,7 +280,9 @@ fn status(json_out: bool, waybar_out: bool) -> Result<()> {
     // one-shot CLI invocation we have no history, and the DFA's
     // priority order (call_active / SOC / Tctl) reaches every other
     // state without depending on `prev` except for the MEETING lock.
-    let shield_state = shield::transition(ShieldState::CoolAc, &local_snap, &cfg.shield);
+    // One-shot invocation: no cross-tick history, so `secs_since_call`
+    // is `None` (never in a MEETING lock window here).
+    let shield_state = shield::transition(ShieldState::CoolAc, &local_snap, &cfg.shield, None);
     // Step 18 anti-dead-code probe: walk `shield::project` against an
     // empty ranked list so the projection + rules-baseline fallback
     // stay live in the production binary. The projection's pick is
@@ -327,16 +335,14 @@ fn status(json_out: bool, waybar_out: bool) -> Result<()> {
                 println!("{}", format_waybar_daemon_down());
                 return Ok(());
             }
-            return Err(anyhow::Error::new(PowerError {
-                code: EXIT_DAEMON_UNREACHABLE,
-                msg: format!("sy-powerd unreachable: {e}"),
-            }));
+            return Err(anyhow::Error::new(classify_dial_error(&e)));
         }
     };
     let onboarding = super::onboarding::compute_onboarding_status(
         &power_state_dir(),
         &SystemClock,
         cfg.onboarding.days,
+        super::checkpoint::read_anchor(&power_state_dir().join("checkpoint.json")),
     );
     if waybar_out {
         println!("{}", format_waybar(&resp, &cfg, shield_state, &onboarding));
@@ -373,17 +379,20 @@ pub(crate) fn build_live_status_value() -> Result<serde_json::Value> {
     let cfg = load_config_or_default();
     let local_snap = snapshot::collect_tick(
         &live_sensors(),
-        &mut live_intent(Path::new("/proc/pressure")),
+        &mut probe_intent(Path::new("/proc/pressure")),
         &SystemClock,
         sysfs_root().as_path(),
     );
-    let shield_state = shield::transition(ShieldState::CoolAc, &local_snap, &cfg.shield);
+    // One-shot invocation: no cross-tick history, so `secs_since_call`
+    // is `None` (never in a MEETING lock window here).
+    let shield_state = shield::transition(ShieldState::CoolAc, &local_snap, &cfg.shield, None);
     let resp = dial_status(&super::daemon::socket_path())
         .map_err(|e| anyhow::anyhow!("sy-powerd unreachable: {e}"))?;
     let onboarding = super::onboarding::compute_onboarding_status(
         &power_state_dir(),
         &SystemClock,
         cfg.onboarding.days,
+        super::checkpoint::read_anchor(&power_state_dir().join("checkpoint.json")),
     );
     Ok(super::status::build_status_value(
         &resp,
@@ -406,6 +415,29 @@ pub(crate) fn status_drift_exit(resp: &StatusResponse) -> Option<anyhow::Error> 
         code: EXIT_DRIFT_ACTIVE,
         msg: "sy-powerd reports drift alarm (model degraded)".into(),
     }))
+}
+
+/// Map a `dial_*` IO error onto a structured [`PowerError`].
+///
+/// A decode failure (`InvalidData`) means the daemon answered but its
+/// frame did not parse — a protocol/version mismatch or a malformed
+/// field, *not* an unreachable socket. It gets [`EXIT_DECODE_ERROR`] and
+/// a message that names the parse failure, so a reachable-but-degraded
+/// daemon is never mis-reported as "unreachable" (BUG-20260712-1137).
+/// Every other IO kind (connect refused, missing socket, timeout) stays
+/// on [`EXIT_DAEMON_UNREACHABLE`].
+fn classify_dial_error(e: &std::io::Error) -> PowerError {
+    if e.kind() == std::io::ErrorKind::InvalidData {
+        PowerError {
+            code: EXIT_DECODE_ERROR,
+            msg: format!("sy-powerd response could not be parsed: {e}"),
+        }
+    } else {
+        PowerError {
+            code: EXIT_DAEMON_UNREACHABLE,
+            msg: format!("sy-powerd unreachable: {e}"),
+        }
+    }
 }
 
 /// Blocking dial of the `sy-powerd` Unix socket. Sends one
@@ -478,10 +510,7 @@ fn profile_cmd(name: Option<String>, auto: bool) -> Result<()> {
     let ack = match dial_profile(&super::daemon::socket_path(), &req) {
         Ok(a) => a,
         Err(e) => {
-            return Err(anyhow::Error::new(PowerError {
-                code: EXIT_DAEMON_UNREACHABLE,
-                msg: format!("sy-powerd unreachable: {e}"),
-            }));
+            return Err(anyhow::Error::new(classify_dial_error(&e)));
         }
     };
     if !ack.ok {
@@ -543,14 +572,12 @@ fn load_config_or_default() -> PowerConfig {
     }
 }
 
-/// Where `sy power` looks for its config. Resolves relative to the
-/// repo root via `SY_ROOT` (matches the rest of `sy`); falls back to
-/// the in-tree `configs/sy/power.toml` for dev runs.
+/// Where `sy power` looks for its config. Precedence (`SY_ROOT` →
+/// cwd-if-present → installed `$XDG_CONFIG_HOME/sy/power.toml`) lives in
+/// the shared [`super::power_config_path`] so the CLI, the daemon, and
+/// the status surface agree on resolution (BUG-20260608-2341).
 fn config_path() -> std::path::PathBuf {
-    if let Ok(root) = std::env::var("SY_ROOT") {
-        return std::path::PathBuf::from(root).join("configs/sy/power.toml");
-    }
-    std::path::PathBuf::from("configs/sy/power.toml")
+    super::power_config_path()
 }
 
 /// Sysfs root for the CLI-side anti-dead-code probes (`status` and
@@ -574,7 +601,7 @@ fn live_sensors() -> Sensors {
 }
 
 /// Step 15 + Step 16 dead-code probe — instantiate all five
-/// [`Actuator`] impls and invoke each one against the *current* sysfs
+/// [`crate::power::apply::Actuator`] impls and invoke each one against the *current* sysfs
 /// state. Every writer diffs before writing (see
 /// `apply::write_if_changed`), so this is a no-op when sysfs is in
 /// the expected shape. Errors are intentionally dropped: the daemon
@@ -653,7 +680,7 @@ fn probe_forecast(snap: &crate::power::snapshot::Snapshot) {
     }
 }
 
-/// Step 30 dead-code probe: construct the composite [`DriftDetector`]
+/// Step 30 dead-code probe: construct the composite [`crate::power::drift::DriftDetector`]
 /// and observe one sample on each sub-detector. The daemon (Step 31)
 /// is what actually feeds the live forecast and reward residuals; for
 /// the read-only `sy power status` path we only need the API surface
@@ -677,7 +704,7 @@ impl super::apply::npu::CommandRunner for NoopRunner {
         Ok(())
     }
     /// `sy power status` must NEVER shell out to `xrt-smi`, including
-    /// for the P1-1 probe — return an empty string so [`XrtSmiProbe`]
+    /// for the P1-1 probe — return an empty string so [`crate::power::apply::npu::XrtSmiProbe`]
     /// resolves to `None` and the dead-code probe stays read-only.
     fn run_capturing(&self, _cmd: &str, _args: &[&str]) -> Result<String> {
         Ok(String::new())
@@ -757,6 +784,35 @@ fn live_intent(psi_root: &Path) -> Intent {
         notify,
         time: TimeChannel::new(),
     }
+}
+
+/// Intent bundle for a one-shot `sy power status` probe.
+///
+/// In production (no `SY_SYSFS_ROOT` override) this dials the live
+/// D-Bus intent channels via [`live_intent`]. When `SY_SYSFS_ROOT` is
+/// set — the established signal that the probe is sandboxed away from
+/// the live host (CI, integration tests, containers) — it returns an
+/// isolated bundle with no live channels, so a call / screen-cast /
+/// media stream playing on the operator's desktop cannot flip
+/// `call_active` and tip the shield DFA into `Meeting`. Mirrors how
+/// every sysfs read already honours `SY_SYSFS_ROOT`: redirecting the
+/// host root isolates the *whole* probe, intent included.
+fn probe_intent(psi_root: &Path) -> Intent {
+    if std::env::var_os("SY_SYSFS_ROOT").is_some() {
+        return Intent {
+            psi_cpu: None,
+            logind: None,
+            niri: None,
+            aiplane: None,
+            mpris: None,
+            portal: None,
+            idle: None,
+            cgroup: None,
+            notify: None,
+            time: TimeChannel::new(),
+        };
+    }
+    live_intent(psi_root)
 }
 
 /// `sy power log [--since=<dur>] [--json]` — read end of the audit
@@ -902,12 +958,15 @@ fn show_cmd(opts: ShowOpts) -> Result<()> {
         activity: &activity,
         entries: &entries,
     };
-    let header = build_report_header(since);
+    let header = build_report_header(since, &SystemClock);
+    // Reuse the (possibly env-pinned) header timestamp for the default
+    // output path so a pinned invocation writes to a stable filename too.
+    let generated_at = header.generated_at_rfc3339.clone();
     let template = ReportTemplate::build(&report_metrics, header);
     let pdf_bytes = compile_pdf(&template, &report_metrics);
     let out_path = opts
         .out
-        .unwrap_or_else(|| default_report_out_path(&state_dir));
+        .unwrap_or_else(|| default_report_out_path(&state_dir, &generated_at));
     write_pdf(&out_path, &pdf_bytes)?;
     let stdin_is_tty = std::io::stdin().is_terminal();
     if should_open_viewer(opts.no_open, stdin_is_tty) {
@@ -993,20 +1052,60 @@ fn emit_report_json(
     }
 }
 
+/// Env var pinning the report's `generated_at` timestamp (RFC 3339).
+/// When set to a parseable RFC-3339 instant it overrides the injected
+/// clock so `sy power show` renders a byte-identical PDF across runs;
+/// an unparseable value is ignored and the clock wins.
+const ENV_REPORT_TIMESTAMP: &str = "SY_POWER_REPORT_TIMESTAMP";
+/// Env var pinning the embedded model-identity SHA. When set it
+/// overrides the default `rules-baseline` marker so the report's
+/// "Model version" line is stable across machines/runs.
+const ENV_REPORT_MODEL_SHA: &str = "SY_POWER_REPORT_MODEL_SHA";
+/// Default model-identity marker when [`ENV_REPORT_MODEL_SHA`] is unset.
+const DEFAULT_MODEL_SHA: &str = "rules-baseline";
+
 /// Build the report header from the active window. Host name comes
 /// from `uname` (or `unknown-host` on failure — the CLI must never
 /// crash on a sandbox without a hostname); the generated timestamp is
-/// rendered in RFC 3339 UTC so the path-stamping convention round-trips
-/// cleanly.
-fn build_report_header(since: Duration) -> ReportHeader {
+/// read from the injected [`Clock`] (not wall-clock directly) so the
+/// PDF is byte-reproducible under a frozen clock. The
+/// [`ENV_REPORT_TIMESTAMP`] / [`ENV_REPORT_MODEL_SHA`] env vars pin the
+/// timestamp + model identity for strict byte-equality (see the Phase
+/// RV determinism DoD).
+fn build_report_header(since: Duration, clock: &dyn Clock) -> ReportHeader {
     let host = hostname_or_unknown();
-    let generated_at_rfc3339 = chrono::Utc::now().to_rfc3339();
+    let generated_at_rfc3339 = report_timestamp(clock);
     let window_days = since.as_secs_f32() / 86_400.0;
     ReportHeader {
         host,
         generated_at_rfc3339,
         window_days,
-        model_version_sha: "rules-baseline".to_string(),
+        model_version_sha: report_model_sha(),
+    }
+}
+
+/// Resolve the report timestamp: an [`ENV_REPORT_TIMESTAMP`] override
+/// (canonicalised to UTC RFC 3339 so the output bytes are identical
+/// regardless of the offset the operator supplied) takes precedence;
+/// otherwise the injected clock's `now()` is used. An unparseable
+/// override falls through to the clock rather than erroring — the
+/// report must never fail to render over a malformed env var.
+fn report_timestamp(clock: &dyn Clock) -> String {
+    if let Ok(raw) = std::env::var(ENV_REPORT_TIMESTAMP) {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(raw.trim()) {
+            return dt.with_timezone(&chrono::Utc).to_rfc3339();
+        }
+    }
+    clock.now().to_rfc3339()
+}
+
+/// Resolve the embedded model-identity SHA: a non-empty
+/// [`ENV_REPORT_MODEL_SHA`] override wins, else the
+/// [`DEFAULT_MODEL_SHA`] marker.
+fn report_model_sha() -> String {
+    match std::env::var(ENV_REPORT_MODEL_SHA) {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => DEFAULT_MODEL_SHA.to_string(),
     }
 }
 
@@ -1023,9 +1122,12 @@ fn hostname_or_unknown() -> String {
 
 /// Default `--out` path: `<state>/reports/sy-power-<rfc3339>.pdf`.
 /// Filesystem-safe RFC 3339 — colons swapped for hyphens so the path
-/// is copy-pasteable into `xdg-open` arg lists across shells.
-fn default_report_out_path(state_dir: &Path) -> PathBuf {
-    let ts = chrono::Utc::now().to_rfc3339().replace(':', "-");
+/// is copy-pasteable into `xdg-open` arg lists across shells. Takes the
+/// report's generated-at timestamp (already resolved from the injected
+/// clock / [`ENV_REPORT_TIMESTAMP`]) so a pinned invocation lands a
+/// stable filename.
+fn default_report_out_path(state_dir: &Path, generated_at_rfc3339: &str) -> PathBuf {
+    let ts = generated_at_rfc3339.replace(':', "-");
     state_dir.join("reports").join(format!("sy-power-{ts}.pdf"))
 }
 
@@ -1169,8 +1271,13 @@ fn train_cmd(in_path: Option<PathBuf>, out_path: Option<PathBuf>) -> Result<()> 
     }
     match super::trainer::retrain_gru(&in_path, &out_path) {
         Ok(report) => {
+            let excluded = if report.excluded_classes.is_empty() {
+                String::new()
+            } else {
+                format!(" excluded={}", report.excluded_classes.join(","))
+            };
             println!(
-                "sy power train: ok rows={} epochs={} loss={:.3} val_acc={:.3} sha={} wall_ms={} out={}",
+                "sy power train: ok rows={} epochs={} loss={:.3} val_acc={:.3} sha={} wall_ms={} out={}{excluded}",
                 report.rows_used,
                 report.epochs,
                 report.final_loss,
@@ -1248,6 +1355,7 @@ fn apply_opts(dry_run: bool, yes: bool, with_ppd: bool) -> super::apply::Install
         dry_run,
         state_root: xdg_state_home(),
         user_unit_root: xdg_config_home().join("systemd/user"),
+        config_root: xdg_config_home(),
         polkit_root: PathBuf::from("/etc/polkit-1/rules.d"),
         grub_root: PathBuf::from("/etc/default/grub.d"),
         grub_cfg_file: PathBuf::from("/etc/default/grub"),
@@ -1260,7 +1368,9 @@ fn apply_opts(dry_run: bool, yes: bool, with_ppd: bool) -> super::apply::Install
         yes,
         with_ppd,
         ppd_unit_paths: super::apply::installer::default_ppd_unit_paths(),
+        tuned_unit_paths: super::apply::installer::default_tuned_unit_paths(),
         grubby_detect: super::apply::installer::default_grubby_detect(),
+        stress_ng_detect: super::apply::installer::default_stress_ng_detect(),
     }
 }
 
@@ -1363,6 +1473,33 @@ mod tests {
     use super::*;
     use clap::CommandFactory;
     use tempfile::TempDir;
+
+    /// BUG-20260712-1137: a decode failure means the daemon answered but
+    /// its frame did not parse — the CLI must report that (exit
+    /// `EXIT_DECODE_ERROR`, "could not be parsed"), never masquerade a
+    /// healthy daemon as "unreachable". A connect-level error keeps the
+    /// unreachable code.
+    #[test]
+    fn decode_error_is_not_reported_as_unreachable() {
+        let decode = std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "decode: invalid type: null, expected f32",
+        );
+        let mapped = classify_dial_error(&decode);
+        assert_eq!(mapped.code, EXIT_DECODE_ERROR);
+        assert!(
+            mapped.msg.contains("could not be parsed"),
+            "decode error must name the parse failure, not 'unreachable': {}",
+            mapped.msg,
+        );
+        assert!(!mapped.msg.contains("unreachable"), "{}", mapped.msg);
+
+        let refused =
+            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused");
+        let mapped = classify_dial_error(&refused);
+        assert_eq!(mapped.code, EXIT_DAEMON_UNREACHABLE);
+        assert!(mapped.msg.contains("unreachable"), "{}", mapped.msg);
+    }
 
     /// Roadmap Step 1: assert every shipped subcommand surfaces in
     /// `sy power --help`. The roadmap text says "all 8" but the
@@ -1638,6 +1775,8 @@ mod tests {
                 ddm_warning: false,
                 last_alarm_at: Some(chrono::Utc::now()),
             },
+            model: None,
+            onboarding: None,
         };
         let err = status_drift_exit(&resp).expect("alarm must produce a PowerError");
         let pe = err
@@ -1659,6 +1798,8 @@ mod tests {
             snapshot: serde_json::json!({}),
             last_audit: None,
             drift: DriftStatus::default(),
+            model: None,
+            onboarding: None,
         };
         assert!(status_drift_exit(&resp).is_none());
     }
@@ -1710,6 +1851,97 @@ mod tests {
         assert!(
             doc.get("pdf").is_none(),
             "JSON path must not embed PDF bytes"
+        );
+    }
+
+    /// Step S6 DoD (Phase RV finale): the report PDF is byte-reproducible.
+    /// Rendering the same fixture window twice — through independent
+    /// metric-extraction passes (so any HashMap iteration-order
+    /// nondeterminism in the plot series would surface as differing
+    /// bytes) with a frozen [`MockClock`] and a pinned model SHA —
+    /// yields byte-identical PDFs. This closes the "same NDJSON window +
+    /// same invocation -> byte-identical PDF" item deferred at Step 35.
+    #[test]
+    fn report_pdf_is_byte_reproducible_with_injected_clock() {
+        use crate::power::clock::MockClock;
+        use crate::power::log::AuditEntry;
+        use crate::power::report::{
+            extract_activity_metrics, extract_bandit_metrics, extract_drift_metrics,
+            extract_energy_metrics, extract_forecast_metrics, extract_shield_metrics,
+        };
+        use crate::power::snapshot::{Snapshot, SnapshotRaw, FEATURE_LEN, SCHEMA_ID};
+        use chrono::TimeZone;
+
+        const PINNED_SHA: &str = "deadbeefcafef00d";
+        const FIXTURE_TICKS: i64 = 16;
+        let base = chrono::Utc
+            .with_ymd_and_hms(2026, 5, 19, 12, 0, 0)
+            .single()
+            .expect("pinned base ts");
+        let build_entries = || -> Vec<AuditEntry> {
+            (0..FIXTURE_TICKS)
+                .map(|i| {
+                    let snap = Snapshot {
+                        schema: SCHEMA_ID,
+                        ts: base + chrono::Duration::seconds(i),
+                        features: [0.0; FEATURE_LEN],
+                        raw: SnapshotRaw {
+                            package_power_w: Some(8.0),
+                            ..Default::default()
+                        },
+                        snapshot_hash: "0".repeat(64),
+                    };
+                    AuditEntry::r3(
+                        snap,
+                        "browse".to_string(),
+                        "COOL_AC".to_string(),
+                        Vec::new(),
+                        vec![("browse".to_string(), 0.5)],
+                        0.05,
+                    )
+                })
+                .collect()
+        };
+        // Pin the embedded model identity so it is stable across runs.
+        std::env::set_var("SY_POWER_REPORT_MODEL_SHA", PINNED_SHA);
+        let clock = MockClock::new(base);
+        let render_once = || -> Vec<u8> {
+            let entries = build_entries();
+            let bandit = extract_bandit_metrics(&entries);
+            let forecast = extract_forecast_metrics(&entries);
+            let shield = extract_shield_metrics(&entries);
+            let energy = extract_energy_metrics(&entries);
+            let drift = extract_drift_metrics(&entries);
+            let activity = extract_activity_metrics(&entries);
+            let metrics = ReportMetrics {
+                bandit: &bandit,
+                forecast: &forecast,
+                shield: &shield,
+                energy: &energy,
+                drift: &drift,
+                activity: &activity,
+                entries: &entries,
+            };
+            let header = build_report_header(Duration::from_secs(2 * 3600), &clock);
+            let template = ReportTemplate::build(&metrics, header);
+            compile_pdf(&template, &metrics)
+        };
+        let first = render_once();
+        let second = render_once();
+        std::env::remove_var("SY_POWER_REPORT_MODEL_SHA");
+        assert_eq!(
+            first, second,
+            "same window + frozen clock + pinned SHA must be byte-identical",
+        );
+        assert!(first.starts_with(b"%PDF-"), "must be a well-formed PDF");
+        let haystack = String::from_utf8_lossy(&first);
+        assert!(
+            haystack.contains(PINNED_SHA),
+            "SY_POWER_REPORT_MODEL_SHA override must round-trip into the bytes",
+        );
+        assert!(
+            haystack.contains("2026-05-19T12:00:00"),
+            "injected-clock timestamp must round-trip into the bytes",
         );
     }
 

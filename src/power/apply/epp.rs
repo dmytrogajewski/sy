@@ -45,6 +45,16 @@ pub enum EppError {
     /// `amd_dynamic_epp=enable` is active; EPP writes would be
     /// silently ignored. `hint` is the operator-facing fix.
     EppBlocked { hint: &'static str },
+    /// BUG-20260525-2350: per-policy writes were attempted but EVERY
+    /// `cpufreq/policy*/energy_performance_preference` leaf failed
+    /// (typically EACCES because the tmpfiles.d chmod missed a policy
+    /// the kernel exposes). `failed` is the full list so the daemon's
+    /// `actuator failed` WARN can name the offending leaves and the
+    /// operator can re-run `systemd-tmpfiles --create`. Partial
+    /// success (≥ 1 policy written) returns `Ok(Applied::Wrote)`,
+    /// never this variant — the actuator prefers half-coverage to
+    /// zero-coverage.
+    NoPolicyWritable { failed: Vec<PathBuf> },
 }
 
 impl fmt::Display for EppError {
@@ -52,6 +62,20 @@ impl fmt::Display for EppError {
         match self {
             EppError::EppBlocked { hint } => {
                 write!(f, "EPP writes blocked by amd_dynamic_epp=enable. {hint}")
+            }
+            EppError::NoPolicyWritable { failed } => {
+                write!(
+                    f,
+                    "no cpufreq policy EPP leaf was writable ({} failed): ",
+                    failed.len()
+                )?;
+                for (i, p) in failed.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", p.display())?;
+                }
+                Ok(())
             }
         }
     }
@@ -94,13 +118,25 @@ pub fn set_epp(value: Epp, sysfs_root: &Path) -> Result<Applied> {
     let rendered = render(value);
     let policies = enumerate_policies(sysfs_root)?;
     let mut first_wrote: Option<PathBuf> = None;
+    let mut any_ok = false;
+    let mut failed: Vec<PathBuf> = Vec::new();
     for policy in &policies {
         let leaf = policy.join(EPP_LEAF);
-        if let Applied::Wrote { path, .. } = write_if_changed(&leaf, &rendered)? {
-            if first_wrote.is_none() {
-                first_wrote = Some(path);
+        match write_if_changed(&leaf, &rendered) {
+            Ok(Applied::Wrote { path, .. }) => {
+                any_ok = true;
+                if first_wrote.is_none() {
+                    first_wrote = Some(path);
+                }
             }
+            Ok(Applied::NoChange) => {
+                any_ok = true;
+            }
+            Err(_) => failed.push(leaf),
         }
+    }
+    if !any_ok && !failed.is_empty() {
+        return Err(EppError::NoPolicyWritable { failed }.into());
     }
     Ok(match first_wrote {
         Some(path) => Applied::Wrote {
@@ -215,6 +251,87 @@ mod tests {
         let root = fixture_with_policies(&td, 2, "balance_performance");
         let out = set_epp(Epp::BalancePerformance, &root).expect("apply");
         assert_eq!(out, Applied::NoChange);
+    }
+
+    /// BUG-20260525-2350: per-policy write failures must NOT abort the
+    /// loop. Fixture has 4 policies; policy2 is read-only (mirrors a
+    /// kernel-owned policy on a hybrid CPU). `set_epp` must still
+    /// succeed and policy3's leaf must be written, proving the
+    /// actuator did not short-circuit on policy2's EACCES.
+    #[test]
+    fn aggregates_per_policy_failures_without_aborting() {
+        use std::os::unix::fs::PermissionsExt;
+        const N_POLICIES: usize = 4;
+        const READ_ONLY_IDX: usize = 2;
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let root = fixture_with_policies(&td, N_POLICIES, "balance_performance");
+        let ro_leaf = root
+            .join(CPUFREQ_DIR)
+            .join(format!("policy{READ_ONLY_IDX}"))
+            .join(EPP_LEAF);
+        fs::set_permissions(&ro_leaf, fs::Permissions::from_mode(0o444))
+            .expect("chmod 0444 on policy2 leaf");
+
+        let out = set_epp(Epp::Performance, &root).expect("partial-success must not error");
+        match out {
+            Applied::Wrote { value, .. } => assert_eq!(value, "performance"),
+            other => panic!("expected Wrote (≥1 policy succeeded), got {other:?}"),
+        }
+        let policy3_leaf = root
+            .join(CPUFREQ_DIR)
+            .join(format!("policy{}", N_POLICIES - 1))
+            .join(EPP_LEAF);
+        let got = fs::read_to_string(&policy3_leaf).expect("read policy3 after");
+        assert_eq!(
+            got.trim(),
+            "performance",
+            "policy3 must be written despite policy2 EACCES (no short-circuit)",
+        );
+
+        // Restore perms so TempDir teardown can rm the leaf.
+        let _ = fs::set_permissions(&ro_leaf, fs::Permissions::from_mode(0o644));
+    }
+
+    /// BUG-20260525-2350: if EVERY policy fails, the actuator must
+    /// surface a structured `NoPolicyWritable` error carrying the full
+    /// failed-paths list (operator visibility + tests can grep the
+    /// daemon log line).
+    #[test]
+    fn errors_only_when_every_policy_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        const N_POLICIES: usize = 4;
+        let td = tempfile::TempDir::new().expect("tempdir");
+        let root = fixture_with_policies(&td, N_POLICIES, "balance_performance");
+        let mut leaves: Vec<PathBuf> = Vec::with_capacity(N_POLICIES);
+        for i in 0..N_POLICIES {
+            let leaf = root
+                .join(CPUFREQ_DIR)
+                .join(format!("policy{i}"))
+                .join(EPP_LEAF);
+            fs::set_permissions(&leaf, fs::Permissions::from_mode(0o444))
+                .expect("chmod 0444 on policy leaf");
+            leaves.push(leaf);
+        }
+
+        let res = set_epp(Epp::Performance, &root);
+        for leaf in &leaves {
+            let _ = fs::set_permissions(leaf, fs::Permissions::from_mode(0o644));
+        }
+        let err = res.expect_err("all-read-only fixture must error");
+        let ee = err
+            .downcast_ref::<EppError>()
+            .expect("error must be EppError");
+        match ee {
+            EppError::NoPolicyWritable { failed } => {
+                for leaf in &leaves {
+                    assert!(
+                        failed.contains(leaf),
+                        "failed list must include {leaf:?}, got {failed:?}",
+                    );
+                }
+            }
+            other => panic!("expected NoPolicyWritable, got {other:?}"),
+        }
     }
 
     /// Step 15 required: when the host has `amd_dynamic_epp=enable`,

@@ -35,7 +35,8 @@ pub struct Forecast {
     /// the model's training horizon — the warmup model emits a default
     /// (90 s, the SPEC §2 midpoint of "30-120 s").
     pub horizon_s: u32,
-    /// `(class_name, probability)` pairs in [`ACTIVITY_CLASSES`] order.
+    /// `(class_name, probability)` pairs in
+    /// [`crate::power::forecast::model::ACTIVITY_CLASSES`] order.
     /// Probabilities sum to ~1.0; floating-point error tolerated.
     pub class_probs: Vec<(String, f32)>,
 }

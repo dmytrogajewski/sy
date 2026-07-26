@@ -28,7 +28,7 @@ impl<'a> Sparkline<'a> {
     /// Compute `n - 1` polyline segments and route them through
     /// `recorder`. Production path also records the path as a single
     /// stroked `Path::new` for the wgpu backend — see
-    /// [`Sparkline::draw_into_frame`].
+    /// `Sparkline::draw_into_frame`.
     pub fn draw_into(&self, recorder: &mut dyn Recorder, bounds: Rectangle) {
         if self.data.len() < 2 {
             return;

@@ -1,0 +1,79 @@
+#!/bin/bash
+# sy-plugin-fake-pdf — Step 27 test-only fixture (SPEC §4.2.5
+# host.preview.* dispatch ladder). Advertises a `previewer` capability
+# for `application/pdf` and `*.pdf` so the integration test
+# `tests/sy_file_plugin_preview.rs::pdf_dispatched_to_pdf_plugin_fixture`
+# can prove the file-manager's preview pipeline routes PDF mime to
+# this plugin (not the built-in or any other registered plugin).
+#
+# Wire shape mirrors `tests/fixtures/sy-plugin-fake/bin/sy-plugin-fake`
+# byte-for-byte (Content-Length framing, JSON-RPC initialize +
+# shutdown + ping); the only divergence is the `preview` handler which
+# returns a deterministic 1x1 magenta PNG so the test can assert the
+# bytes it observed came from this fixture (and the dispatcher didn't
+# silently re-route to a different plugin).
+emit() {
+  local body="$1"
+  printf 'Content-Length: %d\r\n\r\n%s' "${#body}" "$body"
+}
+FRAME=""
+read_frame() {
+  local len=0 line
+  while IFS= read -r line; do
+    line="${line%$'\r'}"
+    [ -z "$line" ] && break
+    case "$line" in
+      Content-Length:*)
+        len="${line#Content-Length: }"
+        len="${len// /}"
+        ;;
+    esac
+  done || { FRAME=""; return 1; }
+  if [ "$len" -gt 0 ]; then
+    FRAME=$(dd bs=1 count="$len" 2>/dev/null)
+  else
+    FRAME=""
+  fi
+  return 0
+}
+read_frame
+case "$FRAME" in
+  *'"method":"initialize"'*)
+    # Capability set must echo what plugin.toml declared (SPEC §4.2.3
+    # cross-check). Both mime + url forms so the registry indexes both
+    # predicates and the (URL > MIME) tie-break is exercisable.
+    emit '{"jsonrpc":"2.0","id":1,"result":{"name":"fake-pdf","version":"0","api":"1","capabilities":[{"kind":"previewer","mime":"application/pdf"},{"kind":"previewer","url":"*.pdf"}],"host_methods":[]}}'
+    ;;
+esac
+while read_frame; do
+  [ -z "$FRAME" ] && break
+  case "$FRAME" in
+    *'"method":"shutdown"'*)
+      id=$(printf '%s' "$FRAME" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+      emit "{\"jsonrpc\":\"2.0\",\"id\":${id},\"result\":null}"
+      read_frame
+      break
+      ;;
+    *'"method":"ping"'*)
+      id=$(printf '%s' "$FRAME" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+      ts=$(printf '%s' "$FRAME" | sed -n 's/.*"ts":\([0-9]*\).*/\1/p')
+      [ -z "$ts" ] && ts=0
+      emit "{\"jsonrpc\":\"2.0\",\"id\":${id},\"result\":{\"ts\":${ts}}}"
+      ;;
+    *'"method":"preview"'*)
+      id=$(printf '%s' "$FRAME" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+      # Deterministic 1x1 magenta PNG (signature + IHDR + IDAT + IEND).
+      # Generated once via `python -c "import base64, ..."` and pasted
+      # here so the test can recognise it byte-for-byte. The base64
+      # body is canonical RFC 4648 (no whitespace) so the host's
+      # `base64_decode` accepts it.
+      png_b64='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR4AWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=='
+      emit "{\"jsonrpc\":\"2.0\",\"id\":${id},\"result\":{\"image\":{\"png_base64\":\"${png_b64}\",\"w\":1,\"h\":1}}}"
+      ;;
+    *)
+      id=$(printf '%s' "$FRAME" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+      emit "{\"jsonrpc\":\"2.0\",\"id\":${id},\"result\":null}"
+      ;;
+  esac
+done
+exit 0

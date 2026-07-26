@@ -10,7 +10,11 @@
 # applies only at boot and only to the literal paths — it can't follow
 # the renumbering.
 #
-# This udev rule matches by vendor ID (`ATTR{vendor}=="0x1002"` — AMD)
+# This udev rule matches by vendor ID (`ATTRS{vendor}=="0x1002"` — AMD).
+# `vendor` is a PCI attribute exposed on the drm node's PARENT device
+# (`/sys/class/drm/card<N>/device/vendor`), not on the drm class node
+# itself, so the parent-walking `ATTRS{...}` operator is required — a
+# same-device `ATTR{vendor}` match never fires (see BUG-20260712-0111)
 # and runs `chmod 0664 + chgrp wheel` on the
 # `power_dpm_force_performance_level` knob whenever the drm device is
 # added or changed. Works regardless of which `card<N>` index the kernel
@@ -24,5 +28,5 @@
 #
 # The `99-` prefix ensures this rule loads after distro defaults so our
 # permission overrides win.
-SUBSYSTEM=="drm", ACTION=="add|change", KERNEL=="card*", ATTR{vendor}=="0x1002", \
+SUBSYSTEM=="drm", ACTION=="add|change", KERNEL=="card*", ATTRS{vendor}=="0x1002", \
     RUN+="/bin/sh -c 'chmod 0664 /sys/class/drm/%k/device/power_dpm_force_performance_level && chgrp wheel /sys/class/drm/%k/device/power_dpm_force_performance_level'"

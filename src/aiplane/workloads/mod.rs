@@ -21,11 +21,40 @@ pub mod ocr;
 pub mod rerank;
 pub mod stt;
 pub mod vad;
+/// Whisper log-mel feature extractor — see module docs. Used by the
+/// Stt workload to turn 16 kHz PCM into the encoder's `[1,80,3000]`
+/// input tensor.
+pub mod whisper_mel;
 
 /// Sentence-embedding vector dim. e5-base is 768-dim. The qdrant
 /// collection schema is keyed on this — changing the constant requires
 /// `sy knowledge sync --yes` to recreate the collection at the new dim.
 pub const VECTOR_DIM: usize = 768;
+
+/// Default cap for ONNX Runtime's CPU execution-provider intra-op thread
+/// pool on every NPU workload session.
+///
+/// The VitisAI EP runs the heavy matmul subgraph on the AIE; ORT's CPU EP
+/// only handles the fallback glue ops (embedding `Gather`, partition-boundary
+/// casts). Left uncapped, that pool defaults to *every logical core* and pins
+/// the whole machine during a catch-up pass even though the NPU is the actual
+/// throughput bottleneck. A small pool keeps the glue parallel without the
+/// load-average blowup. Override with `SY_NPU_INTRA_THREADS` (clamped to >= 1).
+pub const DEFAULT_NPU_INTRA_THREADS: usize = 4;
+
+/// Resolve the NPU session intra-op thread cap, honouring the
+/// `SY_NPU_INTRA_THREADS` env override (flags > env > default, per CLIG).
+pub fn npu_intra_threads() -> usize {
+    parse_intra_threads(std::env::var("SY_NPU_INTRA_THREADS").ok().as_deref())
+}
+
+/// Pure core of [`npu_intra_threads`]: parse the override, clamp to >= 1, and
+/// fall back to [`DEFAULT_NPU_INTRA_THREADS`] when unset or unparseable.
+fn parse_intra_threads(raw: Option<&str>) -> usize {
+    raw.and_then(|v| v.trim().parse::<usize>().ok())
+        .map(|n| n.max(1))
+        .unwrap_or(DEFAULT_NPU_INTRA_THREADS)
+}
 
 /// Boot the workload registry with every kind sy supports. Called once
 /// from `daemon::run` before the req worker starts.
@@ -70,5 +99,35 @@ pub fn detect_npu_label() -> String {
         "AMD NPU".to_string()
     } else {
         format!("AMD NPU on {short}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn intra_threads_defaults_when_unset() {
+        assert_eq!(parse_intra_threads(None), DEFAULT_NPU_INTRA_THREADS);
+    }
+
+    #[test]
+    fn intra_threads_honours_valid_override() {
+        assert_eq!(parse_intra_threads(Some("8")), 8);
+        assert_eq!(parse_intra_threads(Some("  2 ")), 2);
+    }
+
+    #[test]
+    fn intra_threads_clamps_zero_to_one() {
+        // A 0-thread pool is invalid for ORT; clamp up so the cap never
+        // accidentally disables the CPU EP entirely.
+        assert_eq!(parse_intra_threads(Some("0")), 1);
+    }
+
+    #[test]
+    fn intra_threads_falls_back_on_garbage() {
+        assert_eq!(parse_intra_threads(Some("")), DEFAULT_NPU_INTRA_THREADS);
+        assert_eq!(parse_intra_threads(Some("lots")), DEFAULT_NPU_INTRA_THREADS);
+        assert_eq!(parse_intra_threads(Some("-3")), DEFAULT_NPU_INTRA_THREADS);
     }
 }

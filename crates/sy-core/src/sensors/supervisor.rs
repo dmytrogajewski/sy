@@ -1,4 +1,4 @@
-//! Read-only adapter over the [`crate::supervision`] module's
+//! Read-only adapter over the `crate::supervision` module's
 //! per-plane status records. Per the sy-mon SPEC §4 `SystemSnapshot`
 //! JSON example, the `supervisor` panel surfaces one row per plane:
 //!

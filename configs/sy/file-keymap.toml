@@ -1,0 +1,68 @@
+# `sy file` keymap — SPEC §3.3 item 17 ("Theming / configs").
+# Roadmap Step 34 productivises this file as the yazi-shaped default
+# keymap. Each entry binds a keychord (`keys = [...]`) to a
+# behavioural action (`action = "..."`); the iced reducer in
+# `src/file/app.rs::handle_key` already hardcodes these for the
+# productivised path. This file is the **user-overridable layer** —
+# `sy apply` writes it once on first run; the operator edits in place
+# afterwards. Re-load lands on `SIGHUP` (the daemon's signal handler
+# re-reads this file on receipt, per Step 34 DoD).
+#
+# Shape mirrors yazi's `keymap.toml` for muscle-memory carry-over.
+
+[[keymap]]
+keys = ["space"]
+action = "selection.toggle"
+
+[[keymap]]
+keys = ["shift+arrowdown"]
+action = "selection.range_extend_down"
+
+[[keymap]]
+keys = ["shift+arrowup"]
+action = "selection.range_extend_up"
+
+[[keymap]]
+keys = ["*"]
+action = "selection.all"
+
+[[keymap]]
+keys = ["a"]
+action = "selection.invert"
+
+[[keymap]]
+keys = ["y"]
+action = "clipboard.stash_copy"
+
+[[keymap]]
+keys = ["x"]
+action = "clipboard.stash_move"
+
+[[keymap]]
+keys = ["p"]
+action = "clipboard.paste"
+
+[[keymap]]
+keys = ["d"]
+action = "fs.trash"
+
+[[keymap]]
+keys = ["/"]
+action = "commandbar.open_filter"
+
+[[keymap]]
+keys = [":"]
+action = "commandbar.open_palette"
+
+[[keymap]]
+keys = ["escape"]
+action = "commandbar.close"
+
+# Two-key chord arms (`b<key>` jump, `B<key>` pin) — SPEC §3.3 item 15.
+[[keymap]]
+keys = ["b"]
+action = "bookmark.chord_jump"
+
+[[keymap]]
+keys = ["B"]
+action = "bookmark.chord_pin"

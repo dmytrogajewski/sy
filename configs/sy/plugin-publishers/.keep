@@ -1,0 +1,11 @@
+# sy-file-manager plugin SPEC §4.1 — minisign public-key landing zone.
+#
+# Manifests with `[plugin.signature] pubkey = "<name>"` resolve to
+# `configs/sy/plugin-publishers/<name>.pub`. The pub file is the
+# raw minisign public-key string (`untrusted comment: …\n<b64>\n`)
+# as emitted by `minisign -G`. First-party plugin pubkeys (the
+# canary `sy-plugin-md` etc.) land here; third-party plugins inline
+# the pubkey via `[plugin.signature] pubkey = "<base64>"`.
+#
+# This `.keep` file pins the directory in the tree so `sy apply` has
+# a productivisation target on a fresh host (no snowflakes).

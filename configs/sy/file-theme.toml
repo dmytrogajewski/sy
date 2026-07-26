@@ -1,0 +1,32 @@
+# `sy file` theme override layer — SPEC §3.3 item 17.
+# Roadmap Step 34 productivises the gruvbox-dark default. `sy apply`
+# renders the `colors.<key>` / `ui.<key>` placeholders against the
+# active theme (typically `themes/gruvbox-material.toml`) so the
+# rendered file carries the literal hex codes the iced theme reader
+# consumes.
+#
+# Operators rerolling the palette (a custom `themes/<name>.toml`)
+# get the new values on the next `sy apply` without touching this
+# file. The doctor probe doesn't currently load this file (the iced
+# theme is fixed at the gruvbox-dark built-in via
+# `src/file/theme.rs`); this file is the forward-compat surface a
+# later step (post-Step 35) wires into `app::theme`.
+
+[colors]
+bg      = "{{ colors.bg }}"
+bg_soft = "{{ colors.bg_soft }}"
+bg1     = "{{ colors.bg1 }}"
+bg2     = "{{ colors.bg2 }}"
+fg      = "{{ colors.fg }}"
+fg_dim  = "{{ colors.fg_dim }}"
+red     = "{{ colors.red }}"
+orange  = "{{ colors.orange }}"
+yellow  = "{{ colors.yellow }}"
+green   = "{{ colors.green }}"
+aqua    = "{{ colors.aqua }}"
+blue    = "{{ colors.blue }}"
+purple  = "{{ colors.purple }}"
+gray    = "{{ colors.gray }}"
+
+[ui]
+accent = "{{ ui.accent }}"

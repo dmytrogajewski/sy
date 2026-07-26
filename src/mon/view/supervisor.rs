@@ -13,7 +13,7 @@
 //!
 //! Restart count + plane name render as small inset text. The mapping
 //! is centralised in [`status_color`] so the SPEC test
-//! [`tests::red_dot_for_failed_plane`] can pin it without inspecting
+//! `tests::red_dot_for_failed_plane` can pin it without inspecting
 //! the recorder.
 
 use iced::{Color, Point, Rectangle, Size};

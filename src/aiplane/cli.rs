@@ -45,9 +45,15 @@ pub enum AiplaneCmd {
         #[arg(long, value_name = "KIND")]
         workload: String,
         /// JSON `WorkloadInput` literal. Example:
-        /// `'{"kind":"text","text":"hello"}'`.
+        /// `'{"kind":"text","text":"hello"}'`. Mutually exclusive with
+        /// `--in-file`; one of the two is required.
         #[arg(long, value_name = "JSON")]
-        input: String,
+        input: Option<String>,
+        /// Read the JSON `WorkloadInput` from a file instead of `--input`.
+        /// Required for large inputs (e.g. `audio` PCM) that exceed the
+        /// shell argument-length limit.
+        #[arg(long, value_name = "PATH")]
+        in_file: Option<std::path::PathBuf>,
         /// QoS class for the scheduler (SPEC §4.7). Case-sensitive
         /// PascalCase: `Realtime | Interactive | Background | Batch`.
         /// CLI defaults to `Interactive` (foreground user). Override
@@ -112,11 +118,23 @@ pub fn dispatch(cmd: AiplaneCmd) -> Result<()> {
         AiplaneCmd::Run {
             workload,
             input,
+            in_file,
             priority,
             deadline,
             trace_id,
             json,
-        } => run(&workload, &input, priority, deadline, trace_id, json),
+        } => {
+            let input_json = match (input, in_file) {
+                (Some(_), Some(_)) => {
+                    anyhow::bail!("pass only one of --input or --in-file")
+                }
+                (Some(s), None) => s,
+                (None, Some(p)) => std::fs::read_to_string(&p)
+                    .with_context(|| format!("read --in-file {}", p.display()))?,
+                (None, None) => anyhow::bail!("one of --input or --in-file is required"),
+            };
+            run(&workload, &input_json, priority, deadline, trace_id, json)
+        }
         AiplaneCmd::Cancel { request_id, json } => cancel(&request_id, json),
         AiplaneCmd::Worker { kind, socket } => {
             let parsed: WorkloadKind = kind.parse()?;

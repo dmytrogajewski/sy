@@ -110,6 +110,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Run Vale (Microsoft + Google packs)
+        # Advisory: reviewdog can fail on infra issues (e.g. the PR
+        # diff exceeds GitHub's 20k-line API limit); never block.
+        continue-on-error: true
         uses: errata-ai/vale-action@reviewdog
         with:
           fail_on_error: false
@@ -159,22 +162,14 @@ jobs:
     # Closes audit rows R-ECO-01 (every public item carries a rustdoc-
     # usable comment) and R-ECO-03 (doctests compile) per PLAN Item 26.
     #
-    # NOTE: this job currently fails on `main` — see
-    # `specs/bugs/BUG-20260521-2255.md` for the 52 outstanding rustdoc
-    # errors (37 broken intra-doc links + 14 unclosed HTML tags + 1
-    # public→private link). Wired here so the CI gate exists; will turn
-    # green when /implement closes the BUG.
+    # Gating: `RUSTDOCFLAGS="-D warnings" cargo doc` is clean on `main`
+    # as of BUG-20260521-2255 (closed). A regression — a new broken
+    # intra-doc link, unclosed HTML tag, or public→private link — fails
+    # this job and blocks the push.
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     name: rust-doc
     runs-on: ubuntu-latest
-    # `rust-doc` is wired but not gating: the 52 outstanding rustdoc
-    # errors in `specs/bugs/BUG-20260521-2255.md` would block every push
-    # to `main` until that BUG closes. `continue-on-error: true` keeps
-    # the workflow-level conclusion green while the per-job status still
-    # reports the failure on the PR + Actions UI. Flip this back to a
-    # gating job once BUG-20260521-2255 lands.
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4

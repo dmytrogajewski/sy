@@ -130,7 +130,7 @@ impl Visit for TraceFieldVisitor {
 }
 
 /// Run `f` inside a span that carries `trace_id` and an optional
-/// `parent_span_id`. The span is named [`TRACE_SPAN_NAME`].
+/// `parent_span_id`. The span is named `TRACE_SPAN_NAME`.
 ///
 /// Returns whatever `f` returns. Note that if `f` returns a future,
 /// only its creation is wrapped in the span — to instrument the

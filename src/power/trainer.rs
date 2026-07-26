@@ -144,6 +144,35 @@ const WINDOW_LEN: usize = 8;
 /// rules-baseline warmup model.
 const MIN_TRAINING_ROWS: usize = 32;
 
+/// Per-class row floor for the trainer's coverage gate (Step T3 /
+/// BUG-20260525-2352). The hand-rolled SGD assigns a separate softmax
+/// head to every class; without exemplars a head's weights drift to
+/// zero and the validation accuracy hides the deficit behind the
+/// dominant class's argmax wins. 16 rows is sized to give the per-class
+/// FTRL head a non-trivial gradient signal across [`EPOCHS`] passes
+/// while staying low enough that a sparsely-distributed class
+/// (e.g. `Call` once the rules baseline lets it through) is not
+/// preemptively rejected.
+const MIN_ROWS_PER_CLASS: usize = 16;
+
+/// Minimum number of classes that must clear [`MIN_ROWS_PER_CLASS`]
+/// for a train to proceed (BUG-20260723-2210). A softmax head over a
+/// single class is degenerate — it can only ever predict that class —
+/// so below two covered classes the trainer still refuses. Above the
+/// floor, under-covered classes are *excluded* (rows dropped, exclusion
+/// reported) instead of blocking the train: labels derive from the
+/// applied arm, so a class the rules baseline never applies would
+/// otherwise block the first model forever and keep the drift alarm
+/// latched.
+const MIN_COVERED_CLASSES: usize = 2;
+
+/// Per-class recall floor enforced by [`run_validation`] (Step T3 /
+/// BUG-20260525-2352). Half the trivially-attainable "majority class"
+/// baseline — a model that scores recall < 0.5 on a class with training
+/// exemplars is worse than coin-flip, so the trainer refuses to ship it
+/// and the daemon stays on the previous (or warmup) model.
+const MIN_PER_CLASS_RECALL: f32 = 0.5;
+
 /// Validation split — last 20% of the labelled windows form the
 /// held-out set for [`TrainerReport::validation_accuracy`].
 const VALIDATION_FRACTION: f32 = 0.2;
@@ -193,6 +222,11 @@ pub struct TrainerReport {
     pub wall_time_ms: u128,
     pub version_sha: String,
     pub rows_used: usize,
+    /// Classes left out of this train because they were under the
+    /// [`MIN_ROWS_PER_CLASS`] floor (BUG-20260723-2210). Surfaced on
+    /// `sy power status` as `model.missing_classes` so a partial model
+    /// never hides its blind spots.
+    pub excluded_classes: Vec<&'static str>,
 }
 
 /// Reasons [`retrain_gru`] can refuse a write. The variants line up
@@ -211,6 +245,17 @@ pub enum TrainerError {
     /// keep the rules-baseline warmup model and surface the gap on
     /// `sy power status`.
     InsufficientData { required: usize, found: usize },
+    /// Fewer than [`MIN_COVERED_CLASSES`] activity classes clear the
+    /// [`MIN_ROWS_PER_CLASS`] row floor (BUG-20260723-2210) — too few
+    /// to train a non-degenerate softmax head. `missing` names every
+    /// under-floor class. The daemon stays on the rules-baseline /
+    /// warmup model and `sy power status` surfaces the missing
+    /// classes for operator visibility.
+    InsufficientClassCoverage {
+        counts: [usize; FORECAST_CLASS_COUNT],
+        missing: Vec<&'static str>,
+        required: usize,
+    },
     /// Forward / backward pass diverged (NaN loss, etc.). Rare on
     /// the tiny model but surfaced rather than masked.
     TrainFailed(String),
@@ -233,6 +278,14 @@ impl std::fmt::Display for TrainerError {
                 f,
                 "trainer: insufficient labelled rows: need {required}, found {found}"
             ),
+            Self::InsufficientClassCoverage {
+                counts,
+                missing,
+                required,
+            } => write!(
+                f,
+                "trainer: insufficient per-class coverage: missing {missing:?} (need ≥ {required} rows each; counts={counts:?})",
+            ),
             Self::TrainFailed(e) => write!(f, "trainer: training diverged: {e}"),
             Self::ExportFailed(e) => write!(f, "trainer: ONNX export failed: {e}"),
             Self::ValidationFailed(e) => write!(f, "trainer: tract validation rejected ONNX: {e}"),
@@ -249,7 +302,7 @@ impl From<std::io::Error> for TrainerError {
 }
 
 /// Sink used to publish the trained ONNX bytes. Production wires
-/// [`FileSink`]; tests inject [`TruncatingSink`] (or any other
+/// [`FileSink`]; tests inject `TruncatingSink` (or any other
 /// `dyn TrainerExportSink`) so the validation gate can be driven
 /// without racing against the real filesystem.
 pub trait TrainerExportSink {
@@ -341,6 +394,27 @@ pub fn retrain_with_sink(
             found: rows.len(),
         });
     }
+    let counts = class_counts(&rows);
+    let excluded: Vec<&'static str> = ACTIVITY_CLASSES
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| counts[*idx] < MIN_ROWS_PER_CLASS)
+        .map(|(_, name)| *name)
+        .collect();
+    // BUG-20260723-2210: under-covered classes are excluded rather than
+    // fatal — but a softmax over < MIN_COVERED_CLASSES covered classes
+    // is degenerate, so that floor still hard-rejects.
+    if ACTIVITY_CLASSES.len() - excluded.len() < MIN_COVERED_CLASSES {
+        return Err(TrainerError::InsufficientClassCoverage {
+            counts,
+            missing: excluded,
+            required: MIN_ROWS_PER_CLASS,
+        });
+    }
+    let rows: Vec<LabelledRow> = rows
+        .into_iter()
+        .filter(|r| counts[r.class_idx] >= MIN_ROWS_PER_CLASS)
+        .collect();
     let windows = build_windows(&rows);
     if windows.len() < MIN_TRAINING_ROWS {
         return Err(TrainerError::InsufficientData {
@@ -349,10 +423,28 @@ pub fn retrain_with_sink(
         });
     }
     let (train, validate) = split_train_validate(&windows);
-    let trained = train_gru(&train).map_err(TrainerError::TrainFailed)?;
+    // BUG-20260723-2352: SGD runs on standardised features; the raw
+    // `validate` windows go through the exported graph, which carries
+    // the same constants as a Sub/Mul prefix — so validation exercises
+    // the exact raw-features-in contract the daemon uses.
+    let stats = FeatureStats::from_rows(&rows);
+    let train_norm: Vec<LabelledWindow> = train
+        .iter()
+        .map(|w| {
+            let mut seq = [[0.0f32; FEATURE_LEN]; WINDOW_LEN];
+            for (slot, step) in seq.iter_mut().zip(w.seq.iter()) {
+                *slot = stats.apply(step);
+            }
+            LabelledWindow {
+                seq,
+                class_idx: w.class_idx,
+            }
+        })
+        .collect();
+    let trained = train_gru(&train_norm).map_err(TrainerError::TrainFailed)?;
     let final_loss = trained.last_loss;
-    let bytes =
-        export_onnx(&trained.weights).map_err(|e| TrainerError::ExportFailed(e.to_string()))?;
+    let bytes = export_onnx(&trained.weights, &stats)
+        .map_err(|e| TrainerError::ExportFailed(e.to_string()))?;
     sink.write(&bytes)
         .map_err(|e| TrainerError::ExportFailed(e.to_string()))?;
     let bytes_for_validation = sink.validation_bytes();
@@ -368,7 +460,70 @@ pub fn retrain_with_sink(
         wall_time_ms: started.elapsed().as_millis(),
         version_sha,
         rows_used: rows.len(),
+        excluded_classes: excluded,
     })
+}
+
+/// Per-feature z-score constants (BUG-20260723-2352). The daemon logs
+/// RAW sensor values (tctl in °C, package power in W, `user_idle_s`
+/// up to five digits) — feeding them to the GRU unnormalized
+/// saturates every gate and the model collapses to the majority
+/// class. The trainer standardises features before SGD and bakes the
+/// SAME constants into the exported ONNX as a `Sub`/`Mul` prefix, so
+/// the on-disk model still consumes raw features and the daemon's
+/// inference path needs no knowledge of the normalisation.
+#[derive(Debug, Clone)]
+struct FeatureStats {
+    mean: [f32; FEATURE_LEN],
+    /// `1/std`, or `0.0` for a zero-variance feature — the multiply
+    /// zeroes a constant column instead of amplifying float dust,
+    /// and stays division-free inside the ONNX graph.
+    inv_std: [f32; FEATURE_LEN],
+}
+
+impl FeatureStats {
+    /// Compute mean / inverse-std over the labelled corpus.
+    fn from_rows(rows: &[LabelledRow]) -> Self {
+        let n = rows.len().max(1) as f32;
+        let mut mean = [0.0f32; FEATURE_LEN];
+        for row in rows {
+            for (m, v) in mean.iter_mut().zip(row.features.iter()) {
+                *m += v / n;
+            }
+        }
+        let mut inv_std = [0.0f32; FEATURE_LEN];
+        for (i, slot) in inv_std.iter_mut().enumerate() {
+            let var: f32 = rows
+                .iter()
+                .map(|r| {
+                    let d = r.features[i] - mean[i];
+                    d * d / n
+                })
+                .sum();
+            let std = var.sqrt();
+            *slot = if std > 1e-6 { 1.0 / std } else { 0.0 };
+        }
+        Self { mean, inv_std }
+    }
+
+    /// Identity transform — used by tests that drive `train_gru` /
+    /// `export_onnx` directly with already-normalised fixtures.
+    #[cfg(test)]
+    fn identity() -> Self {
+        Self {
+            mean: [0.0; FEATURE_LEN],
+            inv_std: [1.0; FEATURE_LEN],
+        }
+    }
+
+    /// Standardise one feature vector.
+    fn apply(&self, features: &[f32; FEATURE_LEN]) -> [f32; FEATURE_LEN] {
+        let mut out = [0.0f32; FEATURE_LEN];
+        for i in 0..FEATURE_LEN {
+            out[i] = (features[i] - self.mean[i]) * self.inv_std[i];
+        }
+        out
+    }
 }
 
 /// One training row: feature vector + activity class index. Lifted
@@ -389,9 +544,83 @@ struct LabelledWindow {
     class_idx: usize,
 }
 
-/// Read every `AuditEntry` line out of `telemetry_path`, project
-/// `applied_arm` onto the five-class taxonomy, drop unlabelled rows.
+/// Read the labelled corpus at `path`, projecting `applied_arm` onto
+/// the five-class taxonomy and dropping unlabelled rows.
+///
+/// `path` is either a single NDJSON file (the `sy power train
+/// --telemetry <file>` CLI path + every trainer test) or the daemon's
+/// telemetry *directory*. Live telemetry is daily-segmented
+/// (`telemetry-YYYY-MM-DD.ndjson` plus overflow `…​.N.ndjson`, commit
+/// 22df459), so a directory is read as the ordered concatenation of its
+/// `telemetry-*.ndjson` segments (see [`telemetry_segments`]). A
+/// directory with zero matching segments yields zero rows, which the
+/// caller surfaces as [`TrainerError::InsufficientData`]
+/// (BUG-20260712-1545).
 fn read_labelled_rows(path: &Path) -> Result<Vec<LabelledRow>, TrainerError> {
+    if fs::metadata(path)?.is_dir() {
+        let mut out = Vec::new();
+        for segment in telemetry_segments(path)? {
+            out.extend(read_labelled_rows_from_file(&segment)?);
+        }
+        return Ok(out);
+    }
+    read_labelled_rows_from_file(path)
+}
+
+/// Collect the `telemetry-*.ndjson` segment files in `dir`, sorted
+/// chronologically. The date in the filename is ISO-8601 so a plain
+/// lexicographic sort orders days correctly; the overflow index of a
+/// single day (`telemetry-<date>.<N>.ndjson`) is parsed as an integer
+/// so the base file (index 0) sorts first and `.10` sorts after `.2`.
+/// Files that don't match the segment shape (checkpoint.json,
+/// forecaster.onnx, reports/, …) are skipped (BUG-20260712-1545).
+fn telemetry_segments(dir: &Path) -> Result<Vec<PathBuf>, TrainerError> {
+    let mut segments: Vec<(String, u64, PathBuf)> = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if let Some((date, overflow)) = segment_sort_key(name) {
+            segments.push((date, overflow, entry.path()));
+        }
+    }
+    segments.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    Ok(segments.into_iter().map(|(_, _, p)| p).collect())
+}
+
+/// Parse a telemetry segment filename into its `(date, overflow-index)`
+/// sort key, or `None` when `name` isn't a `telemetry-*.ndjson` segment.
+/// The base file (`telemetry-<date>.ndjson`) has overflow index 0;
+/// overflow segments (`telemetry-<date>.<N>.ndjson`) carry `N`.
+fn segment_sort_key(name: &str) -> Option<(String, u64)> {
+    let rest = name.strip_prefix("telemetry-")?.strip_suffix(".ndjson")?;
+    match rest.rsplit_once('.') {
+        Some((date, idx)) if !idx.is_empty() && idx.bytes().all(|b| b.is_ascii_digit()) => {
+            Some((date.to_string(), idx.parse::<u64>().ok()?))
+        }
+        _ => Some((rest.to_string(), 0)),
+    }
+}
+
+/// Shield states whose arm application is a *reaction to conditions*
+/// rather than a read on user activity (BUG-20260723-2352): the HOT
+/// clamp forces the idle arm on a flat-out machine and the
+/// BATTERY_LOW clamp forces the whisper arm regardless of what the
+/// user is doing, so labelling those rows by their applied arm
+/// poisons the class with contradictory feature vectors. `MEETING` is
+/// deliberately NOT here — the meeting shield fires off the
+/// call-active sensor, so its rows are genuine `call` evidence.
+const ACTIVITY_CLAMPING_SHIELDS: [&str; 2] = ["HOT", "BATTERY_LOW"];
+
+/// Read every `AuditEntry` line out of a single NDJSON file, project
+/// `applied_arm` onto the five-class taxonomy, drop unlabelled rows
+/// and rows clamped by a condition-reactive shield.
+fn read_labelled_rows_from_file(path: &Path) -> Result<Vec<LabelledRow>, TrainerError> {
     let f = fs::File::open(path)?;
     let mut out = Vec::new();
     for line_res in BufReader::new(f).lines() {
@@ -409,6 +638,13 @@ fn read_labelled_rows(path: &Path) -> Result<Vec<LabelledRow>, TrainerError> {
         let Some(arm) = entry.applied_arm.as_deref() else {
             continue;
         };
+        if entry
+            .shield_state
+            .as_deref()
+            .is_some_and(|s| ACTIVITY_CLAMPING_SHIELDS.contains(&s))
+        {
+            continue;
+        }
         let Some(class_idx) = arm_to_class_idx(arm) else {
             continue;
         };
@@ -418,6 +654,20 @@ fn read_labelled_rows(path: &Path) -> Result<Vec<LabelledRow>, TrainerError> {
         });
     }
     Ok(out)
+}
+
+/// Count labelled rows per activity class. Drives the Step T3
+/// coverage gate so the daemon can surface the gap on
+/// `sy power status` instead of training a softmax head whose missing
+/// classes silently collapse to zero gradient.
+fn class_counts(rows: &[LabelledRow]) -> [usize; FORECAST_CLASS_COUNT] {
+    let mut counts = [0usize; FORECAST_CLASS_COUNT];
+    for row in rows {
+        if row.class_idx < FORECAST_CLASS_COUNT {
+            counts[row.class_idx] += 1;
+        }
+    }
+    counts
 }
 
 /// Project a canonical arm name onto the five-class taxonomy
@@ -850,6 +1100,8 @@ fn run_validation(model: &Model, windows: &[LabelledWindow]) -> Result<f32, Stri
         return Ok(0.0);
     }
     let mut hits = 0usize;
+    let mut class_hits = [0usize; FORECAST_CLASS_COUNT];
+    let mut class_totals = [0usize; FORECAST_CLASS_COUNT];
     for w in windows {
         let last = w.seq[WINDOW_LEN - 1];
         let probs = crate::power::forecast::gru::infer(model, &last)
@@ -865,8 +1117,32 @@ fn run_validation(model: &Model, windows: &[LabelledWindow]) -> Result<f32, Stri
             })
             .map(|(i, _)| i)
             .unwrap_or(0);
+        if w.class_idx < FORECAST_CLASS_COUNT {
+            class_totals[w.class_idx] += 1;
+            if argmax == w.class_idx {
+                class_hits[w.class_idx] += 1;
+            }
+        }
         if argmax == w.class_idx {
             hits += 1;
+        }
+    }
+    // Per-class recall floor (Step T3 / BUG-20260525-2352). Only
+    // checks classes that actually appear in the validation set —
+    // unobserved classes are already blocked by the
+    // `InsufficientClassCoverage` gate upstream, and re-flagging them
+    // here would deadlock fixtures that intentionally probe the
+    // recall path in isolation.
+    for (idx, total) in class_totals.iter().enumerate() {
+        if *total == 0 {
+            continue;
+        }
+        let recall = class_hits[idx] as f32 / *total as f32;
+        if recall < MIN_PER_CLASS_RECALL {
+            return Err(format!(
+                "per-class recall floor: class {} recall = {recall:.3} < {MIN_PER_CLASS_RECALL}",
+                ACTIVITY_CLASSES[idx],
+            ));
         }
     }
     Ok(hits as f32 / windows.len() as f32)
@@ -926,11 +1202,13 @@ fn run_sequence_validation(model: &Model, windows: &[LabelledWindow]) -> Result<
 // ---------------------------------------------------------------------------
 
 /// Build the trained-model ONNX bytes. The graph mirrors the GRU
-/// forward pass:
-/// `features[seq, 1, 12] → GRU → Y_h[1, 1, 16] → Squeeze → Unsqueeze →
-/// Gemm(W_head, b_head) → Softmax → probs[1, 5]`. Every op is in
-/// tract's well-supported core set so the validation gate is reliable.
-fn export_onnx(weights: &GruWeights) -> Result<Vec<u8>, String> {
+/// forward pass with the BUG-20260723-2352 normalisation prefix:
+/// `features[seq, 1, 12] → Sub(mean) → Mul(1/std) → GRU → Y_h[1, 1, 16]
+/// → Reshape → Gemm(W_head, b_head) → Softmax → probs[1, 5]`. Every op
+/// is in tract's well-supported core set so the validation gate is
+/// reliable, and the model consumes RAW daemon features — the z-score
+/// constants travel inside the graph.
+fn export_onnx(weights: &GruWeights, stats: &FeatureStats) -> Result<Vec<u8>, String> {
     // Flatten W: [num_directions=1, 3*H, I] — gate-major, rows are
     // hidden units within each gate.
     let mut w_flat = Vec::with_capacity(GATE_COUNT * HIDDEN_DIM * FEATURE_LEN);
@@ -995,10 +1273,17 @@ fn export_onnx(weights: &GruWeights) -> Result<Vec<u8>, String> {
     // input in the same opset bump, so Reshape is the simpler choice
     // here — one node, no axes-tensor side-input).
     let reshape_shape = int64_tensor("Reshape_target", &[2], vec![1i64, HIDDEN_DIM as i64])?;
+    // Normalisation constants — shape [12] broadcasts across the
+    // `[seq, 1, 12]` input's trailing axis per ONNX numpy rules.
+    let norm_mean = float_tensor("Norm_mean", &[FEATURE_LEN as i64], stats.mean.to_vec())?;
+    let norm_scale = float_tensor("Norm_scale", &[FEATURE_LEN as i64], stats.inv_std.to_vec())?;
 
     let nodes = vec![
+        // z-score prefix: (features - mean) * inv_std.
+        binary_node("Sub", "norm_sub", "features", "Norm_mean", "centered"),
+        binary_node("Mul", "norm_mul", "centered", "Norm_scale", "normed"),
         // GRU outputs Y_h with shape [num_directions=1, batch=1, hidden].
-        gru_node("gru1", "features", "GRU_W", "GRU_R", "GRU_B", "Y_h"),
+        gru_node("gru1", "normed", "GRU_W", "GRU_R", "GRU_B", "Y_h"),
         // Reshape [1, 1, hidden] → [1, hidden] so Gemm sees rank-2.
         reshape_node("rs1", "Y_h", "Reshape_target", "h_final"),
         // Linear head + softmax.
@@ -1009,6 +1294,8 @@ fn export_onnx(weights: &GruWeights) -> Result<Vec<u8>, String> {
         node: nodes,
         name: "sy_power_trainer_gru".into(),
         initializer: vec![
+            norm_mean,
+            norm_scale,
             gru_w,
             gru_r,
             gru_b,
@@ -1082,6 +1369,18 @@ fn gru_node(name: &str, x: &str, w: &str, r: &str, b: &str, y_h: &str) -> pb::No
         output: vec![String::new(), y_h.into()],
         op_type: "GRU".into(),
         attribute: vec![hidden_attr, lbr_attr],
+        ..Default::default()
+    }
+}
+
+/// Element-wise binary op node (`Sub` / `Mul`) — the normalisation
+/// prefix's building block. Relies on ONNX numpy-style broadcasting.
+fn binary_node(op: &str, name: &str, a: &str, b: &str, y: &str) -> pb::NodeProto {
+    pb::NodeProto {
+        name: name.into(),
+        input: vec![a.into(), b.into()],
+        output: vec![y.into()],
+        op_type: op.into(),
         ..Default::default()
     }
 }
@@ -1228,6 +1527,18 @@ mod tests {
     /// schema fields are stamped manually so the test isn't coupled to
     /// any specific daemon constructor.
     fn synth_line(features: [f32; FEATURE_LEN], arm: &str, seq: i64) -> String {
+        synth_line_with_shield(features, arm, seq, None)
+    }
+
+    /// [`synth_line`] with an explicit `shield_state` — the
+    /// BUG-20260723-2352 label-poisoning tests need HOT / BATTERY_LOW
+    /// rows.
+    fn synth_line_with_shield(
+        features: [f32; FEATURE_LEN],
+        arm: &str,
+        seq: i64,
+        shield: Option<&str>,
+    ) -> String {
         let ts =
             Utc.with_ymd_and_hms(2026, 5, 19, 0, 0, 0).unwrap() + chrono::Duration::seconds(seq);
         let snapshot = Snapshot {
@@ -1241,7 +1552,7 @@ mod tests {
             schema: SCHEMA_ID,
             snapshot,
             applied_arm: Some(arm.into()),
-            shield_state: None,
+            shield_state: shield.map(String::from),
             reason_chain: Vec::new(),
             ranked_actions: Vec::new(),
             conservative_alpha: 0.0,
@@ -1287,21 +1598,35 @@ mod tests {
     }
 
     /// Write the SYNTH_ROWS-line NDJSON corpus to `dir/telemetry.ndjson`
-    /// with the documented (first 100 idle, middle 100 build, last
-    /// 100 call) transition.
+    /// with all five activity classes round-robin-interleaved (Step T3
+    /// coverage gate). Round-robin guarantees both the training split
+    /// (first 80%) and the held-out validation split (last 20%) see
+    /// every class, so the new per-class recall floor doesn't reject
+    /// the trainer when an entire class only appeared at the tail end
+    /// of a temporally-ordered corpus.
     fn write_synth_corpus(dir: &Path) -> PathBuf {
         let path = dir.join("telemetry.ndjson");
         let mut f = fs::File::create(&path).expect("create synthetic NDJSON");
-        for i in 0..SYNTH_ROWS {
-            let class = if i < SYNTH_ROWS / 3 {
-                "idle"
-            } else if i < 2 * SYNTH_ROWS / 3 {
-                "build"
-            } else {
-                "call"
-            };
-            let feats = perturb(class_centroid(class), i as i64);
-            writeln!(f, "{}", synth_line(feats, class, i as i64)).expect("write line");
+        let arms = ["idle", "browse", "call", "code", "build"];
+        for seq in 0..SYNTH_ROWS {
+            let arm = arms[seq % arms.len()];
+            let mut feats = class_centroid(arm);
+            // `browse` / `code` aren't in `class_centroid`'s table —
+            // synthesize distinct centroids so the trainer can
+            // separate every class.
+            match arm {
+                "browse" => {
+                    feats[3] = 0.85;
+                    feats[6] = 0.5;
+                }
+                "code" => {
+                    feats[10] = 0.9;
+                    feats[11] = 0.4;
+                }
+                _ => {}
+            }
+            let feats = perturb(feats, seq as i64);
+            writeln!(f, "{}", synth_line(feats, arm, seq as i64)).expect("write line");
         }
         path
     }
@@ -1423,7 +1748,7 @@ mod tests {
         // Export + reload through tract — the validation accuracy
         // assertion below depends on the same GRU op tract decodes
         // from the emitted ONNX.
-        let bytes = export_onnx(&trained.weights).expect("export_onnx");
+        let bytes = export_onnx(&trained.weights, &FeatureStats::identity()).expect("export_onnx");
         let model = Model::from_onnx_bytes(&bytes).expect("tract decodes trained GRU ONNX");
         // Run the FULL sequence through tract (not just the last
         // snapshot) — the GRU's temporal signal is what we're
@@ -1495,6 +1820,519 @@ mod tests {
             }
             other => panic!("expected InsufficientData, got {other:?}"),
         }
+    }
+
+    /// Write a full round-robin corpus (all five classes) into
+    /// `dir/<name>`, splitting the `SYNTH_ROWS` rows so `seq` values
+    /// stay globally monotonic across segments (`start`..`start+count`).
+    /// Mirrors `write_synth_corpus` but lets a test lay the same corpus
+    /// down across several daily-segmented files.
+    fn write_named_segment(dir: &Path, name: &str, start: usize, count: usize) -> PathBuf {
+        let path = dir.join(name);
+        let mut f = fs::File::create(&path).expect("create segment");
+        let arms = ["idle", "browse", "call", "code", "build"];
+        for seq in start..start + count {
+            let arm = arms[seq % arms.len()];
+            let mut feats = class_centroid(arm);
+            match arm {
+                "browse" => {
+                    feats[3] = 0.85;
+                    feats[6] = 0.5;
+                }
+                "code" => {
+                    feats[10] = 0.9;
+                    feats[11] = 0.4;
+                }
+                _ => {}
+            }
+            let feats = perturb(feats, seq as i64);
+            writeln!(f, "{}", synth_line(feats, arm, seq as i64)).expect("write line");
+        }
+        path
+    }
+
+    /// BUG-20260712-1545 part 1: live telemetry is daily-segmented, so
+    /// the trainer must accept the state *directory* and read every
+    /// `telemetry-*.ndjson` segment. The corpus split across two daily
+    /// files must train exactly as if it were one file, and unrelated
+    /// files (checkpoint.json, forecaster.onnx) must be skipped.
+    #[test]
+    fn reads_directory_corpus_across_segments() {
+        let tmp = TempDir::new().expect("tempdir");
+        let half = SYNTH_ROWS / 2;
+        write_named_segment(tmp.path(), "telemetry-2026-07-11.ndjson", 0, half);
+        write_named_segment(
+            tmp.path(),
+            "telemetry-2026-07-12.ndjson",
+            half,
+            SYNTH_ROWS - half,
+        );
+        // Decoys that must be skipped, not parsed as telemetry.
+        fs::write(tmp.path().join("checkpoint.json"), b"{}").expect("decoy checkpoint");
+        fs::write(tmp.path().join("forecaster.onnx"), b"not onnx").expect("decoy model");
+        fs::create_dir(tmp.path().join("reports")).expect("decoy reports dir");
+
+        let out_path = tmp.path().join("model.onnx");
+        let report = retrain_gru(tmp.path(), &out_path).expect("directory corpus trains");
+        assert_eq!(report.rows_used, SYNTH_ROWS);
+        assert!(out_path.exists(), "model should land at {}", out_path.display());
+    }
+
+    /// BUG-20260712-1545 part 1: overflow segments of one day are named
+    /// `telemetry-<date>.<N>.ndjson`. Plain lexicographic order sorts
+    /// `.10` before `.2`; the trainer must order them numerically
+    /// (base file first, then 1, 2, … 10) so the corpus is chronological.
+    #[test]
+    fn reads_directory_corpus_orders_numeric_overflow() {
+        // Deliberately create the segments out of order and with a
+        // numeric-overflow suffix that would mis-sort lexicographically.
+        let names = [
+            "telemetry-2026-07-12.10.ndjson",
+            "telemetry-2026-07-12.2.ndjson",
+            "telemetry-2026-07-12.ndjson",
+            "telemetry-2026-07-12.1.ndjson",
+        ];
+        let expected = [
+            "telemetry-2026-07-12.ndjson",
+            "telemetry-2026-07-12.1.ndjson",
+            "telemetry-2026-07-12.2.ndjson",
+            "telemetry-2026-07-12.10.ndjson",
+        ];
+        let tmp = TempDir::new().expect("tempdir");
+        for name in names {
+            fs::write(tmp.path().join(name), b"").expect("touch segment");
+        }
+        let ordered = telemetry_segments(tmp.path()).expect("collect segments");
+        let ordered_names: Vec<String> = ordered
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(ordered_names, expected);
+    }
+
+    /// BUG-20260712-1545 part 1: single-file paths must keep working
+    /// (the `sy power train --telemetry <file>` CLI + every existing
+    /// trainer test pass a file, not a directory).
+    #[test]
+    fn single_file_corpus_still_trains() {
+        let tmp = TempDir::new().expect("tempdir");
+        let in_path = write_synth_corpus(tmp.path());
+        assert!(in_path.is_file(), "fixture must be a single file");
+        let out_path = tmp.path().join("model.onnx");
+        let report = retrain_gru(&in_path, &out_path).expect("single-file corpus trains");
+        assert_eq!(report.rows_used, SYNTH_ROWS);
+    }
+
+    /// BUG-20260712-1545 part 1: a directory with zero matching
+    /// segments must flow into the documented `InsufficientData` path,
+    /// never panic on an empty tensor.
+    #[test]
+    fn empty_directory_is_insufficient_data_not_panic() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Only non-telemetry files present.
+        fs::write(tmp.path().join("checkpoint.json"), b"{}").expect("decoy");
+        let out_path = tmp.path().join("model.onnx");
+        let err = retrain_gru(tmp.path(), &out_path).expect_err("empty dir has no rows");
+        match err {
+            TrainerError::InsufficientData { found, .. } => assert_eq!(found, 0),
+            other => panic!("expected InsufficientData, got {other:?}"),
+        }
+    }
+
+    /// Step T3 DoD: when the corpus is missing entire classes, the
+    /// BUG-20260723-2210: a corpus with solid coverage on some classes
+    /// but zero rows on others must TRAIN on the covered classes and
+    /// report the rest as excluded — the all-or-nothing gate deadlocked
+    /// the live daemon (rules baseline only ever applies the arms its
+    /// heuristics reach, so `call`/`build` never accrue rows, so the
+    /// model never trains, so the drift alarm never clears). Mirrors
+    /// the live corpus shape: `idle` / `browse` / `code` covered,
+    /// `call` / `build` at zero.
+    #[test]
+    fn trains_when_uncovered_classes_can_be_excluded() {
+        let tmp = TempDir::new().expect("tempdir");
+        let in_path = tmp.path().join("telemetry.ndjson");
+        let mut f = fs::File::create(&in_path).expect("create file");
+        let arms = ["browse", "idle", "code"];
+        for i in 0..200usize {
+            let arm = arms[i % arms.len()];
+            let mut feats = class_centroid(arm);
+            match arm {
+                "browse" => {
+                    feats[3] = 0.85;
+                    feats[6] = 0.5;
+                }
+                "code" => {
+                    feats[10] = 0.9;
+                    feats[11] = 0.4;
+                }
+                _ => {}
+            }
+            let feats = perturb(feats, i as i64);
+            writeln!(f, "{}", synth_line(feats, arm, i as i64)).expect("write line");
+        }
+        let out_path = tmp.path().join("model.onnx");
+        let report = retrain_gru(&in_path, &out_path)
+            .expect("covered classes must train despite zero-row classes");
+        assert_eq!(
+            report.excluded_classes,
+            vec!["call", "build"],
+            "zero-row classes must be reported as excluded",
+        );
+        assert_eq!(report.rows_used, 200, "all covered-class rows train");
+        assert!(
+            out_path.exists(),
+            "ONNX must land at {}",
+            out_path.display(),
+        );
+    }
+
+    /// BUG-20260723-2210: exclusion has a floor — a softmax classifier
+    /// over fewer than [`MIN_COVERED_CLASSES`] covered classes is
+    /// degenerate, so a corpus where only one class clears the row
+    /// floor still rejects with `InsufficientClassCoverage`.
+    #[test]
+    fn rejects_when_fewer_than_two_classes_covered() {
+        let tmp = TempDir::new().expect("tempdir");
+        let in_path = tmp.path().join("telemetry.ndjson");
+        let mut f = fs::File::create(&in_path).expect("create file");
+        for i in 0..100usize {
+            let feats = perturb(class_centroid("idle"), i as i64);
+            writeln!(f, "{}", synth_line(feats, "browse", i as i64)).expect("write line");
+        }
+        let out_path = tmp.path().join("model.onnx");
+        let err = retrain_gru(&in_path, &out_path).expect_err("single covered class must reject");
+        match err {
+            TrainerError::InsufficientClassCoverage {
+                missing, required, ..
+            } => {
+                assert_eq!(required, MIN_ROWS_PER_CLASS);
+                assert!(
+                    missing.contains(&"call") && missing.contains(&"build"),
+                    "uncovered classes must be named, got {missing:?}",
+                );
+            }
+            other => panic!("expected InsufficientClassCoverage, got {other:?}"),
+        }
+    }
+
+    /// Step T3 DoD: the coverage gate enforces a per-class ROW count,
+    /// not just class presence. A corpus with 100 browse rows + 5 code
+    /// rows + zero call/build/idle must reject — `code` is below the
+    /// row floor, leaving only `browse` covered, which is under the
+    /// [`MIN_COVERED_CLASSES`] floor (BUG-20260723-2210).
+    #[test]
+    fn rejects_when_class_has_too_few_rows() {
+        let tmp = TempDir::new().expect("tempdir");
+        let in_path = tmp.path().join("telemetry.ndjson");
+        let mut f = fs::File::create(&in_path).expect("create file");
+        for i in 0..100usize {
+            let feats = perturb(class_centroid("idle"), i as i64);
+            writeln!(f, "{}", synth_line(feats, "browse", i as i64)).expect("write browse");
+        }
+        for i in 0..5usize {
+            let feats = perturb(class_centroid("build"), (100 + i) as i64);
+            writeln!(f, "{}", synth_line(feats, "code", (100 + i) as i64)).expect("write code");
+        }
+        let out_path = tmp.path().join("model.onnx");
+        let err = retrain_gru(&in_path, &out_path).expect_err("under-floor class must reject");
+        match err {
+            TrainerError::InsufficientClassCoverage {
+                missing, counts, ..
+            } => {
+                assert!(
+                    missing.contains(&"code"),
+                    "code (5 < 16) must be in missing list, got {missing:?}",
+                );
+                let code_idx = ACTIVITY_CLASSES
+                    .iter()
+                    .position(|c| *c == "code")
+                    .expect("code class");
+                assert_eq!(counts[code_idx], 5, "counts must reflect actual row count");
+            }
+            other => panic!("expected InsufficientClassCoverage, got {other:?}"),
+        }
+    }
+
+    /// Step T3 DoD: when an observed class scores recall below
+    /// [`MIN_PER_CLASS_RECALL`] on the held-out set, the validation
+    /// gate rejects the model — even if argmax accuracy passes. The
+    /// trainer builds the validation set directly so we can pin a
+    /// fixture where every "code" window's argmax is "browse".
+    #[test]
+    fn rejects_when_per_class_recall_below_floor() {
+        // Two classes: one with high accuracy (browse, all-zero
+        // features) and one with zero recall (code, same all-zero
+        // features but different label). The trainer fits "always
+        // browse"; recall on code is 0.0.
+        let browse_idx = ACTIVITY_CLASSES
+            .iter()
+            .position(|c| *c == "browse")
+            .unwrap();
+        let code_idx = ACTIVITY_CLASSES.iter().position(|c| *c == "code").unwrap();
+        let mut windows: Vec<LabelledWindow> = Vec::new();
+        for _ in 0..40 {
+            windows.push(LabelledWindow {
+                seq: [[0.0; FEATURE_LEN]; WINDOW_LEN],
+                class_idx: browse_idx,
+            });
+        }
+        for _ in 0..20 {
+            windows.push(LabelledWindow {
+                seq: [[0.0; FEATURE_LEN]; WINDOW_LEN],
+                class_idx: code_idx,
+            });
+        }
+        let trained = train_gru(&windows).expect("train_gru on noise-only");
+        let bytes = export_onnx(&trained.weights, &FeatureStats::identity()).expect("export_onnx");
+        let model = Model::from_onnx_bytes(&bytes).expect("tract decodes");
+        let err = run_validation(&model, &windows).expect_err("recall floor must reject");
+        assert!(
+            err.contains("code recall"),
+            "expected error to name code recall, got {err}",
+        );
+    }
+
+    /// Step T3 DoD: a corpus that ticks every coverage box trains
+    /// cleanly through the new gates. 200 rows balanced across all 5
+    /// classes with linearly-separable centroids — well above the
+    /// per-class floor and far enough above the recall floor that a
+    /// converged GRU sails through both checks.
+    #[test]
+    fn accepts_when_all_observed_classes_meet_floor() {
+        let tmp = TempDir::new().expect("tempdir");
+        let in_path = tmp.path().join("telemetry.ndjson");
+        let mut f = fs::File::create(&in_path).expect("create file");
+        let arms = ["idle", "browse", "call", "code", "build"];
+        for i in 0..200usize {
+            let arm = arms[i % arms.len()];
+            // Use the arm name itself as a centroid key so each class
+            // gets a distinct feature signature. `browse` / `code`
+            // aren't in `class_centroid`'s table — synthesize a
+            // distinct centroid here so the trainer can separate
+            // them.
+            let mut feats = class_centroid(arm);
+            match arm {
+                "browse" => {
+                    feats[3] = 0.85;
+                    feats[6] = 0.5;
+                }
+                "code" => {
+                    feats[10] = 0.9;
+                    feats[11] = 0.4;
+                }
+                _ => {}
+            }
+            let feats = perturb(feats, i as i64);
+            writeln!(f, "{}", synth_line(feats, arm, i as i64)).expect("write row");
+        }
+        let out_path = tmp.path().join("model.onnx");
+        let report = retrain_gru(&in_path, &out_path).expect("balanced corpus must train cleanly");
+        assert_eq!(report.epochs, EPOCHS);
+        assert!(
+            report.excluded_classes.is_empty(),
+            "full-coverage corpus must exclude nothing, got {:?}",
+            report.excluded_classes,
+        );
+        assert!(
+            report.validation_accuracy >= 0.8,
+            "expected accuracy ≥ 0.8 on a balanced separable corpus, got {}",
+            report.validation_accuracy,
+        );
+    }
+
+    /// Guard-rail companion to BUG-20260723-2352: a live-shaped class
+    /// imbalance (browse ≈ 92%, idle ≈ 6%, code ≈ 2%) over separable
+    /// 0-1 centroids must train and clear the per-class recall floor.
+    #[test]
+    fn trains_through_recall_floor_on_imbalanced_corpus() {
+        let tmp = TempDir::new().expect("tempdir");
+        let in_path = tmp.path().join("telemetry.ndjson");
+        let mut f = fs::File::create(&in_path).expect("create file");
+        // ~92% browse / ~6% idle / ~2% code, interleaved so the
+        // temporally-last validation split still sees every class:
+        // in each 50-row block, 46 browse + 3 idle + 1 code.
+        let mut seq = 0i64;
+        for _block in 0..20 {
+            for slot in 0..50usize {
+                let arm = match slot {
+                    0 | 20 | 40 => "idle",
+                    10 => "code",
+                    _ => "browse",
+                };
+                let mut feats = class_centroid(arm);
+                match arm {
+                    "browse" => {
+                        feats[3] = 0.85;
+                        feats[6] = 0.5;
+                    }
+                    "code" => {
+                        feats[10] = 0.9;
+                        feats[11] = 0.4;
+                    }
+                    _ => {}
+                }
+                let feats = perturb(feats, seq);
+                writeln!(f, "{}", synth_line(feats, arm, seq)).expect("write line");
+                seq += 1;
+            }
+        }
+        let out_path = tmp.path().join("model.onnx");
+        let report = retrain_gru(&in_path, &out_path)
+            .expect("imbalanced-but-separable corpus must train and clear the recall floor");
+        assert_eq!(report.excluded_classes, vec!["call", "build"]);
+        assert!(
+            report.validation_accuracy >= 0.8,
+            "expected accuracy ≥ 0.8, got {}",
+            report.validation_accuracy,
+        );
+    }
+
+    /// BUG-20260723-2352: the daemon logs RAW sensor features
+    /// (tctl ≈ 39-93 °C, package power ≈ 3-54 W, user_idle_s up to
+    /// ~32,000 s) but the trainer consumed them unnormalized — Glorot
+    /// init × a 4-digit feature saturates every GRU gate, gradients
+    /// vanish, the model collapses to the majority class, and the
+    /// recall floor (correctly) rejects it. The daemon then stays on
+    /// the rules baseline forever. Live-scaled centroids + live-shaped
+    /// imbalance must train and ship.
+    #[test]
+    fn trains_on_raw_scale_live_features() {
+        let tmp = TempDir::new().expect("tempdir");
+        let in_path = tmp.path().join("telemetry.ndjson");
+        let mut f = fs::File::create(&in_path).expect("create file");
+        // Raw-scale centroids modelled on the live corpus ranges.
+        fn raw_centroid(arm: &str) -> [f32; FEATURE_LEN] {
+            let mut v = [0.0f32; FEATURE_LEN];
+            v[4] = 90.0; // battery_soc_pct (raw percent)
+            v[5] = 1.0; // ac_online
+            v[7] = 15.0; // constant on the live host
+            match arm {
+                "idle" => {
+                    v[0] = 44.0; // tctl_c
+                    v[1] = 4.0; // package_power_w
+                    v[9] = 15_000.0; // user_idle_s — the 4-digit feature
+                }
+                "browse" => {
+                    v[0] = 52.0;
+                    v[1] = 7.0;
+                    v[2] = 12.0; // igpu busy %
+                    v[9] = 30.0;
+                }
+                "code" => {
+                    v[0] = 66.0;
+                    v[1] = 22.0;
+                    v[6] = 8.0; // psi cpu
+                    v[9] = 5.0;
+                }
+                _ => {}
+            }
+            v
+        }
+        // Live-shaped imbalance: 46 browse + 3 idle + 1 code per
+        // 50-row block, interleaved so validation sees every class.
+        let mut seq = 0i64;
+        for _block in 0..20 {
+            for slot in 0..50usize {
+                let arm = match slot {
+                    0 | 20 | 40 => "idle",
+                    10 => "code",
+                    _ => "browse",
+                };
+                let mut feats = raw_centroid(arm);
+                // Proportional jitter — ±5% of each feature's own
+                // magnitude, so raw scales stay realistic.
+                let jitter = ((seq as f32) * 0.013).sin() * 0.05;
+                for slot in feats.iter_mut() {
+                    *slot += *slot * jitter;
+                }
+                writeln!(f, "{}", synth_line(feats, arm, seq)).expect("write line");
+                seq += 1;
+            }
+        }
+        let out_path = tmp.path().join("model.onnx");
+        let report = retrain_gru(&in_path, &out_path)
+            .expect("raw-scale separable corpus must train and clear the recall floor");
+        assert_eq!(report.excluded_classes, vec!["call", "build"]);
+        assert!(
+            report.validation_accuracy >= 0.8,
+            "expected accuracy ≥ 0.8 on separable raw-scale corpus, got {}",
+            report.validation_accuracy,
+        );
+    }
+
+    /// BUG-20260723-2352 facet 2: rows applied under a
+    /// condition-reactive shield (`HOT`, `BATTERY_LOW`) carry the
+    /// shield's clamped arm, not the user's activity — on the live
+    /// host every `idle`-arm row sat at >70 °C under `shield:HOT`
+    /// (the thermal clamp), poisoning the idle class with flat-out
+    /// feature vectors. Such rows must be dropped from the corpus;
+    /// nominal (`COOL_AC`) and activity-derived (`MEETING`) rows are
+    /// kept. Here the shielded "idle" rows wear code-shaped features —
+    /// keeping them would poison training; dropping them leaves idle
+    /// under-covered and excluded.
+    #[test]
+    fn drops_rows_clamped_by_reactive_shields() {
+        let tmp = TempDir::new().expect("tempdir");
+        let in_path = tmp.path().join("telemetry.ndjson");
+        let mut f = fs::File::create(&in_path).expect("create file");
+        let mut seq = 0i64;
+        // 60 poisoned "idle" rows: HOT-clamped, code-shaped features.
+        for _ in 0..30 {
+            let feats = perturb(class_centroid("build"), seq);
+            writeln!(
+                f,
+                "{}",
+                synth_line_with_shield(feats, "idle", seq, Some("HOT")),
+            )
+            .expect("write hot row");
+            seq += 1;
+            let feats = perturb(class_centroid("call"), seq);
+            writeln!(
+                f,
+                "{}",
+                synth_line_with_shield(feats, "whisper", seq, Some("BATTERY_LOW")),
+            )
+            .expect("write battery row");
+            seq += 1;
+        }
+        // 200 nominal browse/code rows under COOL_AC.
+        for _ in 0..100 {
+            let mut feats = class_centroid("browse");
+            feats[3] = 0.85;
+            feats[6] = 0.5;
+            let feats = perturb(feats, seq);
+            writeln!(
+                f,
+                "{}",
+                synth_line_with_shield(feats, "browse", seq, Some("COOL_AC")),
+            )
+            .expect("write browse row");
+            seq += 1;
+            let mut feats = class_centroid("code");
+            feats[10] = 0.9;
+            feats[11] = 0.4;
+            let feats = perturb(feats, seq);
+            writeln!(
+                f,
+                "{}",
+                synth_line_with_shield(feats, "code", seq, Some("COOL_AC")),
+            )
+            .expect("write code row");
+            seq += 1;
+        }
+        let out_path = tmp.path().join("model.onnx");
+        let report = retrain_gru(&in_path, &out_path)
+            .expect("nominal rows must train once shield-clamped rows are dropped");
+        assert_eq!(
+            report.rows_used, 200,
+            "only the 200 nominal COOL_AC rows may train",
+        );
+        assert!(
+            report.excluded_classes.contains(&"idle"),
+            "idle must be excluded once its only rows are shield-clamped, got {:?}",
+            report.excluded_classes,
+        );
     }
 
     /// Mapping smoke-test — covers every branch of `arm_to_class_idx`

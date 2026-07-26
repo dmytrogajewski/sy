@@ -110,7 +110,7 @@ pub struct WorkerHealth {
     pub errors: u64,
     /// `Some(id)` while the worker is processing a [`WorkerReq::RunBatch`]
     /// with that `request_id`; `None` between requests. The supervisor's
-    /// [`Supervisor::cancel`] polls this field after sending a Cancel
+    /// [`crate::aiplane::supervisor::Supervisor::cancel`] polls this field after sending a Cancel
     /// to decide whether the worker yielded within the SPEC §4.3
     /// 500 ms guard. Older snapshots default to `None`.
     #[serde(default)]

@@ -109,14 +109,17 @@ fn bandit_status_block_schema_matches_spec_v1() {
         stream.flush().expect("flush");
     });
 
-    // The binary's CLI-side anti-dead-code probe (`probe_actuators` +
-    // `snapshot::collect_tick`) walks the live `/sys` tree by default
-    // and feeds the result into `shield::transition`. On a hot host
-    // (CPU > ~75 °C) the DFA tips out of `CoolAc`, which flips the
-    // SPEC §4 `bandit.baseline_arm` away from `"browse"` and breaks
-    // this test's literal assertion. Point the probe at an empty
-    // tempdir so every sensor returns `Err(...)` → snapshot fields
-    // stay `None` → DFA falls through to `CoolAc`. Step H2 retry.
+    // The binary's CLI-side `power status` probe runs
+    // `snapshot::collect_tick` and feeds the result into
+    // `shield::transition`, so the live host can tip the DFA out of
+    // `CoolAc` and flip the SPEC §4 `bandit.baseline_arm` away from
+    // `"browse"`: a hot CPU (> ~75 °C) → `Hot`, and — the path that
+    // actually bit here — a call / screen-cast / media stream on the
+    // operator's desktop sets `call_active` → `Meeting` (baseline
+    // `"call"`). Setting `SY_SYSFS_ROOT` to an empty tempdir isolates
+    // the *whole* probe: sysfs sensors return `Err(...) → None`, and
+    // `probe_intent` skips the live D-Bus intent channels, so the DFA
+    // deterministically falls through to `CoolAc`. See BUG-20260601-2030.
     let sysfs = tempfile::tempdir().expect("sysfs tempdir");
     let bin = env!("CARGO_BIN_EXE_sy");
     let out = Command::new(bin)

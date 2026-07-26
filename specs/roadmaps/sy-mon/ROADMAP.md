@@ -1,7 +1,7 @@
 # ROADMAP: sy-mon — on-demand, layer-shell health dashboard
 
 Source: `specs/research/sy-mon/SPEC.md`. Related: the deferred Zone 6.2
-work in `specs/roadmaps/arch-observability/ROADMAP.md` (Step 7
+work in `specs/archive/roadmaps/arch-observability/ROADMAP.md` (Step 7
 "Risks / unknowns" — `metrics-exporter-prometheus` UDS exposition is
 explicitly OUT of that roadmap and this is where it lands).
 
@@ -1477,7 +1477,7 @@ SCOPE §9. Schema doc for MCP consumers. README + CHANGELOG entries.
       Step 22 close.)
 - [x] arch-observability ROADMAP §7 "Risks / unknowns" updated to mark
       the UDS exporter delivered here.
-      (`specs/roadmaps/arch-observability/ROADMAP.md` §7 now carries
+      (`specs/archive/roadmaps/arch-observability/ROADMAP.md` §7 now carries
       an "Update (sy-mon ROADMAP Step 22)" note pointing at
       `docs/admin/mon-remote.md`.)
 

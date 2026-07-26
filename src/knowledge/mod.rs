@@ -13,21 +13,27 @@ use anyhow::Result;
 use clap::Subcommand;
 
 pub mod autoconfig;
+pub mod calibrate;
 pub mod chunk;
 pub mod cli;
 pub mod daemon;
 pub mod embed;
+pub mod eval;
 pub mod extract;
 pub mod ipc;
 pub mod manifest;
 pub mod mcp;
 pub mod normalize;
+pub mod pipeline;
 pub mod qdrant;
+pub mod query;
 pub mod repair;
 pub mod runctx;
 pub mod sources;
+pub mod sparse;
 pub mod state;
 pub mod status;
+pub mod transcribe;
 
 #[derive(Subcommand)]
 pub enum KnowledgeCmd {
@@ -116,6 +122,35 @@ pub enum KnowledgeCmd {
             default_value = "Interactive"
         )]
         priority: sy_core::Priority,
+        /// Inclusive lower date bound (ISO-8601 / RFC-3339). REQ-2.
+        #[arg(long, env = "SY_KB_DATE_FROM")]
+        date_from: Option<String>,
+        /// Inclusive upper date bound (ISO-8601 / RFC-3339). REQ-2.
+        #[arg(long, env = "SY_KB_DATE_TO")]
+        date_to: Option<String>,
+        /// Restrict to these senders (repeatable, any-of). REQ-2.
+        #[arg(long = "from", env = "SY_KB_FROM", value_delimiter = ',')]
+        from: Vec<String>,
+        /// Restrict to these source kinds (repeatable, any-of). Naming
+        /// `claude-transcripts` opts it back into scope (REQ-1).
+        #[arg(long, env = "SY_KB_KIND", value_delimiter = ',')]
+        kind: Vec<sources::SourceKind>,
+        /// Source names that must be present (repeatable, must). REQ-2.
+        #[arg(long = "include-source", env = "SY_KB_INCLUDE", value_delimiter = ',')]
+        include_source: Vec<String>,
+        /// Source names that must be absent (repeatable, must-not). REQ-2.
+        #[arg(long = "exclude-source", env = "SY_KB_EXCLUDE", value_delimiter = ',')]
+        exclude_source: Vec<String>,
+    },
+
+    /// Fetch the full, uncapped text of one chunk by the stable `chunk_id`
+    /// a bounded search result carries (REQ-10). Use after `search` to drill
+    /// into a single hit instead of re-reading the whole file.
+    GetChunk {
+        /// The chunk_id from a `sy knowledge search` result.
+        chunk_id: String,
+        #[arg(long)]
+        json: bool,
     },
 
     /// List active `qdr.toml` manifests (auto-discovered + under explicit
@@ -132,6 +167,15 @@ pub enum KnowledgeCmd {
 
     /// Print the daemon's status snapshot (human or `--json`).
     Status {
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Run the retrieval-eval golden set against the live index and
+    /// report recall@1/5, MRR, and abstain accuracy (REQ-9). Exits
+    /// non-zero (code 3, drift) when a metric regresses past tolerance;
+    /// `make eval` gates CI on this.
+    Eval {
         #[arg(long)]
         json: bool,
     },
@@ -227,6 +271,12 @@ pub fn dispatch(cmd: KnowledgeCmd) -> Result<()> {
             no_rerank,
             candidates,
             priority,
+            date_from,
+            date_to,
+            from,
+            kind,
+            include_source,
+            exclude_source,
         } => cli::search(
             &query,
             limit,
@@ -235,10 +285,20 @@ pub fn dispatch(cmd: KnowledgeCmd) -> Result<()> {
             !no_rerank,
             candidates,
             priority,
+            cli::SearchArgs {
+                date_from,
+                date_to,
+                from,
+                kind: kind.iter().map(|k| k.as_kebab().to_string()).collect(),
+                include_source,
+                exclude_source,
+            },
         ),
+        KnowledgeCmd::GetChunk { chunk_id, json } => cli::get_chunk(&chunk_id, json),
         KnowledgeCmd::Manifests { json } => cli::manifests(json),
         KnowledgeCmd::Waybar => cli::waybar(),
         KnowledgeCmd::Status { json } => cli::status_cmd(json),
+        KnowledgeCmd::Eval { json } => cli::eval_cmd(json),
         KnowledgeCmd::Pick => cli::pick(),
         KnowledgeCmd::Pause => cli::pause(),
         KnowledgeCmd::Resume => cli::resume(),
@@ -271,6 +331,10 @@ pub mod exit {
     pub const SOURCE_NOT_FOUND: i32 = 3;
     pub const QDRANT_UNREACHABLE: i32 = 4;
     pub const EMBEDDING_FAILED: i32 = 5;
+    /// Voice/video transcription failed: ffmpeg missing/decode error, or
+    /// the aiplane `Stt` worker errored. Surfaced by
+    /// [`crate::knowledge::transcribe::AiplaneTranscriber`].
+    pub const TRANSCRIBE_FAILED: i32 = 6;
 }
 
 /// Vector dimension for the chosen embedding model (multilingual-e5-base,
@@ -288,8 +352,21 @@ pub use crate::aiplane::workloads::VECTOR_DIM;
 /// Default Qdrant REST port (bind 127.0.0.1).
 pub const QDRANT_PORT: u16 = 6333;
 
-/// Default sync interval if [knowledge].schedule is unset.
+/// Default sync interval if `[knowledge].schedule` is unset.
 pub const DEFAULT_SCHEDULE: &str = "15m";
 
 /// Qdrant collection name owned by sy.
 pub const COLLECTION: &str = "sy_knowledge";
+
+/// Collection schema version. Bumped to `2` when the collection moved from a
+/// single unnamed dense vector to named `dense` (Cosine) + `sparse` vectors
+/// (knowledge-retrieval-iter1 Step 3). The daemon detects a live collection
+/// that predates this version on startup and queues a `FullResync` to drop +
+/// recreate with the v2 schema and re-embed.
+pub const SCHEMA_VERSION: u32 = 2;
+
+/// Named dense vector in the v2 collection schema.
+pub const DENSE_VECTOR: &str = "dense";
+
+/// Named sparse vector in the v2 collection schema.
+pub const SPARSE_VECTOR: &str = "sparse";

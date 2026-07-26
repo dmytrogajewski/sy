@@ -32,7 +32,7 @@ use super::super::registry::{
     cache_root, Workload, WorkloadHealth, WorkloadInput, WorkloadKind, WorkloadOutput,
 };
 use super::super::session::SessionPool;
-use super::{detect_cpu_model, detect_npu_label, VECTOR_DIM};
+use super::{detect_cpu_model, detect_npu_label, npu_intra_threads, VECTOR_DIM};
 
 const MODEL_STEM: &str = "multilingual-e5-base";
 const SEQ_LEN: usize = 512;
@@ -262,6 +262,11 @@ fn try_vitisai(model: &Path, cache_dir: &Path) -> Result<Session> {
 
     Session::builder()
         .map_err(|e| anyhow::anyhow!("session builder: {e}"))?
+        // Cap the CPU-EP intra-op pool: VitisAI runs the matmuls on the
+        // AIE, ORT's CPU EP only handles fallback glue. Uncapped it grabs
+        // every core and pins the box during a catch-up pass.
+        .with_intra_threads(npu_intra_threads())
+        .map_err(|e| anyhow::anyhow!("intra-op thread cap: {e}"))?
         // BASIC runs ORT's safe, partition-friendly transforms
         // (constant folding, redundant Cast elimination, trivial
         // fusions) before VAIP sees the graph. Measured on Strix:
@@ -279,6 +284,10 @@ fn try_vitisai(model: &Path, cache_dir: &Path) -> Result<Session> {
 fn try_cpu(model: &Path) -> Result<Session> {
     Session::builder()
         .map_err(|e| anyhow::anyhow!("session builder: {e}"))?
+        // Same cap as the VitisAI path: the CPU fallback would otherwise
+        // run the whole graph across every core.
+        .with_intra_threads(npu_intra_threads())
+        .map_err(|e| anyhow::anyhow!("intra-op thread cap: {e}"))?
         .commit_from_file(model)
         .map_err(|e| anyhow::anyhow!("cpu session: {e}"))
 }

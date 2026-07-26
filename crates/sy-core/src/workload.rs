@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 pub enum WorkloadKind {
     /// Text → fixed-dim sentence embedding.
     Embed,
-    /// (query, doc) text pair → relevance score in [0,1].
+    /// (query, doc) text pair → relevance score in `[0,1]`.
     Rerank,
     /// 16 kHz mono audio → speech/silence span list.
     Vad,

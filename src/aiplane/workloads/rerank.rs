@@ -33,7 +33,7 @@ use super::super::registry::{
     cache_root, Workload, WorkloadHealth, WorkloadInput, WorkloadKind, WorkloadOutput,
 };
 use super::super::session::SessionPool;
-use super::detect_npu_label;
+use super::{detect_npu_label, npu_intra_threads};
 
 const MODEL_STEM: &str = "bge-reranker-v2-m3";
 const SEQ_LEN: usize = 512;
@@ -276,6 +276,11 @@ fn try_vitisai(model: &Path, cache_dir: &Path) -> Result<Session> {
 
     Session::builder()
         .map_err(|e| anyhow::anyhow!("session builder: {e}"))?
+        // Cap the CPU-EP intra-op pool: VitisAI runs the matmuls on the
+        // AIE, ORT's CPU EP only handles fallback glue. Uncapped it grabs
+        // every core and pins the box.
+        .with_intra_threads(npu_intra_threads())
+        .map_err(|e| anyhow::anyhow!("intra-op thread cap: {e}"))?
         // Level1 produces a larger serialized graph (post-fusion
         // attribute bloat). For the xlm-roberta-large backbone that
         // already sits at ~2.27 GB on disk, ORT's pre-pass pushes

@@ -1,0 +1,34 @@
+[package]
+name = "sy-plugin-md"
+version.workspace = true
+edition.workspace = true
+publish = false
+license = "MIT"
+description = "First-party Markdown previewer plugin for `sy file` (SPEC §3.3 item 18). Renders markdown to PNG via pulldown-cmark + cosmic-text + tiny-skia. Runs as a sandboxed child process under the host's plugin supervisor; no GUI, no chrome, no keyring, no terminal image protocol."
+
+# Step 12 DoD: must NOT pull `iced` (CLI tool, not a GUI). The
+# rasteriser is `tiny-skia` (pure-Rust 2D path renderer) + `cosmic-text`
+# (pure-Rust text shaper). The plugin authors its main loop through
+# `sy-plugin-pdk`'s `define_plugin!` macro — same path the Step 11 PDK
+# canary uses, so a regression in either side breaks both.
+[dependencies]
+sy-plugin-pdk = { path = "../sy-plugin-pdk" }
+pulldown-cmark.workspace = true
+cosmic-text.workspace = true
+tiny-skia.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+# Tests build the renderer directly (no child-process spawn) to keep
+# golden-PNG comparisons hermetic and fast.
+tempfile.workspace = true
+
+[lib]
+name = "sy_plugin_md"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sy-plugin-md"
+path = "src/main.rs"

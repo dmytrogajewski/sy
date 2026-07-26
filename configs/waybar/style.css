@@ -94,6 +94,7 @@ tooltip {
 #custom-sy-bat,
 #custom-sy-knowledge,
 #custom-sy-syauth,
+#custom-sy-portal,
 #custom-sy-power {
     color: @fg;
     padding: 0 6px;
@@ -123,11 +124,17 @@ tooltip {
 #custom-sy-disk.hidden,
 #custom-sy-silent.hidden,
 #custom-sy-bat.hidden,
+#custom-sy-portal.hidden,
 #custom-sy-knowledge.hidden {
     padding: 0;
     margin: 0;
     min-width: 0;
 }
+
+/* Captive-portal indicator: red when a login/top-up portal is blocking an
+   uplink, amber when connected with no internet and no portal detected. */
+#custom-sy-portal.portal  { color: @red; font-weight: 700; }
+#custom-sy-portal.limited { color: @yellow; }
 
 #custom-sy-gpu.ok       { color: @fg_dim; }
 #custom-sy-gpu.warning  { color: @yellow; }

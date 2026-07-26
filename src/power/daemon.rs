@@ -41,10 +41,13 @@ use std::time::{Duration, Instant};
 
 use crate::power::activity::{ActivityLabel, OnlineClassifier, ACTIVITY_CLASS_COUNT};
 use crate::power::apply::{
-    self, Actuator, Applied, CgroupActuator, EppActuator, IgpuActuator, NpuActuator,
-    PlatformProfileActuator,
+    self, Actuator, ActuatorLatches, Applied, CgroupActuator, EppActuator, IgpuActuator,
+    LatchOutcome, LeverLatch, NpuActuator, PlatformProfileActuator,
 };
 use crate::power::bandit::{compute_reward, for_snapshot_features_with_activity, Arm, Clucb};
+use crate::power::checkpoint::{
+    self, DaemonCheckpoint, CHECKPOINT_INTERVAL_TICKS, CHECKPOINT_SCHEMA,
+};
 use crate::power::clock::Clock;
 use crate::power::config::PowerConfig;
 use crate::power::drift::{DriftDetector, DriftSignal, DriftStatus};
@@ -138,35 +141,146 @@ pub trait RetrainTrigger: Send + Sync {
 /// `tokio::task::spawn_blocking` worker so the 1 Hz tick keeps its
 /// cadence. The `telemetry_path` + `out_path` are captured by clone
 /// at construction time so the spawned closure owns its arguments.
+/// `model_status` is the shared slot the dispatcher publishes the
+/// last retrain's coverage / recall verdict to (Step T3 /
+/// BUG-20260525-2352) so `sy power status --json` can surface a
+/// skipped train without re-tailing `journalctl`.
 pub struct SpawnBlockingRetrainTrigger {
     pub telemetry_path: PathBuf,
     pub out_path: PathBuf,
+    pub model_status: LatestModelStatus,
+}
+
+impl SpawnBlockingRetrainTrigger {
+    /// Build the production trigger for `state_root`. The trainer reads
+    /// the *whole* telemetry directory (daily-segmented NDJSON) and
+    /// writes the trained model to `<state_root>/forecaster.onnx` — the
+    /// same filename `sy power train` writes and `sy power status`
+    /// reads (`src/power/cli.rs`), so the CLI and daemon stay in
+    /// lockstep. Pinning both paths in one place is what BUG-20260712-1545
+    /// part 2 fixes (the daemon previously wrote `forecast.onnx`).
+    pub fn for_state_root(state_root: &Path, model_status: LatestModelStatus) -> Self {
+        Self {
+            telemetry_path: state_root.to_path_buf(),
+            out_path: state_root.join("forecaster.onnx"),
+            model_status,
+        }
+    }
 }
 
 impl RetrainTrigger for SpawnBlockingRetrainTrigger {
     fn dispatch(&self, cause: RetrainCause) {
         let telemetry = self.telemetry_path.clone();
         let out = self.out_path.clone();
+        let model_status = self.model_status.clone();
         tokio::task::spawn_blocking(move || {
             match crate::power::trainer::retrain_gru(&telemetry, &out) {
-                Ok(report) => tracing::info!(
-                    target: "sy::power::daemon",
-                    rows = report.rows_used,
-                    final_loss = report.final_loss,
-                    accuracy = report.validation_accuracy,
-                    wall_ms = report.wall_time_ms as u64,
-                    version_sha = %report.version_sha,
-                    cause = ?cause,
-                    "trainer retrain completed",
-                ),
-                Err(e) => tracing::warn!(
-                    target: "sy::power::daemon",
-                    error = %e,
-                    cause = ?cause,
-                    "trainer retrain failed",
-                ),
+                Ok(report) => {
+                    let excluded: Vec<String> = report
+                        .excluded_classes
+                        .iter()
+                        .map(|s| (*s).to_string())
+                        .collect();
+                    tracing::info!(
+                        target: "sy::power::daemon",
+                        rows = report.rows_used,
+                        final_loss = report.final_loss,
+                        accuracy = report.validation_accuracy,
+                        wall_ms = report.wall_time_ms as u64,
+                        version_sha = %report.version_sha,
+                        cause = ?cause,
+                        excluded_classes = ?excluded,
+                        "trainer retrain completed",
+                    );
+                    // BUG-20260723-2210: a partial train keeps its
+                    // blind spots visible on `sy power status` —
+                    // excluded classes publish as missing_classes.
+                    publish_model_status(
+                        &model_status,
+                        crate::power::ipc::ModelStatus {
+                            missing_classes: excluded,
+                        },
+                    );
+                }
+                Err(e) => {
+                    log_and_publish_retrain_error(&model_status, cause, &e);
+                }
             }
         });
+    }
+}
+
+/// Map a [`crate::power::trainer::TrainerError`] to a `tracing::warn!`
+/// line + a [`crate::power::ipc::ModelStatus`] published on the shared
+/// slot. The per-class-coverage and per-class-recall errors carry
+/// structured fields (missing classes / recall message) so
+/// `sy power explain` and the operator's `journalctl` can attribute
+/// the skipped train without re-parsing the human-readable error
+/// string.
+fn log_and_publish_retrain_error(
+    slot: &LatestModelStatus,
+    cause: RetrainCause,
+    err: &crate::power::trainer::TrainerError,
+) {
+    use crate::power::ipc::ModelStatus;
+    use crate::power::trainer::TrainerError;
+    match err {
+        TrainerError::InsufficientClassCoverage {
+            missing,
+            counts,
+            required,
+        } => {
+            let missing_strs: Vec<String> = missing.iter().map(|s| (*s).to_string()).collect();
+            tracing::warn!(
+                target: "sy::power::daemon",
+                error = %err,
+                cause = ?cause,
+                missing_classes = ?missing_strs,
+                class_counts = ?counts,
+                required = *required,
+                "trainer retrain skipped: insufficient per-class coverage",
+            );
+            publish_model_status(
+                slot,
+                ModelStatus {
+                    missing_classes: missing_strs,
+                },
+            );
+        }
+        TrainerError::ValidationFailed(msg) if msg.starts_with("per-class recall floor") => {
+            tracing::warn!(
+                target: "sy::power::daemon",
+                error = %err,
+                cause = ?cause,
+                recall = %msg,
+                "trainer retrain skipped: per-class recall floor",
+            );
+            publish_model_status(slot, ModelStatus::default());
+        }
+        _ => {
+            tracing::warn!(
+                target: "sy::power::daemon",
+                error = %err,
+                cause = ?cause,
+                "trainer retrain failed",
+            );
+            publish_model_status(slot, ModelStatus::default());
+        }
+    }
+}
+
+/// Best-effort publish of a [`crate::power::ipc::ModelStatus`] to the
+/// shared slot. A poisoned lock is logged + dropped — the next
+/// successful publish overwrites the stale state, so we never block
+/// the trainer worker on a panicked IPC handler.
+fn publish_model_status(slot: &LatestModelStatus, status: crate::power::ipc::ModelStatus) {
+    match slot.write() {
+        Ok(mut g) => *g = Some(status),
+        Err(e) => tracing::warn!(
+            target: "sy::power::daemon",
+            error = %e,
+            "model_status slot poisoned; dropping update",
+        ),
     }
 }
 
@@ -320,6 +434,39 @@ pub struct LastChosen {
     pub prev_arm: Option<String>,
 }
 
+/// Cross-tick shield state. Bundles the previous tick's DFA output
+/// with the wall-clock instant `call_active` was last observed true so
+/// the daemon can feed `secs_since_call` into [`shield::transition`].
+/// MEETING therefore releases `cfg.shield.meeting_lock_after_vad_s`
+/// seconds after the call ends instead of latching until daemon
+/// restart (BUG-20260712-1201).
+#[derive(Debug, Clone)]
+pub struct ShieldTickState {
+    /// DFA state applied on the previous tick. Seeds the next
+    /// `transition`'s `prev` argument.
+    pub prev: ShieldState,
+    /// Wall-clock instant `call_active` was last observed true. `None`
+    /// until the first live call this run; drives the `secs_since_call`
+    /// the DFA uses to age the MEETING lock window.
+    pub last_call_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl Default for ShieldTickState {
+    fn default() -> Self {
+        Self {
+            prev: ShieldState::CoolAc,
+            last_call_at: None,
+        }
+    }
+}
+
+impl ShieldTickState {
+    /// Fresh state: `COOL_AC` with no call ever seen.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 /// Step 22 bandit state held across ticks: the Clucb posterior, the
 /// previous tick's arm choice (for the lag-by-one reward update), and
 /// the prev-prev arm name (so `compute_reward`'s thrash penalty knows
@@ -349,7 +496,7 @@ pub struct DriftTickState {
     /// mean shows up as a steady stream of "errors". Pure online
     /// estimator (sum / n), no allocation.
     pub reward_mean: f32,
-    /// Number of reward samples folded into [`reward_mean`]. Cap-
+    /// Number of reward samples folded into `reward_mean`. Cap-
     /// less because the reward stream is at most ~1 Hz so even a year
     /// of continuous operation stays inside `u32::MAX`.
     pub reward_n: u32,
@@ -372,12 +519,47 @@ pub fn new_latest_drift_status() -> LatestDriftStatus {
     Arc::new(RwLock::new(DriftStatus::default()))
 }
 
+/// Shared "latest model health" slot (Step T3 / BUG-20260525-2352).
+/// Written by [`SpawnBlockingRetrainTrigger::dispatch`] after every
+/// retrain attempt — `Some(ModelStatus { missing_classes: [..] })` on
+/// the per-class-coverage gate, `Some(ModelStatus::default())` on
+/// other errors or success, `None` only before the first retrain ever
+/// fires. Read by the IPC handler to populate
+/// [`crate::power::ipc::StatusResponse::model`].
+pub type LatestModelStatus = Arc<RwLock<Option<crate::power::ipc::ModelStatus>>>;
+
+/// Build an empty latest-model-status holder. Mirrors
+/// [`new_latest_drift_status`] — the slot starts `None` so
+/// `sy power status --json | jq .model.missing_classes` returns
+/// `null` until the trainer has reported.
+pub fn new_latest_model_status() -> LatestModelStatus {
+    Arc::new(RwLock::new(None))
+}
+
+/// Shared "latest onboarding gate" slot (BUG-20260712-1530). Written by
+/// the daemon's tick loop right after it recomputes
+/// [`OnboardingTickState::status`]; read by the IPC handler to populate
+/// [`crate::power::ipc::StatusResponse::onboarding`]. Holding the
+/// daemon's own view here is what lets `sy power status` report the gate
+/// the daemon is *actually* enforcing rather than the CLI process's
+/// re-computation, which diverges whenever the two load a different
+/// `SY_POWER_ONBOARDING_DAYS` (e.g. a systemd drop-in scoping the env to
+/// `sy-powerd` only). Starts `None` until the first tick computes a
+/// status.
+pub type LatestOnboarding = Arc<RwLock<Option<crate::power::ipc::OnboardingWire>>>;
+
+/// Build an empty latest-onboarding holder. Mirrors
+/// [`new_latest_model_status`].
+pub fn new_latest_onboarding() -> LatestOnboarding {
+    Arc::new(RwLock::new(None))
+}
+
 /// Desktop-side notifier for the SPEC §5 "sy-powerd is retraining:
 /// drift detected" message. Separate from the systemd [`Notifier`]
 /// trait above (which fires `WATCHDOG=1` pings) so the two surfaces
 /// can be mocked independently. Production wires
 /// [`SystemDriftNotifier`] (shells `notify-send`); tests wire
-/// [`MockDriftNotifier`] to assert the SPEC §5 wording.
+/// `MockDriftNotifier` to assert the SPEC §5 wording.
 pub trait DriftNotifier: Send + Sync {
     /// Fire one desktop notification. The summary is the title; the
     /// body is the human-readable explanation. Implementations MUST
@@ -460,6 +642,52 @@ impl ForecastTickState {
             model: crate::power::forecast::Model::warmup()?,
             last_forecast: None,
         })
+    }
+
+    /// Startup model load (BUG-20260712-1545 part 3). Prefer a trained
+    /// model persisted at `<state_root>/forecaster.onnx` over the
+    /// embedded warmup fixture so a retrained forecaster survives a
+    /// daemon restart. A missing file falls back to warmup silently
+    /// (fresh host); a present-but-corrupt file WARNs once and falls
+    /// back to warmup — a bad model on disk must never crash the daemon.
+    pub fn load_or_warmup(state_root: &Path) -> anyhow::Result<Self> {
+        let path = state_root.join("forecaster.onnx");
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::warmup(),
+            Err(e) => {
+                tracing::warn!(
+                    target: "sy::power::daemon",
+                    path = %path.display(),
+                    error = %e,
+                    "cannot read trained forecaster; falling back to warmup model",
+                );
+                return Self::warmup();
+            }
+        };
+        match crate::power::forecast::Model::from_onnx_bytes(&bytes) {
+            Ok(model) => {
+                tracing::info!(
+                    target: "sy::power::daemon",
+                    path = %path.display(),
+                    version_sha = %model.version_sha,
+                    "loaded trained forecaster from disk",
+                );
+                Ok(Self {
+                    model,
+                    last_forecast: None,
+                })
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "sy::power::daemon",
+                    path = %path.display(),
+                    error = %format!("{e:#}"),
+                    "trained forecaster on disk is unreadable; falling back to warmup model",
+                );
+                Self::warmup()
+            }
+        }
     }
 }
 
@@ -586,36 +814,32 @@ fn degenerate_arm(name: &str) -> Arm {
 /// best-effort — `xrt-smi` may be absent, the device may be offline,
 /// the firmware may refuse a transition; we downgrade the error to a
 /// `tracing::warn!` per SPEC §4 "NPU lever is best-effort".
-fn apply_arm(arm: &Arm, ctx: &TickContext<'_>) -> Vec<String> {
+fn apply_arm(
+    arm: &Arm,
+    ctx: &TickContext<'_>,
+    latches: &mut ActuatorLatches,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<String> {
     let mut reasons: Vec<String> = Vec::new();
-    let pp = PlatformProfileActuator::new();
-    log_apply(
+    apply_lever(
         "platform_profile",
-        pp.apply(arm.platform_profile.clone(), &ctx.sysfs_root),
+        latches.lever("platform_profile"),
+        now,
         &mut reasons,
+        || PlatformProfileActuator::new().apply(arm.platform_profile.clone(), &ctx.sysfs_root),
     );
-    log_apply(
-        "epp",
-        EppActuator::new().apply(arm.epp, &ctx.sysfs_root),
-        &mut reasons,
-    );
-    log_apply(
-        "igpu",
-        IgpuActuator::new().apply(arm.igpu_mode.clone(), &ctx.sysfs_root),
-        &mut reasons,
-    );
-    match ctx.npu.apply(arm.npu_pmode, &ctx.sysfs_root) {
-        Ok(o) => reasons.push(format!("npu: {}", outcome_summary(&o))),
-        Err(e) => {
-            tracing::warn!(target: "sy::power::daemon", error = %e, "npu apply failed (best-effort)");
-            reasons.push(short_npu_reason(&e));
-        }
-    }
-    log_apply(
-        "cgroup",
-        CgroupActuator::new().apply(arm.cgroup.clone(), &ctx.cgroup_root),
-        &mut reasons,
-    );
+    apply_lever("epp", latches.lever("epp"), now, &mut reasons, || {
+        EppActuator::new().apply(arm.epp, &ctx.sysfs_root)
+    });
+    apply_lever("igpu", latches.lever("igpu"), now, &mut reasons, || {
+        IgpuActuator::new().apply(arm.igpu_mode.clone(), &ctx.sysfs_root)
+    });
+    apply_lever("npu", latches.lever("npu"), now, &mut reasons, || {
+        ctx.npu.apply(arm.npu_pmode, &ctx.sysfs_root)
+    });
+    apply_lever("cgroup", latches.lever("cgroup"), now, &mut reasons, || {
+        CgroupActuator::new().apply(arm.cgroup.clone(), &ctx.cgroup_root)
+    });
     reasons
 }
 
@@ -669,16 +893,91 @@ fn short_npu_reason<E: std::fmt::Display>(err: &E) -> String {
     out
 }
 
-/// Append a `<lever>: <outcome>` or `<lever>: skipped (<err>)` token
-/// to the reason chain. Mirrors the NPU branch above but flattens the
-/// `Result` into one line of code for the four sysfs-backed levers.
-fn log_apply(lever: &str, res: anyhow::Result<Applied>, reasons: &mut Vec<String>) {
-    match res {
-        Ok(o) => reasons.push(format!("{lever}: {}", outcome_summary(&o))),
-        Err(e) => {
-            tracing::warn!(target: "sy::power::daemon", lever, error = %e, "actuator failed");
-            reasons.push(format!("{lever}: skipped ({e})"));
+/// Apply one lever through its [`LeverLatch`], appending exactly one
+/// reason-chain token per tick and emitting at most one journal line
+/// on the failure/recovery *edges* only.
+///
+/// BUG-20260712-* Problem B: a persistently failing actuator (the iGPU
+/// one on this host) used to retry + WARN every 1 Hz tick forever. The
+/// latch WARNs once on entry, skips the sysfs write while backing off
+/// (exponential, capped 60 s), and logs once on recovery — while the
+/// reason chain still records the lever state every tick (cheap) so
+/// `sy power explain` never loses the per-tick trail.
+fn apply_lever(
+    lever: &'static str,
+    latch: &mut LeverLatch,
+    now: chrono::DateTime<chrono::Utc>,
+    reasons: &mut Vec<String>,
+    attempt: impl FnOnce() -> anyhow::Result<Applied>,
+) {
+    match latch.step(now, attempt) {
+        LatchOutcome::Ok(o) => reasons.push(format!("{lever}: {}", outcome_summary(&o))),
+        LatchOutcome::Recovered(o) => {
+            tracing::info!(target: "sy::power::daemon", lever, "actuator recovered");
+            reasons.push(format!("{lever}: {}", outcome_summary(&o)));
         }
+        LatchOutcome::Failed(e) => {
+            warn_actuator_failed(lever, &e);
+            reasons.push(failure_token(lever, &e));
+        }
+        LatchOutcome::StillFailed(e) => {
+            // Silent: the entry WARN already fired. The reason chain
+            // still names the failure so the audit trail is intact.
+            reasons.push(failure_token(lever, &e));
+        }
+        LatchOutcome::Skipped { backoff_secs } => {
+            reasons.push(format!("{lever}: latched-failed (retry in {backoff_secs}s)"));
+        }
+    }
+}
+
+/// Emit the single failure-edge WARN for `lever`.
+///
+/// BUG-20260525-2350: when the EPP actuator returns the structured
+/// `NoPolicyWritable` variant, the WARN line also carries
+/// `failed_policies=<n>` + a comma-joined `failed_paths=…` field so the
+/// operator can run `systemd-tmpfiles --create` against exactly the
+/// leaves that need it without grep-and-trim. The NPU lever stays
+/// best-effort (SPEC §4) — its WARN is a plain one-liner.
+fn warn_actuator_failed(lever: &str, e: &anyhow::Error) {
+    if lever == "npu" {
+        tracing::warn!(target: "sy::power::daemon", lever, error = %e, "npu apply failed (best-effort; latched, backing off)");
+        return;
+    }
+    if let Some(apply::epp::EppError::NoPolicyWritable { failed }) =
+        e.downcast_ref::<apply::epp::EppError>()
+    {
+        let failed_paths = failed
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        tracing::warn!(
+            target: "sy::power::daemon",
+            lever,
+            error = %e,
+            failed_policies = failed.len(),
+            failed_paths = %failed_paths,
+            "actuator failed (latched, backing off)",
+        );
+    } else {
+        tracing::warn!(
+            target: "sy::power::daemon",
+            lever,
+            error = %e,
+            "actuator failed (latched, backing off)",
+        );
+    }
+}
+
+/// Render the reason-chain token for a failed lever. NPU keeps its
+/// bounded `npu: skipped (…)` form ([`short_npu_reason`]); the four
+/// sysfs levers use the compact `<lever>: skipped (<err>)` form.
+fn failure_token(lever: &str, e: &anyhow::Error) -> String {
+    if lever == "npu" {
+        short_npu_reason(e)
+    } else {
+        format!("{lever}: skipped ({e})")
     }
 }
 
@@ -701,12 +1000,13 @@ pub fn one_tick(
     clock: &dyn Clock,
     ctx: &TickContext<'_>,
     pin: &LatestPin,
-    prev_state: &mut ShieldState,
+    shield_state: &mut ShieldTickState,
     bandit_state: &mut BanditTickState,
     onboarding_state: &mut OnboardingTickState,
     activity_state: &mut ActivityTickState,
     drift_state: &mut DriftTickState,
     forecast_state: &mut ForecastTickState,
+    latches: &mut ActuatorLatches,
     drift_notifier: &dyn DriftNotifier,
     retrain_trigger: &dyn RetrainTrigger,
     logger: &Logger,
@@ -737,7 +1037,18 @@ pub fn one_tick(
     if let Ok(mut g) = latest.write() {
         *g = Some(snap.clone());
     }
-    let state = shield::transition(*prev_state, &snap, &ctx.cfg.shield);
+    // BUG-20260712-1201: track the last tick `call_active` was true so
+    // the MEETING lock ages off a real timestamp. When the call is
+    // live this tick, `secs_since_call` is 0 (the `call_active ||`
+    // branch pins MEETING anyway); after it ends the elapsed seconds
+    // grow until the DFA releases MEETING past the lock window.
+    if snap.raw.call_active == Some(true) {
+        shield_state.last_call_at = Some(snap.ts);
+    }
+    let secs_since_call = shield_state
+        .last_call_at
+        .map(|t| (snap.ts - t).num_milliseconds() as f32 / 1000.0);
+    let state = shield::transition(shield_state.prev, &snap, &ctx.cfg.shield, secs_since_call);
     let context = sanitise_context_with_activity(&snap.features, label);
     let onboarding_active = onboarding_state
         .status
@@ -812,17 +1123,20 @@ pub fn one_tick(
         .iter()
         .map(|(n, _)| arm_by_name(ctx.cfg, n))
         .collect();
-    let chosen = shield::project(
-        &arms_typed,
-        state,
-        &snap,
-        ctx.cfg,
-        ctx.thrash,
-        Instant::now(),
-    );
+    // BUG-20260712-1136: an operator pin (`sy power profile <arm>`) must
+    // actuate regardless of the anti-thrash floor. `project_forced`
+    // bypasses the `would_thrash` veto for the pinned singleton while
+    // keeping the shield safety constraints; the bandit path keeps the
+    // oscillation floor via `project`.
+    let now_instant = Instant::now();
+    let chosen = if pinned.is_some() {
+        shield::project_forced(&arms_typed, state, &snap, ctx.cfg, ctx.thrash, now_instant)
+    } else {
+        shield::project(&arms_typed, state, &snap, ctx.cfg, ctx.thrash, now_instant)
+    };
 
     let mut reason_chain = vec![source_label, format!("shield:{}", state.as_str())];
-    reason_chain.extend(apply_arm(&chosen, ctx));
+    reason_chain.extend(apply_arm(&chosen, ctx, latches, clock.now()));
 
     let top3: Vec<(String, f32)> = ranked_pairs.iter().take(3).cloned().collect();
     let prev_arm_name = bandit_state
@@ -866,7 +1180,7 @@ pub fn one_tick(
         context,
         prev_arm: prev_arm_name,
     });
-    *prev_state = state;
+    shield_state.prev = state;
     // Step 31: drift bypasses the onboarding gate so a mid-life
     // alarm can fire a retrain even after day 14. The gate
     // semantically becomes "are we ALREADY in the rules-only path
@@ -1085,9 +1399,10 @@ fn clear_drift_state(drift_state: &mut DriftTickState, slot: &LatestDriftStatus)
 /// shells out via `xrt-smi` through [`apply::SystemRunner`]. The
 /// daemon-in-thread tests construct their own with a no-op runner.
 pub fn production_npu_actuator() -> NpuActuator {
-    NpuActuator::new(
+    NpuActuator::new_cached(
         Box::new(apply::SystemRunner::new()),
         Box::new(apply::SystemTimeSource::new()),
+        &super::power_state_dir_for_daemon(),
     )
 }
 
@@ -1203,7 +1518,23 @@ async fn run_async() -> anyhow::Result<()> {
     let pin = new_pin_slot();
     let last_entry = new_latest_audit_entry();
     let drift_latest = new_latest_drift_status();
-    let cfg = PowerConfig::load(&power_config_path()).unwrap_or_default();
+    let model_latest = new_latest_model_status();
+    let onboarding_latest = new_latest_onboarding();
+    let cfg = PowerConfig::load(&super::power_config_path()).unwrap_or_default();
+
+    // S3 guard rail (BUG-20260712-0139): a telemetry retention horizon
+    // shorter than the onboarding window used to structurally deadlock
+    // the onboarding gate — the retention sweep deleted the telemetry
+    // the day-14 gate needed. The persisted `first_telemetry_at` anchor
+    // now keeps `days_collected` honest regardless, but a short
+    // retention still starves the raw telemetry an operator (or the
+    // trainer) may want, so surface it loudly at startup.
+    if let Some(msg) =
+        crate::power::onboarding::retention_guard(logger.retention_days(), cfg.onboarding.days)
+    {
+        tracing::warn!(target: "sy::power::daemon", "{msg}");
+    }
+
     let thrash = Arc::new(ThrashTracker::new());
     let npu_actuator = Arc::new(production_npu_actuator());
 
@@ -1213,20 +1544,24 @@ async fn run_async() -> anyhow::Result<()> {
     let accept_pin = Arc::clone(&pin);
     let accept_last_entry = Arc::clone(&last_entry);
     let accept_drift = Arc::clone(&drift_latest);
+    let accept_model = Arc::clone(&model_latest);
+    let accept_onboarding = Arc::clone(&onboarding_latest);
     let accept_arms = cfg.arms.clone();
     tokio::spawn(async move {
         loop {
             match listener.accept().await {
                 Ok((stream, _)) => {
-                    let latest = Arc::clone(&accept_latest);
-                    let pin = Arc::clone(&accept_pin);
-                    let last_entry = Arc::clone(&accept_last_entry);
-                    let drift = Arc::clone(&accept_drift);
-                    let arms = accept_arms.clone();
+                    let state = ConnState {
+                        latest: Arc::clone(&accept_latest),
+                        pin: Arc::clone(&accept_pin),
+                        last_entry: Arc::clone(&accept_last_entry),
+                        drift: Arc::clone(&accept_drift),
+                        model: Arc::clone(&accept_model),
+                        onboarding: Arc::clone(&accept_onboarding),
+                        arms: accept_arms.clone(),
+                    };
                     tokio::spawn(async move {
-                        if let Err(e) =
-                            handle_connection_full(stream, latest, pin, last_entry, drift, arms)
-                                .await
+                        if let Err(e) = handle_connection_full(stream, state).await
                         {
                             tracing::debug!(
                                 target: "sy::power::daemon",
@@ -1267,11 +1602,15 @@ async fn run_async() -> anyhow::Result<()> {
     let _ppd_shim =
         super::ppd_shim::spawn_system_bus_shim(Arc::clone(&pin), cfg.arms.clone(), !with_ppd);
 
-    // SIGTERM / SIGINT: emit `STOPPING=1`, write vendor defaults,
-    // drop the socket, exit. The crash-safe guard's `Drop` would do
-    // the same on a normal return, but `std::process::exit` skips
-    // destructors — so we call the helper explicitly here.
-    let shutdown_sock = sock.clone();
+    // SIGTERM / SIGINT: signal the tick loop to break, then the loop
+    // itself emits `STOPPING=1`, persists the checkpoint, writes
+    // vendor defaults, drops the socket, and returns. We use
+    // `tokio::sync::Notify` over the prior `std::process::exit(0)`
+    // because the tick loop owns the `&mut bandit_state` /
+    // `&mut activity_state` it needs to snapshot — process-exit from
+    // a sibling task would skip the save (BUG-20260525-2353).
+    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
+    let shutdown_signal = Arc::clone(&shutdown_notify);
     tokio::spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
         let mut term = signal(SignalKind::terminate()).expect("install SIGTERM");
@@ -1280,16 +1619,13 @@ async fn run_async() -> anyhow::Result<()> {
             _ = term.recv() => {},
             _ = intr.recv() => {},
         }
-        sy_core::notify::stopping();
-        apply::crash_safe_exit_defaults(Path::new("/sys"));
-        let _ = std::fs::remove_file(&shutdown_sock);
-        std::process::exit(0);
+        shutdown_signal.notify_waiters();
     });
 
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let clock = crate::power::clock::SystemClock;
-    let mut prev_state = ShieldState::CoolAc;
+    let mut shield_state = ShieldTickState::new();
     let mut bandit_state = BanditTickState::from_config(&cfg);
     let cgroup_root = production_cgroup_root();
     let state_root = super::power_state_dir_for_daemon();
@@ -1300,20 +1636,118 @@ async fn run_async() -> anyhow::Result<()> {
     // identical to Step 24's cold-start path. The trainer's retrain
     // hook (Step 25 / P2-1) hot-swaps a trained model in via
     // [`crate::power::forecast::model::ModelStore`] in a later step.
-    let mut forecast_state =
-        ForecastTickState::warmup().map_err(|e| anyhow::anyhow!("warmup forecaster: {e}"))?;
+    // BUG-20260712-1545 part 3: prefer a trained `forecaster.onnx` on
+    // disk over the embedded warmup so a retrained model survives a
+    // daemon restart; a missing/corrupt file falls back to warmup.
+    let mut forecast_state = ForecastTickState::load_or_warmup(&state_root)
+        .map_err(|e| anyhow::anyhow!("warmup forecaster: {e}"))?;
+    // BUG-20260712-* Problem B: per-lever failure latches persist across
+    // ticks so a persistently failing actuator WARNs once + backs off
+    // instead of spamming the journal every second.
+    let mut actuator_latches = ActuatorLatches::default();
     let drift_notifier = SystemDriftNotifier;
-    let retrain_trigger = SpawnBlockingRetrainTrigger {
-        telemetry_path: state_root.clone(),
-        out_path: state_root.join("forecast.onnx"),
-    };
+    let retrain_trigger =
+        SpawnBlockingRetrainTrigger::for_state_root(&state_root, Arc::clone(&model_latest));
+
+    // T4: rehydrate the bandit posterior + classifier weights from
+    // `~/.local/state/sy/power/checkpoint.json` if a matching
+    // checkpoint exists. Schema or arms-hash mismatch surfaces as
+    // `Ok(None)` and the file is rotated to `.stale-<ts>` by
+    // `checkpoint::load` — the daemon then continues with the fresh
+    // zero-init state. A genuine io error (permission denied, disk
+    // failure) is logged + dropped so the daemon still boots.
+    let ck_path = state_root.join("checkpoint.json");
+    let ck_arms_hash = checkpoint::arms_hash(&cfg.arms);
+    // S3 onboarding anchor (BUG-20260712-0139). Loaded from the
+    // checkpoint when present; `None` on a fresh host OR after an
+    // arms-hash rotation (`checkpoint::load` returns `Ok(None)` then,
+    // which resets the anchor by design). When `None`, the tick loop
+    // re-derives it from the oldest surviving NDJSON entry and persists
+    // it so `days_collected` stops sliding under the retention sweep.
+    let mut first_telemetry_at: Option<chrono::DateTime<chrono::Utc>> = None;
+    match checkpoint::load(&ck_path, ck_arms_hash) {
+        Ok(Some(ck)) => {
+            let bandit_arms = ck.bandit.arms.len();
+            let classifier_classes = ck.classifier_class_count();
+            let saved_at = ck.saved_at;
+            first_telemetry_at = ck.first_telemetry_at;
+            bandit_state.bandit.restore(ck.bandit);
+            activity_state.classifier.restore(ck.classifier);
+            tracing::info!(
+                target: "sy::power::daemon",
+                bandit_arms,
+                classifier_classes,
+                saved_at = %saved_at,
+                path = %ck_path.display(),
+                "checkpoint hydrated",
+            );
+        }
+        Ok(None) => {
+            tracing::info!(
+                target: "sy::power::daemon",
+                path = %ck_path.display(),
+                "no usable checkpoint; bandit + classifier start from zero",
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "sy::power::daemon",
+                error = %e,
+                path = %ck_path.display(),
+                "checkpoint load failed; continuing with fresh state",
+            );
+        }
+    }
+
+    let mut tick_count: u64 = 0;
+    let shutdown_wait = Arc::clone(&shutdown_notify);
     loop {
-        interval.tick().await;
+        // Race the next 1 Hz tick against the shutdown notify. On
+        // shutdown, persist the checkpoint inside the same task that
+        // owns the live bandit/classifier state, then break to the
+        // graceful-exit path below.
+        let shutdown_fut = shutdown_wait.notified();
+        tokio::pin!(shutdown_fut);
+        tokio::select! {
+            _ = &mut shutdown_fut => {
+                save_checkpoint_best_effort(
+                    &bandit_state.bandit,
+                    &activity_state.classifier,
+                    ck_arms_hash,
+                    first_telemetry_at,
+                    &ck_path,
+                );
+                break;
+            }
+            _ = interval.tick() => {}
+        }
+        tick_count = tick_count.wrapping_add(1);
+        // S3: freeze the onboarding anchor. Once resolved it never
+        // re-derives (the `is_none` guard), so the retention sweep
+        // deleting older telemetry can't slide `days_collected`. The
+        // newly-derived value is written to disk by the next
+        // `save_checkpoint_best_effort`.
+        if first_telemetry_at.is_none() {
+            first_telemetry_at = crate::power::onboarding::resolve_anchor(&state_root, None);
+        }
         onboarding_state.status = Some(crate::power::onboarding::compute_onboarding_status(
             &state_root,
             &clock,
             cfg.onboarding.days,
+            first_telemetry_at,
         ));
+        // BUG-20260712-1530: publish the daemon's authoritative
+        // onboarding view (gate + its effective `target_days`) so the
+        // IPC `Status` handler serves the gate the daemon is actually
+        // enforcing, not the CLI's re-computation.
+        if let Some(status) = onboarding_state.status.as_ref() {
+            if let Ok(mut g) = onboarding_latest.write() {
+                *g = Some(crate::power::ipc::OnboardingWire::from_status(
+                    status,
+                    cfg.onboarding.days,
+                ));
+            }
+        }
         let ctx = TickContext {
             sysfs_root: PathBuf::from("/sys"),
             cgroup_root: cgroup_root.clone(),
@@ -1327,12 +1761,13 @@ async fn run_async() -> anyhow::Result<()> {
             &clock,
             &ctx,
             &pin,
-            &mut prev_state,
+            &mut shield_state,
             &mut bandit_state,
             &mut onboarding_state,
             &mut activity_state,
             &mut drift_state,
             &mut forecast_state,
+            &mut actuator_latches,
             &drift_notifier,
             &retrain_trigger,
             &logger,
@@ -1342,16 +1777,54 @@ async fn run_async() -> anyhow::Result<()> {
         ) {
             tracing::warn!(target: "sy::power::daemon", error = %e, "tick append failed");
         }
+        if tick_count.is_multiple_of(CHECKPOINT_INTERVAL_TICKS) {
+            save_checkpoint_best_effort(
+                &bandit_state.bandit,
+                &activity_state.classifier,
+                ck_arms_hash,
+                first_telemetry_at,
+                &ck_path,
+            );
+        }
     }
+
+    // Graceful shutdown: emit STOPPING, restore vendor defaults,
+    // drop the IPC socket. CrashSafeGuard's Drop would normally do
+    // this on an Err return; with the explicit shutdown path we want
+    // the same effect on a clean Ok(()) too.
+    sy_core::notify::stopping();
+    apply::crash_safe_exit_defaults(Path::new("/sys"));
+    let _ = std::fs::remove_file(&sock);
+    Ok(())
 }
 
-/// Where the daemon looks for `power.toml`. Mirrors `cli::config_path`
-/// but kept local so the daemon and the CLI stay decoupled.
-fn power_config_path() -> PathBuf {
-    if let Ok(root) = std::env::var("SY_ROOT") {
-        return PathBuf::from(root).join("configs/sy/power.toml");
+/// Persist the bandit + classifier state to `path` and log a `warn`
+/// on failure. Save is fire-and-best-effort (per BUG-20260525-2353
+/// "Persistence MUST NOT block the tick loop") so a disk-full or
+/// read-only-fs error never kills the daemon.
+fn save_checkpoint_best_effort(
+    bandit: &Clucb,
+    classifier: &OnlineClassifier,
+    arms_hash: u64,
+    first_telemetry_at: Option<chrono::DateTime<chrono::Utc>>,
+    path: &Path,
+) {
+    let ck = DaemonCheckpoint {
+        schema: CHECKPOINT_SCHEMA,
+        arms_hash,
+        bandit: bandit.snapshot(),
+        classifier: classifier.snapshot(),
+        saved_at: chrono::Utc::now(),
+        first_telemetry_at,
+    };
+    if let Err(e) = checkpoint::save(&ck, path) {
+        tracing::warn!(
+            target: "sy::power::daemon",
+            error = %e,
+            path = %path.display(),
+            "checkpoint save failed; will retry next interval",
+        );
     }
-    PathBuf::from("configs/sy/power.toml")
 }
 
 /// Production cgroup scope path. Mirrors `apply/cgroup.rs`'s module
@@ -1420,7 +1893,15 @@ fn build_live_intent() -> Intent {
         NiriChannel, NotifyChannel, PsiChannel, PsiKind, ScreenCastChannel, TimeChannel,
     };
     let psi_cpu = PsiChannel::new(Path::new("/proc/pressure/cpu"), PsiKind::Cpu).ok();
-    let logind = LogindChannel::new(Path::new("configs/sy/intent_whitelist.toml")).ok();
+    // Resolve the intent whitelist next to the active power.toml so the
+    // systemd `--user` service (cwd `$HOME`) finds the installed config,
+    // not a cwd-relative miss (BUG-20260608-2341). Matches the CLI's
+    // `build_live_status_value` derivation.
+    let whitelist_path = super::power_config_path()
+        .parent()
+        .map(|d| d.join("intent_whitelist.toml"))
+        .unwrap_or_else(|| PathBuf::from("configs/sy/intent_whitelist.toml"));
+    let logind = LogindChannel::new(&whitelist_path).ok();
     let niri = NiriChannel::new().ok();
     let pool = std::sync::Arc::new(crate::aiplane::session::SessionPool::new());
     let reg = crate::aiplane::registry::Registry::new(pool);
@@ -1451,17 +1932,37 @@ fn build_live_intent() -> Intent {
 /// audit-entry cache so `Status` responses populate `applied_policy`
 /// and `Profile{Set,Clear}` mutate the daemon's shared pin without
 /// blocking the tick loop. Validates pin names against `arms` so a
-/// caller-side typo is rejected with a structured [`ProfileAck`]
+/// caller-side typo is rejected with a structured [`crate::power::ipc::ProfileAck`]
 /// instead of leaving the daemon in a degenerate state.
-async fn handle_connection_full(
-    mut stream: tokio::net::UnixStream,
+/// Shared daemon state an accepted IPC connection reads (and, for
+/// `pin`, writes). Bundled into one struct so [`handle_connection_full`]
+/// stays a two-argument fn — the slots grow one-per-surface (drift,
+/// model, onboarding, …) and a positional arg list would blow the
+/// clippy `too_many_arguments` ceiling.
+struct ConnState {
     latest: LatestSnapshot,
     pin: LatestPin,
     last_entry: LatestAuditEntry,
     drift: LatestDriftStatus,
+    model: LatestModelStatus,
+    onboarding: LatestOnboarding,
     arms: Vec<Arm>,
+}
+
+async fn handle_connection_full(
+    mut stream: tokio::net::UnixStream,
+    state: ConnState,
 ) -> anyhow::Result<()> {
     use crate::power::ipc::{read_frame, write_frame, ProfileAck, StatusRequest, StatusResponse};
+    let ConnState {
+        latest,
+        pin,
+        last_entry,
+        drift,
+        model,
+        onboarding,
+        arms,
+    } = state;
     let req: StatusRequest = read_frame(&mut stream).await?;
     match req {
         StatusRequest::Status => {
@@ -1473,9 +1974,13 @@ async fn handle_connection_full(
                 Some(s) => {
                     let entry = last_entry.read().ok().and_then(|g| g.clone());
                     let drift_status = drift.read().ok().map(|g| g.clone()).unwrap_or_default();
+                    let model_status = model.read().ok().and_then(|g| g.clone());
+                    let onboarding_status = onboarding.read().ok().and_then(|g| g.clone());
                     let mut resp = StatusResponse::from_snapshot(s);
                     resp.last_audit = entry;
                     resp.drift = drift_status;
+                    resp.model = model_status;
+                    resp.onboarding = onboarding_status;
                     write_frame(&mut stream, &resp).await?;
                 }
                 None => {
@@ -1677,6 +2182,60 @@ mod tests {
         )
     }
 
+    /// BUG-20260712-1545 part 2: the production trigger must point the
+    /// trainer at the telemetry *directory* (daily-segmented NDJSON)
+    /// and write the model to `forecaster.onnx` — the CLI convention
+    /// (`src/power/cli.rs`), not the old `forecast.onnx`.
+    #[test]
+    fn retrain_trigger_writes_forecaster_onnx() {
+        let tmp = TempDir::new().expect("tempdir");
+        let trig =
+            SpawnBlockingRetrainTrigger::for_state_root(tmp.path(), new_latest_model_status());
+        assert_eq!(trig.telemetry_path, tmp.path());
+        assert_eq!(trig.out_path, tmp.path().join("forecaster.onnx"));
+    }
+
+    /// BUG-20260712-1545 part 3: on startup a trained `forecaster.onnx`
+    /// on disk must be loaded in preference to the embedded warmup, so
+    /// a retrained model survives a daemon restart. We seed the file
+    /// with a real ONNX (the warmup bytes) and assert the loaded model
+    /// carries the byte-derived version SHA — *not* the "rules-baseline"
+    /// sentinel `Model::warmup` stamps — proving the disk model won.
+    #[test]
+    fn startup_loads_trained_model_over_warmup() {
+        use crate::power::forecast::model::{WARMUP_ONNX, WARMUP_VERSION_SHA};
+        let tmp = TempDir::new().expect("tempdir");
+        std::fs::write(tmp.path().join("forecaster.onnx"), WARMUP_ONNX).expect("seed model");
+        let state = ForecastTickState::load_or_warmup(tmp.path()).expect("load trained model");
+        assert_ne!(
+            state.model.version_sha, WARMUP_VERSION_SHA,
+            "on-disk trained model must be loaded, not the warmup fixture",
+        );
+        assert_eq!(state.model.input_dim, 12);
+    }
+
+    /// BUG-20260712-1545 part 3: a present-but-corrupt `forecaster.onnx`
+    /// must WARN + fall back to the warmup model, never panic / crash
+    /// the daemon. A missing file also falls back to warmup.
+    #[test]
+    fn startup_falls_back_to_warmup_on_corrupt_model() {
+        use crate::power::forecast::model::WARMUP_VERSION_SHA;
+        let tmp = TempDir::new().expect("tempdir");
+        std::fs::write(tmp.path().join("forecaster.onnx"), b"not a real onnx graph")
+            .expect("seed corrupt model");
+        let state =
+            ForecastTickState::load_or_warmup(tmp.path()).expect("corrupt model falls back");
+        assert_eq!(
+            state.model.version_sha, WARMUP_VERSION_SHA,
+            "corrupt model must fall back to the warmup fixture",
+        );
+
+        // Missing file (fresh host) also yields warmup.
+        let empty = TempDir::new().expect("tempdir");
+        let fresh = ForecastTickState::load_or_warmup(empty.path()).expect("missing file → warmup");
+        assert_eq!(fresh.model.version_sha, WARMUP_VERSION_SHA);
+    }
+
     /// Step 26 test sink: counts `dispatch()` calls without spawning
     /// a real burn trainer. Tests assert on `count.load(SeqCst)` to
     /// pin the retrain scheduler's gate decisions. Step 31 widens the
@@ -1746,28 +2305,41 @@ mod tests {
         let mut activity = ActivityTickState::new();
         let mut drift = DriftTickState::new();
         let mut forecast = ForecastTickState::warmup().expect("warmup model");
+        let mut latches = ActuatorLatches::default();
         let drift_latest = new_latest_drift_status();
         let trig = NoopRetrainTrigger;
         let drift_notifier = NoopDriftNotifier;
-        one_tick(
+        // Bridge the legacy `&mut ShieldState` callers onto the
+        // BUG-20260712-1201 `ShieldTickState`. The MEETING-lock
+        // timestamp need not persist across legacy calls (these tests
+        // don't drive `call_active`), so seed `prev` from `prev_state`
+        // and write the DFA output back afterwards.
+        let mut shield = ShieldTickState {
+            prev: *prev_state,
+            last_call_at: None,
+        };
+        let out = one_tick(
             sensors,
             intent,
             clock,
             ctx,
             pin,
-            prev_state,
+            &mut shield,
             bandit_state,
             &mut onb,
             &mut activity,
             &mut drift,
             &mut forecast,
+            &mut latches,
             &drift_notifier,
             &trig,
             logger,
             latest,
             last_entry,
             &drift_latest,
-        )
+        );
+        *prev_state = shield.prev;
+        out
     }
 
     /// No-op desktop notifier for tests that don't care about the
@@ -2173,7 +2745,7 @@ mod tests {
             thrash: &thrash,
             npu: &npu,
         };
-        let mut prev = ShieldState::CoolAc;
+        let mut prev = ShieldTickState::new();
         let mut bandit = BanditTickState::from_config(&cfg);
         let mut onb = post_onboarding_state();
         let mut activity = ActivityTickState::new();
@@ -2194,6 +2766,7 @@ mod tests {
             &mut activity,
             &mut drift,
             &mut forecast,
+            &mut ActuatorLatches::default(),
             &drift_notifier,
             &trig,
             &logger,
@@ -2435,7 +3008,7 @@ mod tests {
             thrash: &thrash,
             npu: &npu,
         };
-        let mut prev = ShieldState::CoolAc;
+        let mut prev = ShieldTickState::new();
         let mut bandit = BanditTickState::from_config(&cfg);
         let mut onb = post_onboarding_state();
         let mut activity = ActivityTickState::new();
@@ -2463,6 +3036,7 @@ mod tests {
                 &mut activity,
                 &mut drift,
                 &mut forecast,
+                &mut ActuatorLatches::default(),
                 &drift_notifier,
                 &trig,
                 &logger,
@@ -2634,7 +3208,7 @@ mod tests {
             thrash: &thrash,
             npu: &npu,
         };
-        let mut prev = ShieldState::CoolAc;
+        let mut prev = ShieldTickState::new();
         let mut bandit = BanditTickState::from_config(&cfg);
         let mut onb = OnboardingTickState {
             status: Some(OnboardingStatus {
@@ -2662,6 +3236,7 @@ mod tests {
             &mut activity,
             &mut drift,
             &mut forecast,
+            &mut ActuatorLatches::default(),
             &drift_notifier,
             &trig,
             &logger,
@@ -2804,7 +3379,7 @@ mod tests {
             thrash: &thrash,
             npu: &npu,
         };
-        let mut prev = ShieldState::CoolAc;
+        let mut prev = ShieldTickState::new();
         let mut bandit = BanditTickState::from_config(&cfg);
         let mut onb = post_onboarding_state();
         let mut activity = ActivityTickState::new();
@@ -2832,6 +3407,7 @@ mod tests {
             &mut activity,
             &mut drift,
             &mut forecast,
+            &mut ActuatorLatches::default(),
             &notifier,
             &trig,
             &logger,
@@ -2973,6 +3549,62 @@ mod tests {
         }
     }
 
+    /// BUG-20260712-1530: the IPC `Status` response must carry the
+    /// daemon's own onboarding view — active, days_collected, ready_at,
+    /// and the daemon's *effective* `target_days` — so `sy power status`
+    /// reports the gate the daemon is actually enforcing instead of the
+    /// CLI process's re-computation. Populate the shared onboarding slot
+    /// with a "gate open, target_days = 0" view (the concrete repro:
+    /// a systemd drop-in scoping `SY_POWER_ONBOARDING_DAYS=0` to
+    /// `sy-powerd`), dial the handler over a socket pair, and assert the
+    /// wire response reflects it verbatim.
+    #[tokio::test]
+    async fn status_response_carries_daemon_onboarding_block() {
+        use crate::power::ipc::{
+            read_frame, write_frame, OnboardingWire, StatusRequest, StatusResponse,
+        };
+        let latest = new_latest_snapshot();
+        *latest.write().expect("snapshot slot") = Some(empty_snapshot());
+        let onboarding = new_latest_onboarding();
+        let ready_at = chrono::Utc::now() - chrono::Duration::days(1);
+        *onboarding.write().expect("onboarding slot") = Some(OnboardingWire {
+            active: false,
+            days_collected: 5,
+            ready_at,
+            target_days: 0,
+        });
+
+        let (server, mut client) =
+            tokio::net::UnixStream::pair().expect("in-process socket pair");
+        let state = ConnState {
+            latest,
+            pin: new_pin_slot(),
+            last_entry: new_latest_audit_entry(),
+            drift: new_latest_drift_status(),
+            model: new_latest_model_status(),
+            onboarding,
+            arms: Vec::new(),
+        };
+        let handle = tokio::spawn(handle_connection_full(server, state));
+
+        write_frame(&mut client, &StatusRequest::Status)
+            .await
+            .expect("send status request");
+        let resp: StatusResponse = read_frame(&mut client).await.expect("read response");
+        handle.await.expect("join handler").expect("handler ok");
+
+        let onb = resp
+            .onboarding
+            .expect("daemon must serve its own onboarding block");
+        assert!(!onb.active, "daemon reports the gate open");
+        assert_eq!(onb.days_collected, 5);
+        assert_eq!(
+            onb.target_days, 0,
+            "target_days must reflect the daemon's effective config, not the CLI's",
+        );
+        assert_eq!(onb.ready_at, ready_at);
+    }
+
     /// BUG-20260522-0037: the NPU actuator's `Display` impl embeds the
     /// full multi-line `xrt-smi` stderr (build banner, PID, host, exe
     /// path) which used to leak into every audit `reason_chain`,
@@ -3041,6 +3673,49 @@ mod tests {
     /// small real interval so the captured timestamps are strictly
     /// monotonic — the systemd watchdog tolerates jitter, but the
     /// assertion targets ordering + count, not absolute timing.
+    /// BUG-20260525-2350: when the EPP actuator returns
+    /// `NoPolicyWritable`, the daemon's WARN line must carry the
+    /// per-policy failed-paths list as a structured field so the
+    /// operator can run `systemd-tmpfiles --create` against exactly
+    /// the leaves that need it. The reason chain token also includes
+    /// the count so `sy power show` / `sy power explain` can render
+    /// the degradation summary without re-parsing the WARN.
+    #[test]
+    #[tracing_test::traced_test]
+    fn log_apply_surfaces_no_policy_writable_failed_paths() {
+        use crate::power::apply::epp::EppError;
+        use std::path::PathBuf;
+        let failed = vec![
+            PathBuf::from("/sys/devices/system/cpu/cpufreq/policy12/energy_performance_preference"),
+            PathBuf::from("/sys/devices/system/cpu/cpufreq/policy23/energy_performance_preference"),
+        ];
+        let mut latch = LeverLatch::default();
+        let mut reasons: Vec<String> = Vec::new();
+        apply_lever("epp", &mut latch, chrono::Utc::now(), &mut reasons, || {
+            Err(EppError::NoPolicyWritable {
+                failed: failed.clone(),
+            }
+            .into())
+        });
+        assert!(
+            logs_contain("failed_policies=2"),
+            "WARN must carry the structured failed-policy count",
+        );
+        for p in &failed {
+            let needle = p.display().to_string();
+            assert!(
+                logs_contain(&needle),
+                "WARN must name the failed leaf {needle}, got logs without it",
+            );
+        }
+        assert_eq!(reasons.len(), 1, "exactly one reason-chain token per call");
+        assert!(
+            reasons[0].starts_with("epp: skipped"),
+            "reason chain still records the skip: {:?}",
+            reasons[0],
+        );
+    }
+
     #[test]
     fn watchdog_ping_under_half_interval() {
         const PINGS: usize = 3;

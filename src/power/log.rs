@@ -16,12 +16,16 @@
 //!   entries via [`AuditEntry::schema`], rotation markers via the
 //!   inline marker payload).
 //! * Files are named `telemetry-YYYY-MM-DD.ndjson` under
-//!   `~/.local/state/sy/power/`, one per UTC day.
-//! * 7-day retention; older files are deleted by
-//!   [`Logger::rotate_retention`].
-//! * 50 MiB / day hard cap; when the cap is hit the day's file
-//!   receives a single `"marker":"rotated:size_cap"` line and refuses
-//!   further appends until the next day's file opens at midnight.
+//!   `~/.local/state/sy/power/`, one per UTC day, plus overflow
+//!   segments `telemetry-YYYY-MM-DD.1.ndjson`, `.2`, … once the base
+//!   file reaches the size cap.
+//! * 7-day retention; older files (base *and* overflow segments) are
+//!   deleted by [`Logger::rotate_retention`].
+//! * Per-segment size cap ([`DEFAULT_MAX_SIZE_BYTES`]); when a segment
+//!   fills, its tail receives a single `"marker":"rotated:size_cap"`
+//!   line and the writer rolls to the next overflow segment so
+//!   collection continues. The cap event is logged (WARN) once per UTC
+//!   day, not once per tick.
 //! * Refuses to write when the mountpoint's free space is below 1 GiB
 //!   (`Err(LogError::OutOfSpace)`); the daemon surfaces this as a
 //!   shield-state degradation in a later step.
@@ -49,14 +53,20 @@ pub const SCHEMA_ID: &str = "sy.power.audit/v1";
 /// Sized so 24 h × 1 Hz of audit entries fits with realistic headroom
 /// for bursty reason chains and `top3` payloads. At ~700–1000 B/entry
 /// (post BUG-20260522-0037 NPU reason trim), 86,400 entries occupy
-/// ~58–82 MiB; 200 MiB clears the [`cli::MIN_ENTRIES_FOR_THICK_REPORT`]
+/// ~58–82 MiB; 200 MiB clears the `cli::MIN_ENTRIES_FOR_THICK_REPORT`
 /// threshold without the file capping mid-day. The previous 50 MiB
 /// value capped the daily file at ~40K entries, making the 24-h
 /// thick-report threshold unreachable.
 pub const DEFAULT_MAX_SIZE_BYTES: u64 = 200 * 1024 * 1024;
 
 /// Default retention horizon. SPEC §4 "Migration & Compatibility".
-pub const DEFAULT_RETENTION_DAYS: u32 = 7;
+/// Must be ≥ [`crate::power::config::DEFAULT_ONBOARDING_DAYS`]
+/// (BUG-20260723-2210 follow-up): a shorter horizon lets the retention
+/// sweep delete raw telemetry before the onboarding gate can trip,
+/// and the daemon WARNs about the mismatch on every IPC tick. At the
+/// observed ~58–82 MiB/day this is ~1 GiB worst-case on disk, inside
+/// the [`MIN_FREE_BYTES`] guard's comfort zone.
+pub const DEFAULT_RETENTION_DAYS: u32 = 14;
 
 /// Refuse to write when the mountpoint has less than this much free
 /// space. SPEC §4 "Migration & Compatibility" — the daemon must never
@@ -70,6 +80,28 @@ pub const MIN_FREE_BYTES: u64 = 1024 * 1024 * 1024;
 /// `Serialize` and `Deserialize` without flipping `schema` to `String`.
 fn default_audit_schema() -> &'static str {
     SCHEMA_ID
+}
+
+/// Deserialise `ranked_actions` tolerating a JSON `null` score.
+/// A manual pin records the pinned arm's score as `f32::INFINITY`
+/// (`daemon::one_tick`'s `pin:<arm>` branch); `serde_json` emits `null`
+/// for any non-finite float, and the default `(String, f32)`
+/// deserialiser rejects `null → f32`. Without this shim every pinned
+/// audit line fails to parse — the tail reader silently skips it
+/// (`sy power log --since=<short>` returns "no entries") and the IPC
+/// `last_audit` decode fails (`sy power status --json` reports a healthy
+/// daemon as "unreachable"). Each `null` score reconstitutes as
+/// `f32::NAN`, mirroring the H1 feature-array shim in
+/// [`crate::power::snapshot`]. See BUG-20260712-1137.
+fn deserialize_ranked_null_as_nan<'de, D>(deserializer: D) -> Result<Vec<(String, f32)>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Vec<(String, Option<f32>)> = serde::Deserialize::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .map(|(name, score)| (name, score.unwrap_or(f32::NAN)))
+        .collect())
 }
 
 /// One audit-log line. Fields beyond `schema` + `snapshot` are
@@ -99,7 +131,7 @@ pub struct AuditEntry {
     /// Populated in R3 (Step 22); empty for older NDJSON lines so the
     /// schema stays forward-compatible. The Step 22 `sy power status` +
     /// Step 23 `sy power explain` consume this field directly.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_ranked_null_as_nan")]
     pub ranked_actions: Vec<(String, f32)>,
     /// CLUCB conservative-α margin in force when this entry was written.
     /// Mirrors `cfg.bandit.alpha` at decision time. Surfaced on
@@ -158,16 +190,15 @@ impl AuditEntry {
 /// Reasons [`Logger::append`] can refuse a write. Kept separate from
 /// `anyhow::Error` so callers can dispatch on `OutOfSpace` (the
 /// daemon surfaces it as `shield_state = BATTERY_LOW`-equivalent in
-/// Step 17) and `SizeCap` (operator-visible, but not a daemon-stop).
+/// Step 17). The former `SizeCap` variant was retired by
+/// BUG-20260712-*: a full segment now rolls over to an overflow file
+/// rather than refusing the write, so `append` no longer returns a
+/// cap error.
 #[derive(Debug)]
 pub enum LogError {
     /// Mountpoint has less than [`MIN_FREE_BYTES`] free. Nothing was
     /// written; the daemon should reduce its tick cadence or stop.
     OutOfSpace { free_bytes: u64 },
-    /// Today's file has reached [`Logger::max_size_bytes`]. The cap
-    /// marker was written (once); subsequent appends are refused
-    /// until midnight rolls the day over.
-    SizeCap,
     /// I/O failure on disk: open / write / metadata. The string is
     /// the source error rendered via `to_string()` so the daemon's
     /// `tracing::warn!` stays one-line.
@@ -186,7 +217,6 @@ impl std::fmt::Display for LogError {
                 f,
                 "audit log refusing to write: free space {free_bytes} < {MIN_FREE_BYTES} bytes"
             ),
-            Self::SizeCap => write!(f, "audit log size cap reached for today"),
             Self::Io(e) => write!(f, "audit log I/O error: {e}"),
             Self::Serialize(e) => write!(f, "audit log serialise error: {e}"),
         }
@@ -196,7 +226,7 @@ impl std::fmt::Display for LogError {
 impl std::error::Error for LogError {}
 
 /// Free-space probe abstraction. Production wires [`StatvfsProbe`];
-/// tests wire [`MockFreeSpace`] so the disk-full path is hermetic.
+/// tests wire `MockFreeSpace` so the disk-full path is hermetic.
 pub trait FreeSpaceProbe: Send + Sync {
     /// Bytes available to a non-root writer at `path`. Returns 0 if
     /// the probe fails — that maps cleanly onto "refuse the write".
@@ -283,6 +313,14 @@ impl Logger {
         }
     }
 
+    /// Retention horizon in days. Read by the daemon's S3 startup
+    /// guard rail ([`crate::power::onboarding::retention_guard`]) so a
+    /// retention window shorter than the onboarding window surfaces a
+    /// loud WARN instead of silently starving the onboarding gate.
+    pub(crate) fn retention_days(&self) -> u32 {
+        self.retention_days
+    }
+
     /// Path the entry for `day` lands at. Public-in-crate so Step 12's
     /// tail reader can enumerate without re-deriving the format
     /// string.
@@ -303,17 +341,20 @@ impl Logger {
 
         let now = clock.now();
         let day = now.date_naive();
-        let path = self.day_path(day);
-        let current_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
 
         let mut line =
             serde_json::to_string(entry).map_err(|e| LogError::Serialize(e.to_string()))?;
         line.push('\n');
 
-        if current_size + line.len() as u64 > self.max_size_bytes {
-            self.write_size_cap_marker(&path, day, now)?;
-            return Err(LogError::SizeCap);
-        }
+        // BUG-20260712-*: when the day's active segment reaches the size
+        // cap we no longer refuse the write (which silently starved the
+        // trainer corpus for the rest of the day and spammed a per-tick
+        // WARN). Instead we roll over to an overflow segment
+        // (`telemetry-YYYY-MM-DD.1.ndjson`, `.2`, …) so collection
+        // continues, record the cap event once per day, and rely on the
+        // retention sweep (which now also parses overflow segments) to
+        // keep total disk bounded.
+        let path = self.active_segment_path(day, line.len() as u64, now)?;
 
         let mut f = OpenOptions::new()
             .create(true)
@@ -325,7 +366,60 @@ impl Logger {
         Ok(())
     }
 
-    fn write_size_cap_marker(
+    /// Path of the day's segment `seg`. Segment 0 is the base file
+    /// (`telemetry-YYYY-MM-DD.ndjson`); overflow segments carry a
+    /// numeric suffix (`telemetry-YYYY-MM-DD.1.ndjson`, `.2`, …).
+    fn segment_path(&self, day: NaiveDate, seg: u32) -> PathBuf {
+        if seg == 0 {
+            self.day_path(day)
+        } else {
+            self.root.join(format!("telemetry-{day}.{seg}.ndjson"))
+        }
+    }
+
+    /// Highest contiguous overflow-segment index that already exists on
+    /// disk for `day` (0 when only the base file — or nothing — exists).
+    /// Segments are created contiguously, so a probe-until-gap loop is
+    /// exact and cheaper than a full `read_dir`.
+    fn highest_existing_segment(&self, day: NaiveDate) -> u32 {
+        let mut seg = 0_u32;
+        while self.segment_path(day, seg + 1).exists() {
+            seg += 1;
+        }
+        seg
+    }
+
+    /// Resolve the segment file this append should land in, rolling
+    /// past any segment that would exceed [`Logger::max_size_bytes`].
+    /// A fresh (zero-length) segment always accepts the line — a single
+    /// entry is never split, and this guarantees termination even if one
+    /// serialised entry is larger than the whole cap.
+    fn active_segment_path(
+        &self,
+        day: NaiveDate,
+        line_len: u64,
+        now: DateTime<Utc>,
+    ) -> Result<PathBuf, LogError> {
+        let mut seg = self.highest_existing_segment(day);
+        loop {
+            let path = self.segment_path(day, seg);
+            let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            if size == 0 || size + line_len <= self.max_size_bytes {
+                return Ok(path);
+            }
+            // Segment full → record the cap event (once per day) and
+            // roll forward so collection continues on the next segment.
+            self.record_size_cap(&path, day, now)?;
+            seg += 1;
+        }
+    }
+
+    /// Note that the day's telemetry hit the size cap: write a single
+    /// `rotated:size_cap` marker into the full segment and emit exactly
+    /// one WARN — both deduped to once per day via
+    /// [`LoggerState::capped_day`] so a persistently-capping day rolls
+    /// through many overflow segments without spamming the journal.
+    fn record_size_cap(
         &self,
         path: &Path,
         day: NaiveDate,
@@ -363,6 +457,14 @@ impl Logger {
         f.write_all(line.as_bytes())
             .map_err(|e| LogError::Io(e.to_string()))?;
         state.capped_day = Some(day);
+        // Loud-once: the operator sees the cap the day it happens, but
+        // the per-tick 1 Hz roll never repeats it.
+        tracing::warn!(
+            target: "sy::power::log",
+            day = %day,
+            cap_bytes = self.max_size_bytes,
+            "audit log daily size cap reached; rolling to overflow segment (telemetry collection continues)",
+        );
         Ok(())
     }
 
@@ -389,9 +491,9 @@ impl Logger {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(LogError::Io(e.to_string())),
         };
-        paths.sort_by_key(|p| std::cmp::Reverse(p.0));
+        paths.sort_by_key(|p| std::cmp::Reverse((p.0, p.1)));
         let mut out = Vec::new();
-        for (_day, path) in paths {
+        for (_day, _seg, path) in paths {
             let contents = match fs::read_to_string(&path) {
                 Ok(s) => s,
                 Err(e) => return Err(LogError::Io(e.to_string())),
@@ -432,9 +534,9 @@ impl Logger {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(LogError::Io(e.to_string())),
         };
-        paths.sort_by_key(|p| std::cmp::Reverse(p.0));
+        paths.sort_by_key(|p| std::cmp::Reverse((p.0, p.1)));
         let mut out = Vec::with_capacity(n);
-        for (_day, path) in paths {
+        for (_day, _seg, path) in paths {
             let contents = match fs::read_to_string(&path) {
                 Ok(s) => s,
                 Err(e) => return Err(LogError::Io(e.to_string())),
@@ -452,16 +554,17 @@ impl Logger {
         Ok(out)
     }
 
-    /// Enumerate `telemetry-YYYY-MM-DD.ndjson` files under `root`,
-    /// pairing each path with the parsed `NaiveDate`. Helper for
-    /// [`Logger::tail`].
-    fn collect_day_paths(&self) -> std::io::Result<Vec<(NaiveDate, PathBuf)>> {
+    /// Enumerate `telemetry-YYYY-MM-DD[.N].ndjson` files under `root`,
+    /// pairing each path with the parsed `(NaiveDate, segment)`. The
+    /// segment lets [`Logger::tail`] / [`Logger::tail_count`] order
+    /// same-day overflow files newest-first (higher segment == newer).
+    fn collect_day_paths(&self) -> std::io::Result<Vec<(NaiveDate, u32, PathBuf)>> {
         let entries = fs::read_dir(&self.root)?;
         let mut out = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
-            if let Some(day) = parse_day_from_path(&path) {
-                out.push((day, path));
+            if let Some((day, seg)) = parse_day_segment_from_path(&path) {
+                out.push((day, seg, path));
             }
         }
         Ok(out)
@@ -530,7 +633,7 @@ const MARKER_TAIL_PROBE_BYTES: u64 = 1024;
 
 /// Return `true` if the trailing [`MARKER_TAIL_PROBE_BYTES`] of `path`
 /// already contain a `"marker":"rotated:size_cap"` line. Used by
-/// [`Logger::write_size_cap_marker`] for cross-restart dedupe — see
+/// [`Logger::record_size_cap`] for cross-restart dedupe — see
 /// BUG-20260522-0037. Best-effort: any I/O error is treated as "no
 /// marker present" so the caller falls back to its normal write path.
 fn file_tail_has_size_cap_marker(path: &Path) -> bool {
@@ -566,14 +669,33 @@ fn twoway_contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
-/// Pull the `YYYY-MM-DD` date out of a `telemetry-<date>.ndjson` path.
-/// Returns `None` for any other filename so the retention sweep
-/// doesn't touch files it didn't create.
+/// Pull the `YYYY-MM-DD` date out of a `telemetry-<date>[.N].ndjson`
+/// path. Returns `None` for any other filename so the retention sweep
+/// doesn't touch files it didn't create. Overflow segments share the
+/// day of their base file, so the retention sweep deletes them on the
+/// same schedule.
 fn parse_day_from_path(path: &Path) -> Option<NaiveDate> {
+    parse_day_segment_from_path(path).map(|(day, _seg)| day)
+}
+
+/// Parse `(day, segment)` out of a `telemetry-<date>[.N].ndjson` path.
+/// The base file is segment 0; `telemetry-<date>.1.ndjson` is segment 1
+/// and so on. Returns `None` for any filename `Logger` didn't create.
+fn parse_day_segment_from_path(path: &Path) -> Option<(NaiveDate, u32)> {
     let name = path.file_name()?.to_str()?;
     let rest = name.strip_prefix("telemetry-")?;
     let stem = rest.strip_suffix(".ndjson")?;
-    NaiveDate::parse_from_str(stem, "%Y-%m-%d").ok()
+    // The date part contains no '.', so a trailing `.<n>` unambiguously
+    // marks an overflow segment.
+    if let Some((date_part, seg_part)) = stem.rsplit_once('.') {
+        if let (Ok(day), Ok(seg)) = (
+            NaiveDate::parse_from_str(date_part, "%Y-%m-%d"),
+            seg_part.parse::<u32>(),
+        ) {
+            return Some((day, seg));
+        }
+    }
+    Some((NaiveDate::parse_from_str(stem, "%Y-%m-%d").ok()?, 0))
 }
 
 #[cfg(test)]
@@ -701,13 +823,13 @@ mod tests {
         let today = at(2026, 5, 19, 12, 0, 0).date_naive();
         let mut kept = Vec::new();
         let mut gone = Vec::new();
-        for offset in 0..9_i64 {
+        for offset in 0..(DEFAULT_RETENTION_DAYS as i64 + 2) {
             let day = today - chrono::Duration::days(offset);
             let p = root.join(format!("telemetry-{day}.ndjson"));
             fs::write(&p, "{}\n").unwrap();
-            // "Older than 7 days" is strictly more than 7 days:
-            // cutoff = today − 7, delete iff `day < cutoff`. Offsets
-            // 0..=7 are within the window (kept); offset 8+ falls
+            // "Older than N days" is strictly more than N days:
+            // cutoff = today − N, delete iff `day < cutoff`. Offsets
+            // 0..=N are within the window (kept); offset N+1 falls
             // outside (deleted).
             if offset <= DEFAULT_RETENTION_DAYS as i64 {
                 kept.push(p);
@@ -733,19 +855,55 @@ mod tests {
         logger.rotate_retention(&clock).unwrap();
     }
 
-    /// Roadmap DoD: with a small `max_size_bytes`, the first append
-    /// past the cap writes a single `rotated:size_cap` marker line
-    /// and subsequent appends are refused for the day. Previously
-    /// written lines are preserved (the cap is a stop-writing
-    /// boundary, not a truncate).
+    /// BUG-20260712-*: Problem A. Overflow segments
+    /// (`telemetry-YYYY-MM-DD.N.ndjson`) must be swept by
+    /// `rotate_retention` on the same schedule as their base file, so a
+    /// capping day 8+ days ago cannot leak disk. An overflow segment for
+    /// a day *inside* the window is kept.
     #[test]
-    fn size_cap_at_50mb() {
+    fn retention_sweeps_overflow_segments() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("power");
+        fs::create_dir_all(&root).unwrap();
+        let today = at(2026, 5, 19, 12, 0, 0).date_naive();
+        // One day past the retention window → base + overflow gone.
+        let old = today - chrono::Duration::days(DEFAULT_RETENTION_DAYS as i64 + 1);
+        let old_base = root.join(format!("telemetry-{old}.ndjson"));
+        let old_ovf = root.join(format!("telemetry-{old}.1.ndjson"));
+        // Today is inside the window → base + overflow kept.
+        let new_base = root.join(format!("telemetry-{today}.ndjson"));
+        let new_ovf = root.join(format!("telemetry-{today}.2.ndjson"));
+        for p in [&old_base, &old_ovf, &new_base, &new_ovf] {
+            fs::write(p, "{}\n").unwrap();
+        }
+        let logger = Logger::with_overrides(
+            root.clone(),
+            DEFAULT_MAX_SIZE_BYTES,
+            DEFAULT_RETENTION_DAYS,
+            Box::new(MockFreeSpace::new(PLENTY)),
+        );
+        let clock = MockClock::new(at(2026, 5, 19, 12, 0, 0));
+        logger.rotate_retention(&clock).unwrap();
+        assert!(!old_base.exists(), "old base file must be swept");
+        assert!(!old_ovf.exists(), "old overflow segment must be swept");
+        assert!(new_base.exists(), "in-window base file must be kept");
+        assert!(new_ovf.exists(), "in-window overflow segment must be kept");
+    }
+
+    /// BUG-20260712-*: Problem A. With a small `max_size_bytes`, the
+    /// append that crosses the cap writes a single `rotated:size_cap`
+    /// marker into the base file, rolls to an overflow segment
+    /// (`telemetry-…​.1.ndjson`), and **continues** writing there —
+    /// `append` returns `Ok`, never a cap error, so collection never
+    /// silently stops for the rest of the day. The cap event is logged
+    /// exactly once even though many entries roll past it.
+    #[test]
+    #[tracing_test::traced_test]
+    fn size_cap_rolls_to_overflow_and_warns_once() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().join("power");
         // 1 KiB cap is well above one serialised entry (~600 B) but
-        // well below two — guarantees the second append crosses the
-        // cap. Keeps test disk I/O under a KiB while exercising the
-        // exact state machine the production 50 MiB cap drives.
+        // well below two — every entry after the first rolls a segment.
         const CAP: u64 = 1024;
         let logger = Logger::with_overrides(
             root.clone(),
@@ -755,48 +913,65 @@ mod tests {
         );
         let clock = MockClock::new(at(2026, 5, 19, 12, 0, 0));
         let entry = AuditEntry::r1(fixed_snapshot(clock.now()));
+        let base = root.join("telemetry-2026-05-19.ndjson");
+        let overflow1 = root.join("telemetry-2026-05-19.1.ndjson");
 
-        // First append fits.
+        // First append fits in the base file.
         logger.append(&entry, &clock).unwrap();
-        let path = root.join("telemetry-2026-05-19.ndjson");
-        let first_size = fs::metadata(&path).unwrap().len();
-        assert!(first_size > 0, "first append should land bytes on disk");
+        assert!(fs::metadata(&base).unwrap().len() > 0);
 
-        // Second append crosses the cap → marker + SizeCap.
-        let err = logger.append(&entry, &clock).unwrap_err();
-        assert!(matches!(err, LogError::SizeCap), "got {err:?}");
-        let lines = read_lines(&path);
+        // Second append crosses the cap → marker in base, rolls to
+        // overflow, still Ok (collection continues).
+        logger.append(&entry, &clock).unwrap();
+        let base_lines = read_lines(&base);
         assert!(
-            lines
+            base_lines
                 .iter()
                 .any(|l| l.contains("\"marker\":\"rotated:size_cap\"")),
-            "expected size-cap marker, got: {lines:?}",
+            "expected size-cap marker in base file, got: {base_lines:?}",
         );
-        // Marker line carries the versioned schema.
         assert!(
-            lines.iter().any(|l| l.contains(SCHEMA_ID)),
-            "marker must carry schema id, got: {lines:?}",
+            base_lines.iter().any(|l| l.contains(SCHEMA_ID)),
+            "marker must carry schema id, got: {base_lines:?}",
         );
-        // Previously written entry is still there (no truncate).
+        // Pre-cap entry survives (roll is not a truncate).
         assert!(
-            lines
+            base_lines
                 .iter()
                 .any(|l| l.contains("sy.power.audit/v1") && l.contains("snapshot")),
-            "pre-cap entry must survive the size-cap stop, got: {lines:?}",
+            "pre-cap entry must survive the roll, got: {base_lines:?}",
+        );
+        // The rolled entry landed in the overflow segment.
+        assert!(overflow1.exists(), "overflow segment must be created");
+        assert_eq!(
+            read_lines(&overflow1)
+                .iter()
+                .filter(|l| l.contains("snapshot"))
+                .count(),
+            1,
+            "rolled entry must land in the overflow segment",
         );
 
-        // A third append within the same day is still refused, and
-        // the marker is not written twice.
-        let err = logger.append(&entry, &clock).unwrap_err();
-        assert!(matches!(err, LogError::SizeCap));
-        let marker_count = read_lines(&path)
+        // A third append continues rolling (Ok, no second marker).
+        logger.append(&entry, &clock).unwrap();
+        let marker_count = read_lines(&base)
             .iter()
             .filter(|l| l.contains("\"marker\":\"rotated:size_cap\""))
             .count();
-        assert_eq!(
-            marker_count, 1,
-            "marker must be written exactly once per day"
-        );
+        assert_eq!(marker_count, 1, "marker must be written exactly once per day");
+
+        // The cap WARN fires exactly once for the day despite two rolls.
+        logs_assert(|lines: &[&str]| {
+            let n = lines
+                .iter()
+                .filter(|l| l.contains("audit log daily size cap reached"))
+                .count();
+            if n == 1 {
+                Ok(())
+            } else {
+                Err(format!("expected exactly one cap WARN, got {n}"))
+            }
+        });
     }
 
     /// BUG-20260522-0037: each daemon restart used to write a fresh
@@ -815,7 +990,7 @@ mod tests {
         let path = root.join("telemetry-2026-05-19.ndjson");
 
         // First "process": land one entry, then hit the cap so the
-        // marker is written.
+        // marker is written and the writer rolls to overflow.
         {
             let logger = Logger::with_overrides(
                 root.clone(),
@@ -824,13 +999,12 @@ mod tests {
                 Box::new(MockFreeSpace::new(PLENTY)),
             );
             logger.append(&entry, &clock).unwrap();
-            let err = logger.append(&entry, &clock).unwrap_err();
-            assert!(matches!(err, LogError::SizeCap));
+            logger.append(&entry, &clock).unwrap();
         }
 
         // Second "process": same on-disk state, fresh in-memory
-        // `capped_day`. Further appends must keep returning SizeCap
-        // without writing a second marker.
+        // `capped_day`. Further appends must keep succeeding (rolling
+        // through overflow segments) without writing a second marker.
         {
             let logger = Logger::with_overrides(
                 root.clone(),
@@ -839,8 +1013,7 @@ mod tests {
                 Box::new(MockFreeSpace::new(PLENTY)),
             );
             for _ in 0..3 {
-                let err = logger.append(&entry, &clock).unwrap_err();
-                assert!(matches!(err, LogError::SizeCap));
+                logger.append(&entry, &clock).unwrap();
             }
         }
 
@@ -943,6 +1116,69 @@ mod tests {
         // Newest first: -5s, -30s, -60s.
         assert_eq!(entries[0].snapshot.ts, now + chrono::Duration::seconds(-5));
         assert_eq!(entries[2].snapshot.ts, now + chrono::Duration::seconds(-60));
+    }
+
+    /// BUG-20260712-1137: a manual pin records `f32::INFINITY` as the
+    /// ranked score, which `serde_json` serialises as `null`. The tail
+    /// reader must parse the line back (`null → NaN`) instead of
+    /// silently skipping it, otherwise `sy power log --since=<short>`
+    /// returns "no entries" while a pin is active.
+    #[test]
+    fn tail_reads_pinned_entries_with_nonfinite_score() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("power");
+        let logger = Logger::with_overrides(
+            root,
+            DEFAULT_MAX_SIZE_BYTES,
+            DEFAULT_RETENTION_DAYS,
+            Box::new(MockFreeSpace::new(PLENTY)),
+        );
+        let now = at(2026, 5, 19, 12, 0, 0);
+        let entry = AuditEntry::r3(
+            fixed_snapshot(now),
+            "flat-out".to_string(),
+            "COOL_AC".to_string(),
+            vec!["pin:flat-out".to_string()],
+            vec![("flat-out".to_string(), f32::INFINITY)],
+            0.05,
+        );
+        logger.append(&entry, &MockClock::new(now)).unwrap();
+        let read_clock = MockClock::new(now);
+        let entries = logger.tail(Duration::from_secs(30), &read_clock).unwrap();
+        assert_eq!(
+            entries.len(),
+            1,
+            "pinned entry must be tailed back, not skipped as unparseable",
+        );
+        assert_eq!(entries[0].ranked_actions.len(), 1);
+        assert_eq!(entries[0].ranked_actions[0].0, "flat-out");
+        assert!(
+            entries[0].ranked_actions[0].1.is_nan(),
+            "null score reconstitutes as NaN",
+        );
+    }
+
+    /// BUG-20260712-1137: the on-wire form of a non-finite score is
+    /// `null`; the roundtrip through serde must survive it. Guards the
+    /// IPC `status --json` decode path (same `AuditEntry` deserialiser).
+    #[test]
+    fn audit_entry_with_nonfinite_score_round_trips() {
+        let now = at(2026, 5, 19, 12, 0, 0);
+        let entry = AuditEntry::r3(
+            fixed_snapshot(now),
+            "flat-out".to_string(),
+            "COOL_AC".to_string(),
+            vec!["pin:flat-out".to_string()],
+            vec![("flat-out".to_string(), f32::INFINITY)],
+            0.05,
+        );
+        let line = serde_json::to_string(&entry).unwrap();
+        assert!(
+            line.contains("[\"flat-out\",null]"),
+            "non-finite score must serialise as null: {line}",
+        );
+        let back: AuditEntry = serde_json::from_str(&line).expect("pinned line must deserialize");
+        assert!(back.ranked_actions[0].1.is_nan());
     }
 
     /// Step 12 DoD: `Logger::tail` walks every dated file under the

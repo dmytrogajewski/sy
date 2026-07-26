@@ -19,6 +19,38 @@ use super::log::AuditEntry;
 use super::onboarding::OnboardingStatus;
 use super::shield::ShieldState;
 
+/// Resolve the onboarding view the status document should render.
+///
+/// BUG-20260712-1530: the onboarding gate is the daemon's, so its
+/// self-reported view (`resp.onboarding`) is authoritative whenever
+/// present — it reflects the `SY_POWER_ONBOARDING_DAYS` the *daemon*
+/// loaded, which can differ from the CLI process's (a systemd drop-in
+/// scoping the env to `sy-powerd` only made `sy power status` lie about
+/// the live gate). When the field is absent — a pre-fix daemon — fall
+/// back to the CLI's local computation (`local` + `cfg.onboarding.days`)
+/// so old ↔ new wire frames stay compatible in both directions.
+///
+/// Returns the resolved `(OnboardingStatus, target_days)` pair; every
+/// key of the printed `onboarding` block derives from it, so the JSON
+/// schema shape is unchanged regardless of which branch fires.
+fn effective_onboarding(
+    resp: &StatusResponse,
+    cfg: &PowerConfig,
+    local: &OnboardingStatus,
+) -> (OnboardingStatus, u32) {
+    match resp.onboarding.as_ref() {
+        Some(w) => (
+            OnboardingStatus {
+                active: w.active,
+                days_collected: w.days_collected,
+                ready_at: w.ready_at,
+            },
+            w.target_days,
+        ),
+        None => (local.clone(), cfg.onboarding.days),
+    }
+}
+
 /// Versioned schema id stamped on every `sy power explain --json`
 /// document. Distinct from `STATUS_SCHEMA` so consumers can branch on
 /// the historical-replay shape without sniffing field presence.
@@ -79,6 +111,10 @@ pub fn build_status_value(
         .get("ac_online")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
+    // BUG-20260712-1530: prefer the daemon's self-reported onboarding
+    // gate over the CLI-side re-computation when the daemon supplies it.
+    let (onboarding, target_days) = effective_onboarding(resp, cfg, onboarding);
+    let onboarding = &onboarding;
     let applied_policy = build_applied_policy(resp, cfg);
     let bandit_block = build_bandit_block(resp, cfg, shield_state);
     let model_version = if onboarding.active {
@@ -89,6 +125,16 @@ pub fn build_status_value(
             .map(|_| RULES_BASELINE_VERSION.to_string())
             .unwrap_or_else(|| RULES_BASELINE_VERSION.to_string())
     };
+    // Step T3 (BUG-20260525-2352): `model.missing_classes` is the
+    // operator's affordance for noticing the trainer refused to ship
+    // a degenerate model. `null` means the last retrain succeeded or
+    // hasn't fired; a populated list names the classes whose row
+    // counts fell below the trainer's per-class floor.
+    let missing_classes = resp
+        .model
+        .as_ref()
+        .map(|m| json!(m.missing_classes))
+        .unwrap_or(Value::Null);
     json!({
         "schema": STATUS_SCHEMA,
         "ts": ts,
@@ -96,12 +142,13 @@ pub fn build_status_value(
             "active": onboarding.active,
             "days_collected": onboarding.days_collected,
             "ready_at": onboarding.ready_at.to_rfc3339(),
-            "target_days": cfg.onboarding.days,
+            "target_days": target_days,
         },
         "model": {
             "version_sha": model_version,
             "loaded_at": null,
             "params": 0,
+            "missing_classes": missing_classes,
         },
         "shield_state": shield_state.as_str(),
         "activity_label": STUB_ACTIVITY_LABEL,
@@ -293,6 +340,11 @@ pub fn format_waybar(
     shield: ShieldState,
     onboarding: &OnboardingStatus,
 ) -> String {
+    // BUG-20260712-1530: the waybar `onboarding` class + "learning Xd
+    // Yh" countdown must track the daemon's live gate, not the bar
+    // process's own re-computation.
+    let (onboarding, _target_days) = effective_onboarding(resp, cfg, onboarding);
+    let onboarding = &onboarding;
     let arm = applied_arm_or_baseline(resp, cfg, shield);
     let baseline =
         crate::power::policy::rules_baseline(shield, &snapshot_anchor(), &cfg.rules_baseline)
@@ -304,7 +356,7 @@ pub fn format_waybar(
         .map(|(_, s)| *s as f64)
         .unwrap_or(0.0);
     let class = waybar_class(&resp.drift, shield, onboarding, &arm, &baseline);
-    let text = waybar_text(class, &arm, ucb, onboarding, cfg);
+    let text = waybar_text(class, &arm, ucb, onboarding);
     let tooltip = format!(
         "arm: {arm}\nshield: {shield_s}\nucb: {ucb:.2}\nbaseline: {baseline}",
         shield_s = shield.as_str(),
@@ -369,24 +421,14 @@ fn waybar_class(
 
 /// Render the per-class text shape documented in the Step 32
 /// implementation guidance. The onboarding form surfaces the
-/// days-remaining countdown (target_days − days_collected) plus the
-/// residual hours so the operator can answer "when does the ML kick
-/// in" without opening `--json`.
-fn waybar_text(
-    class: WaybarClass,
-    arm: &str,
-    ucb: f64,
-    onboarding: &OnboardingStatus,
-    cfg: &PowerConfig,
-) -> String {
+/// remaining-time countdown so the operator can answer "when does the
+/// ML kick in" without opening `--json`.
+fn waybar_text(class: WaybarClass, arm: &str, ucb: f64, onboarding: &OnboardingStatus) -> String {
     match class {
         WaybarClass::Drift => "sy: retraining".to_string(),
         WaybarClass::Meeting => "sy: call".to_string(),
         WaybarClass::Onboarding => {
-            let target = cfg.onboarding.days as i64;
-            let collected = onboarding.days_collected as i64;
-            let days_left = (target - collected).max(0);
-            let hours_left = onboarding_hours_remainder(onboarding);
+            let (days_left, hours_left) = onboarding_countdown(onboarding);
             format!("sy: learning {days_left}d {hours_left}h")
         }
         WaybarClass::Rules => format!("sy: {arm}"),
@@ -395,13 +437,17 @@ fn waybar_text(
     }
 }
 
-/// Hour-of-day residual between `now` and `onboarding.ready_at`.
-/// Caps at 0 so a clock-skew event that lands `ready_at` in the past
-/// doesn't render a negative `Xh` in the bar pill.
-fn onboarding_hours_remainder(onboarding: &OnboardingStatus) -> i64 {
+/// `(days, hours)` remaining until `onboarding.ready_at`, both split
+/// from the SAME `ready_at - now` delta (BUG-20260720-2358: deriving
+/// days from `target_days - days_collected` ceils the remaining time
+/// — `days_collected` floors the *elapsed* delta — so gluing it to
+/// this hour residual double-counted the partial day). Caps at 0 so a
+/// clock-skew event that lands `ready_at` in the past doesn't render
+/// a negative countdown in the bar pill.
+fn onboarding_countdown(onboarding: &OnboardingStatus) -> (i64, i64) {
     let delta = onboarding.ready_at - chrono::Utc::now();
     let total_hours = delta.num_hours().max(0);
-    total_hours % 24
+    (total_hours / 24, total_hours % 24)
 }
 
 /// "learning Xd Yh" hint for callers outside the `custom/sy-power`
@@ -409,14 +455,11 @@ fn onboarding_hours_remainder(onboarding: &OnboardingStatus) -> i64 {
 /// Returns `None` once onboarding is complete so the tooltip drops
 /// the line cleanly without per-caller arithmetic. Pure-fn so a unit
 /// test can pin both branches without filesystem state.
-pub fn onboarding_hint(onboarding: &OnboardingStatus, cfg: &PowerConfig) -> Option<String> {
+pub fn onboarding_hint(onboarding: &OnboardingStatus) -> Option<String> {
     if !onboarding.active {
         return None;
     }
-    let target = cfg.onboarding.days as i64;
-    let collected = onboarding.days_collected as i64;
-    let days_left = (target - collected).max(0);
-    let hours_left = onboarding_hours_remainder(onboarding);
+    let (days_left, hours_left) = onboarding_countdown(onboarding);
     Some(format!("learning {days_left}d {hours_left}h"))
 }
 
@@ -427,19 +470,17 @@ pub fn onboarding_hint(onboarding: &OnboardingStatus, cfg: &PowerConfig) -> Opti
 /// bar. Filesystem-only: no IPC to `sy-powerd`, so the cost is one
 /// directory read + one TOML parse.
 pub fn live_onboarding_hint() -> Option<String> {
-    let cfg_path = if let Ok(root) = std::env::var("SY_ROOT") {
-        std::path::PathBuf::from(root).join("configs/sy/power.toml")
-    } else {
-        std::path::PathBuf::from("configs/sy/power.toml")
-    };
+    let cfg_path = crate::power::power_config_path();
     let cfg = PowerConfig::load(&cfg_path).ok()?;
     let state_dir = crate::power::power_state_dir_for_daemon();
+    let anchor = crate::power::checkpoint::read_anchor(&state_dir.join("checkpoint.json"));
     let onboarding = crate::power::onboarding::compute_onboarding_status(
         &state_dir,
         &crate::power::clock::SystemClock,
         cfg.onboarding.days,
+        anchor,
     );
-    onboarding_hint(&onboarding, &cfg)
+    onboarding_hint(&onboarding)
 }
 
 /// Daemon-down soft-error envelope. The Step 32 implementation
@@ -655,6 +696,8 @@ mod tests {
             snapshot: serde_json::json!({}),
             last_audit: None,
             drift: crate::power::drift::DriftStatus::default(),
+            model: None,
+            onboarding: None,
         }
     }
 
@@ -729,6 +772,8 @@ mod tests {
                 },
             }),
             drift: crate::power::drift::DriftStatus::default(),
+            model: None,
+            onboarding: None,
         };
         let v = build_status_value(&resp, &cfg, ShieldState::CoolAc, &default_onboarding());
         assert!((v["sensors"]["package_power_w_5tap"].as_f64().unwrap() - 27.4).abs() < 1e-3);
@@ -776,6 +821,8 @@ mod tests {
             snapshot: serde_json::json!({}),
             last_audit: Some(entry),
             drift: crate::power::drift::DriftStatus::default(),
+            model: None,
+            onboarding: None,
         };
         let v = build_status_value(&resp, &cfg, ShieldState::CoolAc, &default_onboarding());
         assert_eq!(v["applied_policy"]["arm"].as_str(), Some("build"));
@@ -962,11 +1009,89 @@ mod tests {
         assert_eq!(v["model"]["version_sha"], RULES_BASELINE_VERSION);
     }
 
+    /// BUG-20260712-1530: when the daemon supplies its own onboarding
+    /// view (`resp.onboarding`), the status document renders *that* gate
+    /// — active, days_collected, ready_at, and its effective
+    /// `target_days` — in preference to the CLI's local computation.
+    /// This is the repro fix: the CLI-side `OnboardingStatus` claims the
+    /// window is still active with a 14-day target, but the daemon
+    /// (drop-in `SY_POWER_ONBOARDING_DAYS=0`) reports the gate open with
+    /// `target_days = 0`; the printed block must match the daemon, not
+    /// the CLI.
+    #[test]
+    fn onboarding_block_prefers_daemon_reported_view() {
+        use crate::power::ipc::OnboardingWire;
+        let cfg = PowerConfig::default();
+        let mut resp = empty_response();
+        let daemon_ready_at = chrono::Utc::now() - chrono::Duration::days(1);
+        resp.onboarding = Some(OnboardingWire {
+            active: false,
+            days_collected: 5,
+            ready_at: daemon_ready_at,
+            target_days: 0,
+        });
+        // The CLI-side computation disagrees on every field.
+        let cli_local = OnboardingStatus {
+            active: true,
+            days_collected: 5,
+            ready_at: chrono::Utc::now() + chrono::Duration::days(9),
+        };
+        let v = build_status_value(&resp, &cfg, ShieldState::CoolAc, &cli_local);
+        assert_eq!(
+            v["onboarding"]["active"].as_bool(),
+            Some(false),
+            "daemon reports the gate open — CLI must not override it to active",
+        );
+        assert_eq!(v["onboarding"]["target_days"].as_u64(), Some(0));
+        assert_eq!(v["onboarding"]["days_collected"].as_u64(), Some(5));
+        assert_eq!(
+            v["onboarding"]["ready_at"].as_str(),
+            Some(daemon_ready_at.to_rfc3339().as_str()),
+        );
+        // The daemon's "gate open" view also flows into the derived
+        // model version_sha (no longer pinned at the rules baseline).
+        assert_ne!(v["onboarding"]["active"].as_bool(), Some(true));
+    }
+
+    /// BUG-20260712-1530 backward-compat: a response from a pre-fix
+    /// daemon carries no `onboarding` field (`None`). The status
+    /// document must then fall back to the CLI-side computation
+    /// (`local` + `cfg.onboarding.days`) — preserving the old behaviour
+    /// so old ↔ new wire frames stay compatible.
+    #[test]
+    fn onboarding_block_falls_back_when_daemon_field_absent() {
+        const DAYS_COLLECTED: u32 = 7;
+        let cfg = PowerConfig::default();
+        let resp = empty_response();
+        assert!(resp.onboarding.is_none(), "fixture models a pre-fix daemon");
+        let ready_at = chrono::Utc::now() + chrono::Duration::days(7);
+        let cli_local = OnboardingStatus {
+            active: true,
+            days_collected: DAYS_COLLECTED,
+            ready_at,
+        };
+        let v = build_status_value(&resp, &cfg, ShieldState::CoolAc, &cli_local);
+        assert_eq!(v["onboarding"]["active"].as_bool(), Some(true));
+        assert_eq!(
+            v["onboarding"]["days_collected"].as_u64(),
+            Some(DAYS_COLLECTED as u64),
+        );
+        assert_eq!(
+            v["onboarding"]["ready_at"].as_str(),
+            Some(ready_at.to_rfc3339().as_str()),
+        );
+        assert_eq!(
+            v["onboarding"]["target_days"].as_u64(),
+            Some(cfg.onboarding.days as u64),
+            "fallback target_days must come from the CLI-loaded config",
+        );
+    }
+
     /// Step 32 DoD: the waybar JSON pill on `sy power status --waybar`
     /// carries `class="onboarding"` while the onboarding window is
     /// active, and the `text` slot includes the days-remaining hint
-    /// (`target_days - days_collected`). With `days_collected=3` and
-    /// the default 14-day window, the hint must include `"11d"`.
+    /// derived from `ready_at - now` (BUG-20260720-2358). With 11d 1h
+    /// until `ready_at`, the hint must include `"11d"`.
     #[test]
     fn waybar_class_onboarding_during_first_14d() {
         const DAYS_COLLECTED: u32 = 3;
@@ -976,7 +1101,7 @@ mod tests {
         let onb = OnboardingStatus {
             active: true,
             days_collected: DAYS_COLLECTED,
-            ready_at: chrono::Utc::now() + chrono::Duration::days(11),
+            ready_at: chrono::Utc::now() + chrono::Duration::days(11) + chrono::Duration::hours(1),
         };
         let out = format_waybar(&resp, &cfg, ShieldState::CoolAc, &onb);
         let v: Value = serde_json::from_str(&out).expect("waybar JSON parses");
@@ -998,9 +1123,9 @@ mod tests {
         let onb_active = OnboardingStatus {
             active: true,
             days_collected: 3,
-            ready_at: chrono::Utc::now() + chrono::Duration::days(11),
+            ready_at: chrono::Utc::now() + chrono::Duration::days(11) + chrono::Duration::hours(1),
         };
-        let hint = onboarding_hint(&onb_active, &cfg).expect("active hint");
+        let hint = onboarding_hint(&onb_active).expect("active hint");
         assert!(
             hint.starts_with("learning ") && hint.contains("11d"),
             "active hint should mention the 11d remainder: {hint}"
@@ -1011,7 +1136,47 @@ mod tests {
             days_collected: cfg.onboarding.days,
             ready_at: chrono::Utc::now(),
         };
-        assert_eq!(onboarding_hint(&onb_done, &cfg), None);
+        assert_eq!(onboarding_hint(&onb_done), None);
+    }
+
+    /// BUG-20260720-2358: the countdown must derive BOTH components
+    /// from the single `ready_at - now` delta. The buggy shape glued
+    /// `target_days - days_collected` (a floor of *elapsed*, hence a
+    /// ceil of *remaining*) to the hour residual of the true delta,
+    /// double-counting the partial day: 13.65 days into a 14-day
+    /// window (8.5h remaining) it rendered "1d 8h" instead of "0d 8h".
+    #[test]
+    fn onboarding_hint_counts_down_from_ready_at() {
+        let onb = OnboardingStatus {
+            active: true,
+            days_collected: 13,
+            ready_at: chrono::Utc::now() + chrono::Duration::hours(8) + chrono::Duration::minutes(30),
+        };
+        let hint = onboarding_hint(&onb).expect("active hint");
+        assert_eq!(
+            hint, "learning 0d 8h",
+            "8.5h remaining must render 0d 8h, not double-count the partial day",
+        );
+    }
+
+    /// BUG-20260720-2358: same double-count through the waybar pill —
+    /// the `text` slot must render the true remaining time.
+    #[test]
+    fn waybar_onboarding_text_counts_down_from_ready_at() {
+        let cfg = PowerConfig::default();
+        let resp = empty_response();
+        let onb = OnboardingStatus {
+            active: true,
+            days_collected: 13,
+            ready_at: chrono::Utc::now() + chrono::Duration::hours(8) + chrono::Duration::minutes(30),
+        };
+        let out = format_waybar(&resp, &cfg, ShieldState::CoolAc, &onb);
+        let v: Value = serde_json::from_str(&out).expect("waybar JSON parses");
+        assert_eq!(v["class"], "onboarding");
+        assert_eq!(
+            v["text"], "sy: learning 0d 8h",
+            "8.5h remaining must render 0d 8h in the pill",
+        );
     }
 
     /// Step 32: precedence test — `shield_state == Meeting` must
@@ -1094,6 +1259,8 @@ mod tests {
             snapshot: serde_json::json!({}),
             last_audit: Some(entry),
             drift: crate::power::drift::DriftStatus::default(),
+            model: None,
+            onboarding: None,
         };
         let onb = OnboardingStatus {
             active: false,
@@ -1106,6 +1273,42 @@ mod tests {
         assert!(
             tip.contains("build"),
             "tooltip must mention applied arm 'build': {tip}",
+        );
+    }
+
+    /// Step T3 DoD: when the daemon's last retrain attempt errored
+    /// with `InsufficientClassCoverage`, `sy power status --json` must
+    /// surface the missing-classes list on `model.missing_classes` so
+    /// the operator can attribute the skipped train without digging
+    /// through `journalctl`.
+    #[test]
+    fn status_model_block_surfaces_missing_classes() {
+        let cfg = PowerConfig::default();
+        let mut resp = empty_response();
+        resp.model = Some(crate::power::ipc::ModelStatus {
+            missing_classes: vec!["call".to_string(), "build".to_string()],
+        });
+        let v = build_status_value(&resp, &cfg, ShieldState::CoolAc, &default_onboarding());
+        let missing = v["model"]["missing_classes"]
+            .as_array()
+            .expect("missing_classes array");
+        assert_eq!(missing.len(), 2);
+        assert_eq!(missing[0], "call");
+        assert_eq!(missing[1], "build");
+    }
+
+    /// Step T3 DoD: when no retrain has reported a coverage gap, the
+    /// `model.missing_classes` slot is `null`, not an empty array —
+    /// the documented "hasn't fired or last train succeeded" shape.
+    #[test]
+    fn status_model_missing_classes_null_when_no_gap() {
+        let cfg = PowerConfig::default();
+        let resp = empty_response();
+        let v = build_status_value(&resp, &cfg, ShieldState::CoolAc, &default_onboarding());
+        assert!(
+            v["model"]["missing_classes"].is_null(),
+            "expected null missing_classes, got {}",
+            v["model"]["missing_classes"],
         );
     }
 

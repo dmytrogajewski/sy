@@ -88,12 +88,21 @@ WORKLOAD_DEFAULTS = {
         "ships_tokenizer": False,
     },
     "stt": {
-        "model_id": "nvidia/parakeet-tdt-0.6b",
-        "stem": "novasr",
+        # Whisper-medium. The NPU-ready ONNX (encoder + decoder, already
+        # BF16-partitioned for VAIML) is published by AMD at
+        # `amd/whisper-medium-onnx-npu`; the tokenizer / feature-extractor
+        # config come from upstream `openai/whisper-medium`. Unlike the
+        # other arms, `stt` does NOT run the Quark export pipeline — it
+        # snapshots the prebuilt artefacts into the cache layout the
+        # `aiplane::workloads::stt` loader expects.
+        "model_id": "openai/whisper-medium",
+        "onnx_repo": "amd/whisper-medium-onnx-npu",
+        "stem": "whisper-medium",
         "seq_len": 3000,
         "quant_preset": "BF16",
         "no_bf16_shrink": False,
         "ships_tokenizer": True,
+        "prebuilt_onnx": True,
     },
     "ocr": {
         "model_id": "nvidia/nemotron-ocr-v2",
@@ -267,14 +276,16 @@ def export_onnx_vad(model_id: str, seq_len: int, out_path: Path) -> None:
 
 
 def export_onnx_stt(model_id: str, seq_len: int, out_path: Path) -> None:
-    raise NotImplementedError(
-        f"stt export not yet implemented for {model_id}.\n"
-        f"Whisper/Parakeet are two-stage (encoder + decoder); split the\n"
-        f"export into <stem>.encoder.bf16.onnx + <stem>.decoder.onnx.\n"
-        f"Reference: RyzenAI-SW/Demos/ASR/ exports.\n"
-        f"For the locally-available novasr, see\n"
-        f"  ~/sources/novasr-output/data/model/novasr.onnx\n"
-        f"and the export script in that repo."
+    # The `stt` arm ships prebuilt NPU artefacts (Whisper-medium) and is
+    # routed through `prepare_stt_prebuilt` in main() before any exporter
+    # runs, so this is never invoked. It is kept as a clear signpost in
+    # case someone overrides `--workload stt` onto a non-prebuilt model.
+    raise RuntimeError(
+        f"stt does not run a Quark export: it snapshots prebuilt NPU\n"
+        f"ONNX from `amd/whisper-medium-onnx-npu` (see prepare_stt_prebuilt).\n"
+        f"Got model_id={model_id!r}; to prep a different ASR model add an\n"
+        f"`onnx_repo` + `prebuilt_onnx` entry to WORKLOAD_DEFAULTS or write\n"
+        f"a two-stage encoder/decoder exporter here."
     )
 
 
@@ -297,6 +308,77 @@ EXPORTERS = {
     "stt": export_onnx_stt,
     "ocr": export_onnx_ocr,
 }
+
+
+# Repo-relative path to the vendored VitisAI EP configs (this file lives
+# in <repo>/scripts/). aiplane::workloads::stt looks for these copies in
+# the model cache dir.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_WHISPER_VITISAI_CONFIGS = {
+    "vitisai_config_whisper_encoder.json":
+        _REPO_ROOT / "configs/sy/aiplane/vitisai_config_whisper_encoder.json",
+    "vitisai_config_whisper_decoder.json":
+        _REPO_ROOT / "configs/sy/aiplane/vitisai_config_whisper_decoder.json",
+}
+
+
+def prepare_stt_prebuilt(defaults: dict, out_dir: Path) -> dict:
+    """Snapshot the prebuilt Whisper NPU artefacts into the cache layout
+    `aiplane::workloads::stt` expects, and vendor the VitisAI EP configs
+    alongside them. No Quark export / quantise — the ONNX from
+    `amd/whisper-medium-onnx-npu` is already VAIML-partitioned BF16.
+
+    Resulting layout under `out_dir` (= ~/.cache/sy/aiplane/whisper-medium):
+
+        amd-src/{encoder_model.onnx, decoder_model.onnx, decoder_model.onnx.data}
+        tokenizer/{tokenizer.json, vocab.json, merges.txt, ...,
+                   preprocessor_config.json}
+        vitisai_config_whisper_encoder.json
+        vitisai_config_whisper_decoder.json
+    """
+    import shutil
+    from huggingface_hub import snapshot_download
+
+    onnx_repo = defaults["onnx_repo"]
+    model_id = defaults["model_id"]
+    amd_src = out_dir / "amd-src"
+    tok_dir = out_dir / "tokenizer"
+    amd_src.mkdir(parents=True, exist_ok=True)
+    tok_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"      snapshot {onnx_repo} → {amd_src}", file=sys.stderr)
+    onnx_local = Path(snapshot_download(repo_id=onnx_repo))
+    for name in ("encoder_model.onnx", "decoder_model.onnx",
+                 "decoder_model.onnx.data"):
+        src = onnx_local / name
+        if src.is_file():
+            shutil.copy2(src, amd_src / name)
+
+    print(f"      snapshot {model_id} tokenizer/feature-extractor → {tok_dir}",
+          file=sys.stderr)
+    tok_local = Path(snapshot_download(
+        repo_id=model_id,
+        allow_patterns=["tokenizer.json", "vocab.json", "merges.txt",
+                        "tokenizer_config.json", "special_tokens_map.json",
+                        "added_tokens.json", "preprocessor_config.json"],
+    ))
+    for f in tok_local.glob("*"):
+        if f.is_file():
+            shutil.copy2(f, tok_dir / f.name)
+
+    for name, src in _WHISPER_VITISAI_CONFIGS.items():
+        if not src.is_file():
+            raise FileNotFoundError(f"vendored VitisAI config missing: {src}")
+        shutil.copy2(src, out_dir / name)
+        print(f"      vendored {name}", file=sys.stderr)
+
+    return {
+        "onnx_repo": onnx_repo,
+        "encoder_onnx": str(amd_src / "encoder_model.onnx"),
+        "decoder_onnx": str(amd_src / "decoder_model.onnx"),
+        "tokenizer_dir": str(tok_dir),
+        "vitisai_configs": [str(out_dir / n) for n in _WHISPER_VITISAI_CONFIGS],
+    }
 
 
 # =============================================================================
@@ -586,6 +668,20 @@ def main() -> int:
         "quant_preset": preset,
         "output_dir": str(out_dir),
     }
+
+    # Prebuilt-ONNX workloads (Whisper STT) skip the Quark export /
+    # quantise / NPU-warm pipeline: the artefacts are already
+    # VAIML-partitioned upstream. Snapshot them into place and return.
+    if defaults.get("prebuilt_onnx"):
+        print(f"[1/1] Fetching prebuilt NPU artefacts for {args.workload}",
+              file=sys.stderr)
+        summary.update(prepare_stt_prebuilt(defaults, out_dir))
+        if args.json:
+            print(json.dumps(summary, indent=2))
+        else:
+            for k, v in summary.items():
+                print(f"  {k:24s} {v}", file=sys.stderr)
+        return 0
 
     print(f"[1/3] Exporting {model_id} → ONNX "
           f"(workload={args.workload}, seq_len={seq_len}, batch={batch_size})",

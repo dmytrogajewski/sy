@@ -14,12 +14,13 @@ use ignore::WalkBuilder;
 use serde_json::json;
 
 use super::{
-    chunk, embed, exit, extract, ipc, manifest,
+    embed, eval, exit, extract, ipc, manifest,
+    pipeline::{self, Record},
     qdrant::{self, Point, PointPayload},
     repair,
     runctx::RunCtx,
-    sources::{self, SourceMode},
-    state, status,
+    sources::{self, SourceKind, SourceMode},
+    sparse, state, status, transcribe,
 };
 
 const UPSERT_BATCH: usize = 64;
@@ -949,6 +950,19 @@ pub fn schedule(interval: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Structured-filter args for `sy knowledge search` (REQ-1/REQ-2). `kind`
+/// holds kebab strings already validated by clap's `SourceKind` enum.
+#[derive(Debug, Default, Clone)]
+pub struct SearchArgs {
+    pub date_from: Option<String>,
+    pub date_to: Option<String>,
+    pub from: Vec<String>,
+    pub kind: Vec<String>,
+    pub include_source: Vec<String>,
+    pub exclude_source: Vec<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn search(
     query: &str,
     limit: usize,
@@ -957,6 +971,7 @@ pub fn search(
     rerank: bool,
     candidates: usize,
     priority: sy_core::Priority,
+    args: SearchArgs,
 ) -> Result<()> {
     let prefix = source.map(|p| {
         sources::expand(&p.display().to_string())
@@ -964,13 +979,24 @@ pub fn search(
             .display()
             .to_string()
     });
-    let hits = search_hits_opts(
+    let opts_in = include_opts_into_excluded_kinds(&args.include_source);
+    let filter = build_search_filter(
+        args.date_from,
+        args.date_to,
+        args.from,
+        args.kind,
+        args.include_source,
+        args.exclude_source,
+        opts_in,
+    );
+    let hits = search_hits_filtered(
         query,
         limit,
         prefix.as_deref(),
         rerank,
         candidates,
         priority,
+        Some(filter),
     )?;
     if json_out {
         let arr: Vec<_> = hits
@@ -999,6 +1025,245 @@ pub fn search(
         println!();
     }
     Ok(())
+}
+
+/// REQ-10 fetch-by-id: resolve a chunk's full (uncapped) text + payload by
+/// its stable `chunk_id` over the daemon IPC. `Ok(None)` when no point
+/// matches. The daemon owns the qdrant connection, so this round-trips a
+/// single `Req::GetChunk` rather than opening a second client here.
+pub fn get_chunk_row(chunk_id: &str) -> Result<Option<ipc::ChunkRow>> {
+    let alive = status::load()
+        .ok()
+        .map(|s| status::is_fresh(&s) && s.daemon_running)
+        .unwrap_or(false);
+    if !alive {
+        anyhow::bail!(
+            "sy-knowledge daemon is not running — start it with \
+             `systemctl --user start sy-knowledge.service`"
+        );
+    }
+    let req = ipc::Req::GetChunk {
+        chunk_id: chunk_id.to_string(),
+    };
+    match ipc::request_with_priority(&req, sy_core::Priority::Interactive) {
+        Ok(ipc::Resp::Chunk { chunk }) => Ok(chunk),
+        Ok(ipc::Resp::Error { msg }) => anyhow::bail!("daemon: {msg}"),
+        Ok(other) => anyhow::bail!("daemon: unexpected response {other:?}"),
+        Err(ipc::IpcError::DaemonDown) => {
+            anyhow::bail!("daemon socket disappeared between liveness probe and request")
+        }
+        Err(ipc::IpcError::Wire(e)) => Err(e.context("ipc request")),
+    }
+}
+
+/// `sy knowledge get-chunk <chunk_id>` — print the full (uncapped) chunk for
+/// a stable id from a bounded search result (REQ-10).
+pub fn get_chunk(chunk_id: &str, json_out: bool) -> Result<()> {
+    let chunk = get_chunk_row(chunk_id)?;
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&chunk)?);
+        return Ok(());
+    }
+    match chunk {
+        None => println!("(no chunk for id {chunk_id})"),
+        Some(c) => {
+            println!("chunk_id:    {}", c.chunk_id);
+            println!("file_path:   {}", c.file_path);
+            println!("chunk_index: {}", c.chunk_index);
+            if let Some(k) = &c.kind {
+                println!("kind:        {k}");
+            }
+            if let Some(s) = &c.source_name {
+                println!("source_name: {s}");
+            }
+            println!();
+            println!("{}", c.text);
+        }
+    }
+    Ok(())
+}
+
+/// Kind that `knowledge_search` excludes from default scope (REQ-1): the
+/// agent's own Claude transcripts must never poison a fresh lookup unless
+/// the caller explicitly opts that kind back in.
+/// Source kinds excluded from default search scope: an agent's own outputs,
+/// which must never surface as default evidence (self-poisoning). Both are
+/// still searchable on explicit opt-in. `claude-transcripts` is the legacy
+/// REQ-1 case; `agent-history` covers every agent dotfile home.
+pub const DEFAULT_EXCLUDED_KINDS: &[&str] = &["claude-transcripts", "agent-history"];
+
+/// Compile the additive search-filter args (CLI flags / MCP params) into a
+/// [`ipc::SearchFilter`], applying the default-exclude of every
+/// [`DEFAULT_EXCLUDED_KINDS`] entry. A given kind's exclusion is dropped when
+/// the caller opts it back in — either by naming it in `kind`, or via an
+/// `--include-source` that resolves to a source of that kind
+/// (`include_opts_in_kinds`, decided against the registry by the caller).
+#[allow(clippy::too_many_arguments)]
+pub fn build_search_filter(
+    date_from: Option<String>,
+    date_to: Option<String>,
+    from: Vec<String>,
+    kind: Vec<String>,
+    include_sources: Vec<String>,
+    exclude_sources: Vec<String>,
+    include_opts_in_kinds: Vec<String>,
+) -> ipc::SearchFilter {
+    let exclude_kinds = DEFAULT_EXCLUDED_KINDS
+        .iter()
+        .filter(|dk| {
+            // Keep excluding this kind unless the caller opted it back in.
+            !kind.iter().any(|k| k == *dk) && !include_opts_in_kinds.iter().any(|k| k == *dk)
+        })
+        .map(|dk| (*dk).to_string())
+        .collect();
+    ipc::SearchFilter {
+        date_from,
+        date_to,
+        from,
+        kind,
+        include_sources,
+        exclude_sources,
+        exclude_kinds,
+    }
+}
+
+/// The subset of [`DEFAULT_EXCLUDED_KINDS`] that `include_sources` opts back
+/// into scope — i.e. each default-excluded kind that a named source resolves
+/// to. Returns empty when the registry can't be read so the default-exclude
+/// stays in force (fail-safe for REQ-1).
+pub fn include_opts_into_excluded_kinds(include_sources: &[String]) -> Vec<String> {
+    if include_sources.is_empty() {
+        return Vec::new();
+    }
+    let Ok(section) = sources::load() else {
+        return Vec::new();
+    };
+    DEFAULT_EXCLUDED_KINDS
+        .iter()
+        .filter(|dk| {
+            section.sources.iter().any(|s| {
+                s.kind.as_kebab() == **dk && include_sources.iter().any(|n| n == &s.name)
+            })
+        })
+        .map(|dk| (*dk).to_string())
+        .collect()
+}
+
+/// Exit code for `sy knowledge eval` when a metric regresses past
+/// tolerance (CLAUDE.md exit-code convention: 3 = drift detected). CI
+/// gates `make eval` on this non-zero exit.
+pub const EVAL_DRIFT: i32 = 3;
+
+/// Default CI regression floors for `sy knowledge eval` (REQ-9). Tuned
+/// conservatively against a tiny golden set; raise as recall improves.
+pub const DEFAULT_EVAL_TOLERANCE: eval::Tolerance = eval::Tolerance {
+    min_recall_at_1: 0.3,
+    min_recall_at_5: 0.5,
+    min_mrr: 0.4,
+    min_abstain_accuracy: 0.5,
+};
+
+/// Repo-relative location of the checked-in golden set (REQ-9).
+pub const GOLDEN_SET_REL: &str = "specs/knowledge-feedback-iter1/eval/queries.jsonl";
+
+/// Parse a `queries.jsonl` body into labelled rows (blank lines skipped).
+pub fn parse_golden_set(body: &str) -> Result<Vec<eval::LabelledQuery>> {
+    body.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str::<eval::LabelledQuery>(l).context("parse golden-set row"))
+        .collect()
+}
+
+/// Pure eval core (hermetic, no daemon): run each labelled query through
+/// `runner`, compute [`eval::metrics`], print them (human or `--json`),
+/// and return a drift error when any metric falls below `tol`. The live
+/// `sy knowledge eval` passes a `runner` backed by the daemon search
+/// path; unit tests inject fixture rankings so the JSON emission and the
+/// exit-code logic are tested without a live qdrant/daemon.
+pub fn run_eval<R>(
+    queries: &[eval::LabelledQuery],
+    runner: R,
+    json_out: bool,
+    tol: &eval::Tolerance,
+) -> Result<()>
+where
+    R: Fn(&eval::LabelledQuery) -> Result<eval::RankedResult>,
+{
+    let ranked: Vec<eval::RankedResult> = queries.iter().map(&runner).collect::<Result<_>>()?;
+    let m = eval::metrics(queries, &ranked);
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&m)?);
+    } else {
+        println!("recall@1         {:.3}", m.recall_at_1);
+        println!("recall@5         {:.3}", m.recall_at_5);
+        println!("mrr              {:.3}", m.mrr);
+        println!("abstain_accuracy {:.3}", m.abstain_accuracy);
+        println!("n                {}", m.n);
+    }
+    if let Some(reason) = tol.regression(&m) {
+        return Err(super::KnowledgeError {
+            code: EVAL_DRIFT,
+            msg: format!("eval regression: {reason}"),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// `sy knowledge eval [--json]` — load the checked-in golden set, run
+/// each query through the live daemon search path, report recall@1/5,
+/// MRR, and abstain accuracy, and exit non-zero on regression (REQ-9).
+pub fn eval_cmd(json_out: bool) -> Result<()> {
+    let path = repo_relative(GOLDEN_SET_REL)?;
+    let body = std::fs::read_to_string(&path)
+        .with_context(|| format!("read golden set {}", path.display()))?;
+    let queries = parse_golden_set(&body)?;
+    run_eval(&queries, run_query_live, json_out, &DEFAULT_EVAL_TOLERANCE)
+}
+
+/// Run one labelled query through the live daemon search path and reduce
+/// the response to a [`eval::RankedResult`] (hit text + abstain flag).
+fn run_query_live(q: &eval::LabelledQuery) -> Result<eval::RankedResult> {
+    let filter = build_search_filter(
+        q.date_from.clone(),
+        q.date_to.clone(),
+        Vec::new(),
+        q.kind.clone().into_iter().collect(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    let outcome = search_outcome_filtered(
+        &q.query,
+        eval::RECALL_K,
+        None,
+        true,
+        8,
+        sy_core::Priority::Interactive,
+        Some(filter),
+        Some(DEFAULT_EVAL_ABSTAIN),
+    )?;
+    Ok(eval::RankedResult {
+        ids: outcome
+            .hits
+            .iter()
+            .map(|h| format!("{}#{}\n{}", h.file_path, h.chunk_index, h.chunk_text))
+            .collect(),
+        abstained: outcome.abstained,
+    })
+}
+
+/// Abstain threshold used by the eval runner so unanswerable golden-set
+/// rows can register as true-negatives (REQ-6 calibration boundary).
+const DEFAULT_EVAL_ABSTAIN: f32 = 0.5;
+
+/// Resolve a repo-relative path. Prefers `$SY_ROOT`, else the compiled-in
+/// `CARGO_MANIFEST_DIR` (matches the policy resolver's convention).
+fn repo_relative(rel: &str) -> Result<PathBuf> {
+    let root = std::env::var_os("SY_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    Ok(root.join(rel))
 }
 
 /// Shared search path. The daemon is the only process that owns the
@@ -1035,6 +1300,35 @@ pub fn search_hits_opts(
     candidates: usize,
     priority: sy_core::Priority,
 ) -> Result<Vec<ipc::HitRow>> {
+    search_hits_filtered(query, limit, prefix, rerank, candidates, priority, None)
+}
+
+/// Full search response: ranked hits plus the REQ-6 calibrated
+/// `confidence` and `abstained` flag. The MCP `tool_search` surfaces
+/// these; the plain [`search_hits_filtered`] discards them for callers
+/// that only want the ranked list.
+#[derive(Debug, Clone)]
+pub struct SearchOutcome {
+    pub hits: Vec<ipc::HitRow>,
+    pub confidence: f32,
+    pub abstained: bool,
+}
+
+/// Like [`search_hits_opts`] but carries a compiled [`ipc::SearchFilter`]
+/// (REQ-1/REQ-2) and surfaces the REQ-6 confidence/abstain envelope. An
+/// `abstain_threshold` of `None` keeps the daemon's server default (no
+/// abstain). `filter: None` reproduces the unfiltered legacy path.
+#[allow(clippy::too_many_arguments)]
+pub fn search_outcome_filtered(
+    query: &str,
+    limit: usize,
+    prefix: Option<&str>,
+    rerank: bool,
+    candidates: usize,
+    priority: sy_core::Priority,
+    filter: Option<ipc::SearchFilter>,
+    abstain_threshold: Option<f32>,
+) -> Result<SearchOutcome> {
     let alive = status::load()
         .ok()
         .map(|s| status::is_fresh(&s) && s.daemon_running)
@@ -1053,6 +1347,8 @@ pub fn search_hits_opts(
             prefix: prefix.map(String::from),
             candidates,
             priority,
+            filter,
+            abstain_threshold,
         }
     } else {
         ipc::Req::Search {
@@ -1060,10 +1356,20 @@ pub fn search_hits_opts(
             limit,
             prefix: prefix.map(String::from),
             priority,
+            filter,
+            abstain_threshold,
         }
     };
     match ipc::request_with_priority(&req, priority) {
-        Ok(ipc::Resp::Search { hits }) => Ok(hits),
+        Ok(ipc::Resp::Search {
+            hits,
+            confidence,
+            abstained,
+        }) => Ok(SearchOutcome {
+            hits,
+            confidence,
+            abstained,
+        }),
         Ok(ipc::Resp::Error { msg }) => anyhow::bail!("daemon: {msg}"),
         Ok(other) => anyhow::bail!("daemon: unexpected response {other:?}"),
         Err(ipc::IpcError::DaemonDown) => {
@@ -1071,6 +1377,25 @@ pub fn search_hits_opts(
         }
         Err(ipc::IpcError::Wire(e)) => Err(e.context("ipc request")),
     }
+}
+
+/// Like [`search_outcome_filtered`] but discards the confidence envelope,
+/// returning just the ranked hits (REQ-1/REQ-2). `filter: None`
+/// reproduces the unfiltered legacy path.
+#[allow(clippy::too_many_arguments)]
+pub fn search_hits_filtered(
+    query: &str,
+    limit: usize,
+    prefix: Option<&str>,
+    rerank: bool,
+    candidates: usize,
+    priority: sy_core::Priority,
+    filter: Option<ipc::SearchFilter>,
+) -> Result<Vec<ipc::HitRow>> {
+    search_outcome_filtered(
+        query, limit, prefix, rerank, candidates, priority, filter, None,
+    )
+    .map(|o| o.hits)
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -1094,10 +1419,27 @@ struct IndexJob {
     /// cleanup. For explicit sources this is the original sy.toml entry;
     /// for manifests it's the folder path expanded.
     source_tag: String,
+    /// Drives per-kind pipeline selection (`pipeline::select`). Defaults to
+    /// `Generic`, which preserves the historical chunk-and-embed behaviour.
+    kind: SourceKind,
     walker: WalkBuilder,
     glob_filter: Option<manifest::ManifestGlobFilter>,
     max_file_bytes: u64,
     tags: Vec<String>,
+}
+
+/// Resolve the effective [`SourceKind`] for a single file being indexed.
+/// The job's `kind` is computed once from its ROOT, but a manifest root
+/// (e.g. `~/.claude`) can classify Generic while individual files under it
+/// (e.g. `~/.claude/projects/**/*.jsonl`) are transcripts. Classify the
+/// FILE's full path; fall back to the job kind only when the file path
+/// itself is unclassifiable (Generic). This drives both pipeline selection
+/// and the payload `kind` stamp so REQ-1 default-exclusion fires per file.
+fn effective_kind(file_path: &str, job_kind: SourceKind) -> SourceKind {
+    match sources::classify_kind(file_path) {
+        SourceKind::Generic => job_kind,
+        specific => specific,
+    }
 }
 
 fn explicit_job(root: &Path) -> IndexJob {
@@ -1121,6 +1463,7 @@ fn explicit_job(root: &Path) -> IndexJob {
     IndexJob {
         folder: root.to_path_buf(),
         source_tag: root.display().to_string(),
+        kind: sources::kind_for_path(root),
         walker: wb,
         glob_filter: None,
         max_file_bytes: extract::DEFAULT_MAX_BYTES,
@@ -1132,6 +1475,7 @@ fn manifest_job(m: &manifest::QdrManifest) -> Result<IndexJob> {
     Ok(IndexJob {
         folder: m.folder.clone(),
         source_tag: m.folder.display().to_string(),
+        kind: sources::kind_for_path(&m.folder),
         walker: m.walker(),
         glob_filter: m.glob_filter()?,
         max_file_bytes: m.max_file_bytes,
@@ -1272,8 +1616,27 @@ pub fn run_index(
                 }
             }
 
-            let chunks = chunk::chunk(&text);
-            if chunks.is_empty() {
+            // Classify per FILE, not per job root: a `~/.claude` manifest
+            // root is Generic but its `projects/**/*.jsonl` files are
+            // transcripts (REQ-1). This drives pipeline selection AND the
+            // payload `kind` stamp so default-exclusion fires per file.
+            let file_kind = effective_kind(&key, job.kind);
+            let mut records = pipeline::select(file_kind).records(&key, &text);
+            // Telegram voice notes / round videos are transcribed (cached
+            // content-addressed next to the media) into kind=telegram-voice
+            // chunks pointing at the source media. Already-transcribed media
+            // short-circuits; a disabled backend (no `transcribe` feature)
+            // emits nothing. Runs inside this scan loop so it honours the
+            // same cancellation check as the rest of the pass.
+            if file_kind == SourceKind::Telegram {
+                let tx = transcribe::default_transcriber();
+                records.extend(pipeline::telegram::TelegramPipeline.voice_records(
+                    &key,
+                    &text,
+                    tx.as_ref(),
+                ));
+            }
+            if records.is_empty() {
                 report.skipped += 1;
                 continue;
             }
@@ -1286,9 +1649,10 @@ pub fn run_index(
                 path: p.to_path_buf(),
                 key,
                 hash,
-                chunks,
+                records,
                 source_tag: job.source_tag.clone(),
                 tags: job.tags.clone(),
+                kind: file_kind,
             });
         }
     }
@@ -1302,9 +1666,9 @@ pub fn run_index(
         if ctx.cancelled() {
             break 'embed;
         }
-        let chunks = &item.chunks;
-        for (ci, c) in chunks.iter().enumerate() {
-            batch_texts.push(c.text.clone());
+        let records = &item.records;
+        for (ci, r) in records.iter().enumerate() {
+            batch_texts.push(r.text.clone());
             batch_meta.push((fi, ci));
             if batch_texts.len() >= UPSERT_BATCH {
                 flush_batch(
@@ -1377,9 +1741,12 @@ struct PendingFile {
     path: PathBuf,
     key: String,
     hash: String,
-    chunks: Vec<chunk::Chunk>,
+    records: Vec<Record>,
     source_tag: String,
     tags: Vec<String>,
+    /// Source kind, stamped onto every point as the kebab `kind` payload so
+    /// the default-scope filter (Step 11) can exclude `claude-transcripts`.
+    kind: SourceKind,
 }
 
 fn flush_batch(
@@ -1404,22 +1771,10 @@ fn flush_batch(
     for (i, vec) in vectors.into_iter().enumerate() {
         let (fi, ci) = meta[i];
         let item = &pending[fi];
-        let chunk = &item.chunks[ci];
-        let id = chunk::point_id(&item.key, chunk.index);
+        let record = &item.records[ci];
+        let id = record.chunk_id.clone();
         file_point_ids[fi].push(id.clone());
-        points.push(Point {
-            id,
-            vector: vec,
-            payload: PointPayload {
-                source: item.source_tag.clone(),
-                file_path: item.key.clone(),
-                chunk_index: chunk.index,
-                chunk_text: chunk.text.clone(),
-                file_mtime: state::mtime_secs(&item.path),
-                content_hash: item.hash.clone(),
-                tags: item.tags.clone(),
-            },
-        });
+        points.push(build_point(id, vec, record, item));
         report.chunks += 1;
     }
     qdrant::upsert(&points)?;
@@ -1427,4 +1782,322 @@ fn flush_batch(
     meta.clear();
     ctx.after_batch();
     Ok(())
+}
+
+/// Build an upsert `Point` for one chunk: the named `dense` embedding plus the
+/// in-house term-frequency `sparse` vector (Step 4). Pure so the dual-vector
+/// construction is unit-testable without a daemon or live qdrant.
+fn build_point(id: String, vector: Vec<f32>, record: &Record, item: &PendingFile) -> Point {
+    Point {
+        id,
+        vector,
+        sparse: sparse::encode(&record.text),
+        payload: PointPayload {
+            source: item.source_tag.clone(),
+            file_path: record
+                .payload
+                .file_path
+                .clone()
+                .unwrap_or_else(|| item.key.clone()),
+            chunk_index: record.payload.chunk_index,
+            chunk_text: record.text.clone(),
+            file_mtime: state::mtime_secs(&item.path),
+            content_hash: item.hash.clone(),
+            tags: item.tags.clone(),
+            kind: Some(
+                record
+                    .payload
+                    .kind
+                    .clone()
+                    .unwrap_or_else(|| item.kind.as_kebab().to_string()),
+            ),
+            date: record.payload.date.clone(),
+            from: record.payload.from.clone(),
+            message_id: record.payload.message_id,
+            reply_to_id: record.payload.reply_to_id,
+            has_media: record.payload.has_media,
+            model: record.payload.model.clone(),
+            project_id: record.payload.project_id.clone(),
+            ..Default::default()
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upsert_point_carries_dense_and_sparse() {
+        let item = PendingFile {
+            path: PathBuf::from("/tmp/does-not-exist.txt"),
+            key: "src/doc.txt".into(),
+            hash: "h".into(),
+            records: vec![],
+            source_tag: "s".into(),
+            tags: vec![],
+            kind: SourceKind::Generic,
+        };
+        let record = Record {
+            chunk_id: super::super::chunk::point_id(&item.key, 0),
+            payload: pipeline::RecordPayload {
+                chunk_index: 0,
+                ..Default::default()
+            },
+            // A rare literal token must survive into the sparse vector.
+            text: "новый год X5 Магнит".into(),
+        };
+        let point = build_point(record.chunk_id.clone(), vec![0.1, 0.2, 0.3], &record, &item);
+
+        // Sparse vector is non-empty and well-formed.
+        assert!(!point.sparse.indices.is_empty());
+        assert_eq!(point.sparse.indices.len(), point.sparse.values.len());
+
+        // The flushed point serializes BOTH named vectors on the wire.
+        let body = qdrant::upsert_body(std::slice::from_ref(&point));
+        let v = &body["points"][0]["vector"];
+        assert_eq!(v["dense"].as_array().expect("dense array").len(), 3);
+        assert!(v["sparse"]["indices"].is_array());
+        assert!(!v["sparse"]["indices"].as_array().expect("array").is_empty());
+        assert!(v["sparse"]["values"].is_array());
+    }
+
+    #[test]
+    fn search_args_compile_to_searchfilter() {
+        // All filter args populate the matching SearchFilter fields, and a
+        // search with no opt-in default-excludes EVERY self-poisoning kind
+        // (`claude-transcripts` + `agent-history`).
+        let f = build_search_filter(
+            Some("2024-01-01T00:00:00Z".into()),
+            Some("2024-12-31T23:59:59Z".into()),
+            vec!["alice".into()],
+            vec!["telegram".into()],
+            vec!["tg-main".into()],
+            vec!["spam".into()],
+            Vec::new(),
+        );
+        assert_eq!(f.date_from.as_deref(), Some("2024-01-01T00:00:00Z"));
+        assert_eq!(f.date_to.as_deref(), Some("2024-12-31T23:59:59Z"));
+        assert_eq!(f.from, vec!["alice".to_string()]);
+        assert_eq!(f.kind, vec!["telegram".to_string()]);
+        assert_eq!(f.include_sources, vec!["tg-main".to_string()]);
+        assert_eq!(f.exclude_sources, vec!["spam".to_string()]);
+        for dk in DEFAULT_EXCLUDED_KINDS {
+            assert!(f.exclude_kinds.contains(&dk.to_string()), "missing {dk}");
+        }
+    }
+
+    #[test]
+    fn explicit_kind_opt_in_drops_only_that_default_exclude() {
+        // Naming `agent-history` in `kind` lifts its exclusion but leaves the
+        // other default-excluded kinds (claude-transcripts) in force.
+        let f = build_search_filter(
+            None,
+            None,
+            vec![],
+            vec!["agent-history".into()],
+            vec![],
+            vec![],
+            Vec::new(),
+        );
+        assert!(!f.exclude_kinds.contains(&"agent-history".to_string()));
+        assert!(f.exclude_kinds.contains(&"claude-transcripts".to_string()));
+    }
+
+    #[test]
+    fn include_source_opt_in_drops_only_that_kind() {
+        // An include-source resolving to a claude-transcripts source lifts
+        // that kind's exclusion; agent-history stays excluded.
+        let f = build_search_filter(
+            None,
+            None,
+            vec![],
+            vec![],
+            vec!["proj".into()],
+            vec![],
+            vec!["claude-transcripts".into()],
+        );
+        assert!(!f.exclude_kinds.contains(&"claude-transcripts".to_string()));
+        assert!(f.exclude_kinds.contains(&"agent-history".to_string()));
+    }
+
+    #[test]
+    fn transcript_point_carries_claude_transcripts_kind_and_date() {
+        let item = PendingFile {
+            path: PathBuf::from("/tmp/does-not-exist.jsonl"),
+            key: "~/.claude/projects/proj/s.jsonl".into(),
+            hash: "h".into(),
+            records: vec![],
+            source_tag: "s".into(),
+            tags: vec![],
+            kind: SourceKind::ClaudeTranscripts,
+        };
+        let record = Record {
+            chunk_id: super::super::chunk::point_id(&item.key, 0),
+            payload: pipeline::RecordPayload {
+                chunk_index: 0,
+                date: Some("2024-01-01T10:00:00Z".into()),
+                ..Default::default()
+            },
+            text: "hello from claude".into(),
+        };
+        let point = build_point(record.chunk_id.clone(), vec![0.1, 0.2, 0.3], &record, &item);
+        assert_eq!(point.payload.kind.as_deref(), Some("claude-transcripts"));
+        assert_eq!(point.payload.date.as_deref(), Some("2024-01-01T10:00:00Z"));
+    }
+
+    #[test]
+    fn transcript_file_under_generic_job_resolves_to_transcripts_kind() {
+        // REQ-1 regression: a `~/.claude/projects/**/*.jsonl` file indexed
+        // under a manifest job whose ROOT (`~/.claude`) classified as
+        // Generic must still resolve to ClaudeTranscripts from its OWN path.
+        let k = effective_kind(
+            "/home/dmitriy/.claude/projects/abc/sess.jsonl",
+            SourceKind::Generic,
+        );
+        assert_eq!(k, SourceKind::ClaudeTranscripts);
+    }
+
+    #[test]
+    fn non_projects_file_under_claude_is_agent_history() {
+        // A non-transcript file under `.claude` is the agent's own dotfile
+        // content → AgentHistory (default-excluded), not a spurious
+        // claude-transcripts stamp and not Generic.
+        let k = effective_kind("/home/dmitriy/.claude/notes/todo.md", SourceKind::Generic);
+        assert_eq!(k, SourceKind::AgentHistory);
+    }
+
+    #[test]
+    fn md_sibling_outside_agent_homes_stays_generic() {
+        // A plain `.md` under a real personal Generic job stays generic.
+        let k = effective_kind("/home/dmitriy/knowledge/notes/todo.md", SourceKind::Generic);
+        assert_eq!(k, SourceKind::Generic);
+    }
+
+    #[test]
+    fn generic_file_inherits_non_generic_job_kind() {
+        // A file the classifier can't peg (Generic) inherits the job kind,
+        // so an explicit telegram job still stamps telegram on its files.
+        let k = effective_kind("/home/dmitriy/knowledge/notes/x.txt", SourceKind::Telegram);
+        assert_eq!(k, SourceKind::Telegram);
+    }
+
+    #[test]
+    fn transcript_file_payload_kind_under_generic_job() {
+        // End-to-end at the point layer: a transcript file's point carries
+        // kind=claude-transcripts even when the PendingFile.kind is Generic
+        // (mixed-tree manifest job), and a generic sibling does not.
+        let tx_item = PendingFile {
+            path: PathBuf::from("/tmp/does-not-exist.jsonl"),
+            key: "/home/dmitriy/.claude/projects/abc/sess.jsonl".into(),
+            hash: "h".into(),
+            records: vec![],
+            source_tag: "agent-claude".into(),
+            tags: vec![],
+            kind: effective_kind(
+                "/home/dmitriy/.claude/projects/abc/sess.jsonl",
+                SourceKind::Generic,
+            ),
+        };
+        let record = Record {
+            chunk_id: super::super::chunk::point_id(&tx_item.key, 0),
+            payload: pipeline::RecordPayload {
+                chunk_index: 0,
+                ..Default::default()
+            },
+            text: "secret session".into(),
+        };
+        let point = build_point(
+            record.chunk_id.clone(),
+            vec![0.1, 0.2, 0.3],
+            &record,
+            &tx_item,
+        );
+        assert_eq!(point.payload.kind.as_deref(), Some("claude-transcripts"));
+
+        let md_item = PendingFile {
+            path: PathBuf::from("/tmp/does-not-exist.md"),
+            key: "/home/dmitriy/.claude/notes/todo.md".into(),
+            hash: "h".into(),
+            records: vec![],
+            source_tag: "agent-claude".into(),
+            tags: vec![],
+            kind: effective_kind("/home/dmitriy/.claude/notes/todo.md", SourceKind::Generic),
+        };
+        let md_record = Record {
+            chunk_id: super::super::chunk::point_id(&md_item.key, 0),
+            payload: pipeline::RecordPayload {
+                chunk_index: 0,
+                ..Default::default()
+            },
+            text: "just a note".into(),
+        };
+        let md_point = build_point(
+            md_record.chunk_id.clone(),
+            vec![0.1, 0.2, 0.3],
+            &md_record,
+            &md_item,
+        );
+        assert_ne!(md_point.payload.kind.as_deref(), Some("claude-transcripts"));
+    }
+
+    fn golden(query: &str, expected: &str, answerable: bool) -> eval::LabelledQuery {
+        serde_json::from_value(json!({
+            "query": query, "expected": expected, "answerable": answerable
+        }))
+        .expect("labelled query")
+    }
+
+    /// The injectable runner seam lets us drive `run_eval` with fixture
+    /// rankings — no daemon/qdrant — so the JSON metric emission is
+    /// pinned hermetically (the live path is the integration use).
+    #[test]
+    fn eval_cmd_emits_json_metrics() {
+        let queries = vec![golden("найди X5", "X5 Магнит", true)];
+        let runner = |_q: &eval::LabelledQuery| {
+            Ok(eval::RankedResult {
+                ids: vec!["chunk about X5 Магнит".into()],
+                abstained: false,
+            })
+        };
+        // Loose tolerance so a perfect run does not regress.
+        let tol = eval::Tolerance {
+            min_recall_at_1: 0.0,
+            min_recall_at_5: 0.0,
+            min_mrr: 0.0,
+            min_abstain_accuracy: 0.0,
+        };
+        // Drives the metrics + JSON branch; returns Ok (no regression).
+        run_eval(&queries, runner, true, &tol).expect("json metrics, no regression");
+    }
+
+    #[test]
+    fn eval_returns_nonzero_on_regression_past_tolerance() {
+        // Answerable query whose gold never surfaces → recall 0 → below
+        // any positive floor → drift exit code 3.
+        let queries = vec![golden("найди X5", "X5 Магнит", true)];
+        let runner = |_q: &eval::LabelledQuery| {
+            Ok(eval::RankedResult {
+                ids: vec!["unrelated noise".into()],
+                abstained: false,
+            })
+        };
+        let err =
+            run_eval(&queries, runner, true, &DEFAULT_EVAL_TOLERANCE).expect_err("must regress");
+        let ke = err
+            .downcast_ref::<super::super::KnowledgeError>()
+            .expect("KnowledgeError");
+        assert_eq!(ke.code, EVAL_DRIFT);
+    }
+
+    #[test]
+    fn checked_in_golden_set_parses_with_required_categories() {
+        // The shipped queries.jsonl deserializes (extra bookkeeping
+        // fields tolerated) and carries the required category counts.
+        let path = repo_relative(GOLDEN_SET_REL).expect("repo path");
+        let body = std::fs::read_to_string(&path).expect("read golden set");
+        let queries = parse_golden_set(&body).expect("parse golden set");
+        assert!((20..=40).contains(&queries.len()), "20-40 rows");
+        assert!(queries.iter().filter(|q| !q.answerable).count() >= 5);
+    }
 }

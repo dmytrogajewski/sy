@@ -1,0 +1,22 @@
+[package]
+name = "sy-plugin-pdk"
+version.workspace = true
+edition.workspace = true
+publish = false
+license = "MIT"
+description = "Rust PDK for sy file-manager plugins (SPEC §3.3 item 10). Hides JSON-RPC + LSP framing behind a `define_plugin!` macro: plugin authors write `fn preview(req) -> Result<PreviewResp>` and the PDK wires stdin/stdout, capability dispatch, and host-fn calls."
+
+# Per roadmap Step 11 DoD: zero deps outside {serde, serde_json, tokio,
+# anyhow}. Each pull is documented at its callsite; all are workspace-
+# pinned so the PDK never drifts from the host.
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Only the rt/io subset; the PDK runs on `current_thread` so we never
+# pay for the multi-thread scheduler in a one-off previewer.
+tokio = { workspace = true }
+
+[lib]
+name = "sy_plugin_pdk"
+path = "src/lib.rs"

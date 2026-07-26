@@ -225,7 +225,7 @@ pub fn extract_bandit_metrics(entries: &[AuditEntry]) -> BanditMetrics {
 /// current build understands.
 ///
 /// Counts are kept in a fixed-size `[u64; 5]` keyed off
-/// [`ShieldState::index`] (introduced below) so the hot loop is
+/// `ShieldState::index` (introduced below) so the hot loop is
 /// branch-light and allocation-free.
 pub fn extract_shield_metrics(entries: &[AuditEntry]) -> ShieldMetrics {
     let mut out = ShieldMetrics::default();

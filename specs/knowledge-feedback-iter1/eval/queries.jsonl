@@ -1,0 +1,24 @@
+{"query": "X5 Пятёрочка Перекрёсток акция", "expected": "X5", "answerable": true, "kind": "telegram", "_category": "named-entity"}
+{"query": "Магнит скидка бонусные баллы", "expected": "Магнит", "answerable": true, "kind": "telegram", "_category": "named-entity"}
+{"query": "Сбербанк перевод реквизиты", "expected": "Сбербанк", "answerable": true, "kind": "telegram", "_category": "named-entity"}
+{"query": "Ozon доставка трек-номер", "expected": "Ozon", "answerable": true, "kind": "telegram", "_category": "named-entity"}
+{"query": "Wildberries возврат пункт выдачи", "expected": "Wildberries", "answerable": true, "kind": "telegram", "_category": "named-entity"}
+{"query": "Лента промокод выходные", "expected": "Лента", "answerable": true, "kind": "telegram", "_category": "named-entity"}
+{"query": "новогодние праздники планы декабрь январь", "expected": "новый год", "answerable": true, "kind": "telegram", "date_from": "2023-12-31T00:00:00Z", "date_to": "2024-01-08T23:59:59Z", "_category": "date-range"}
+{"query": "отпуск прошлым летом фотографии", "expected": "лето", "answerable": true, "kind": "telegram", "date_from": "2023-06-01T00:00:00Z", "date_to": "2023-08-31T23:59:59Z", "_category": "date-range"}
+{"query": "майские праздники шашлыки дача", "expected": "майские", "answerable": true, "kind": "telegram", "date_from": "2024-05-01T00:00:00Z", "date_to": "2024-05-12T23:59:59Z", "_category": "date-range"}
+{"query": "день рождения в марте подарок", "expected": "день рождения", "answerable": true, "kind": "telegram", "date_from": "2024-03-01T00:00:00Z", "date_to": "2024-03-31T23:59:59Z", "_category": "date-range"}
+{"query": "встреча на той неделе перенос", "expected": "встреча", "answerable": true, "kind": "telegram", "date_from": "2024-02-12T00:00:00Z", "date_to": "2024-02-18T23:59:59Z", "_category": "date-range"}
+{"query": "счёт за электричество февраль", "expected": "электричество", "answerable": true, "kind": "telegram", "date_from": "2024-02-01T00:00:00Z", "date_to": "2024-02-29T23:59:59Z", "_category": "date-range"}
+{"query": "номер кредитной карты банка Антарктиды", "expected": "", "answerable": false, "_category": "abstain"}
+{"query": "рецепт борща от шеф-повара Мишлен ресторана", "expected": "", "answerable": false, "_category": "abstain"}
+{"query": "пароль от учётной записи квантового компьютера", "expected": "", "answerable": false, "_category": "abstain"}
+{"query": "расписание поездов на Марс 2025", "expected": "", "answerable": false, "_category": "abstain"}
+{"query": "результаты выборов на острове Атлантида", "expected": "", "answerable": false, "_category": "abstain"}
+{"query": "инструкция по сборке телепорта IKEA", "expected": "", "answerable": false, "_category": "abstain"}
+{"query": "обсуждали ли мы это в голосовом и в переписке", "expected": "voice", "answerable": true, "_category": "cross-source"}
+{"query": "та же тема в транскрипте звонка и в телеграме", "expected": "transcript", "answerable": true, "_category": "cross-source"}
+{"query": "договорённость из созвона подтверждённая сообщением", "expected": "договор", "answerable": true, "_category": "cross-source"}
+{"query": "адрес который скинули и потом проговорили вслух", "expected": "адрес", "answerable": true, "_category": "cross-source"}
+{"query": "решение принятое на встрече и записанное в чате", "expected": "решение", "answerable": true, "_category": "cross-source"}
+{"query": "список покупок надиктованный и продублированный текстом", "expected": "список", "answerable": true, "_category": "cross-source"}

@@ -104,8 +104,18 @@ impl ThrashTracker {
 
     /// Persist `arm` as the most recently applied arm at `now`.
     /// Called by `project` after it returns its pick.
+    ///
+    /// `last_change` marks the last actual arm *change*, not the last
+    /// tick: when `arm` equals the currently recorded arm the timestamp
+    /// is left untouched. Refreshing it on every same-arm re-pick would
+    /// keep the anti-thrash window perpetually young at the daemon's
+    /// 1 Hz cadence, permanently locking out all future arm switches
+    /// (BUG-20260712-1046).
     pub fn record(&self, arm: &str, now: Instant) {
         if let Ok(mut guard) = self.state.lock() {
+            if matches!(guard.as_ref(), Some(s) if s.last_arm == arm) {
+                return;
+            }
             *guard = Some(TrackerState {
                 last_arm: arm.to_string(),
                 last_change: now,
@@ -139,12 +149,44 @@ pub fn project(
     thrash: &ThrashTracker,
     now: Instant,
 ) -> Arm {
+    project_inner(ranked, state, snapshot, cfg, thrash, now, false)
+}
+
+/// Like [`project`], but treats `ranked` as an operator pin
+/// (`sy power profile <arm>`): the anti-thrash `would_thrash` floor is
+/// bypassed so the pinned arm actuates regardless of how recently the
+/// arm last changed. The SPEC §4 *safety* shield constraints (Hot /
+/// BatteryLow / Meeting) still apply — a pin cannot defeat the thermal
+/// or battery guard. See BUG-20260712-1136.
+pub fn project_forced(
+    ranked: &[Arm],
+    state: ShieldState,
+    snapshot: &Snapshot,
+    cfg: &PowerConfig,
+    thrash: &ThrashTracker,
+    now: Instant,
+) -> Arm {
+    project_inner(ranked, state, snapshot, cfg, thrash, now, true)
+}
+
+/// Shared walker for [`project`] / [`project_forced`]. `forced` skips the
+/// anti-thrash veto (operator pins must win over the oscillation floor)
+/// while keeping the shield safety constraints and the tracker update.
+fn project_inner(
+    ranked: &[Arm],
+    state: ShieldState,
+    snapshot: &Snapshot,
+    cfg: &PowerConfig,
+    thrash: &ThrashTracker,
+    now: Instant,
+    forced: bool,
+) -> Arm {
     let min_interval = Duration::from_secs(u64::from(cfg.shield.profile_thrash_min_interval_s));
     for candidate in ranked {
         if !arm_passes_shield(candidate, state) {
             continue;
         }
-        if thrash.would_thrash(&candidate.name, now, min_interval) {
+        if !forced && thrash.would_thrash(&candidate.name, now, min_interval) {
             break;
         }
         thrash.record(&candidate.name, now);
@@ -316,6 +358,185 @@ mod tests {
             t0 + Duration::from_secs(31),
         );
         assert_eq!(p2.name, "build");
+    }
+
+    /// BUG-20260712-1046: an arm switch must take effect even after a
+    /// long steady-state run of unchanged re-picks. Under the bug,
+    /// `record` refreshed `last_change` on every tick (including
+    /// same-arm re-picks), so at the daemon's 1 Hz cadence the 30 s
+    /// anti-thrash floor never elapsed relative to the *last tick* —
+    /// permanently locking out every pin / bandit arm switch.
+    #[test]
+    fn arm_switch_takes_effect_after_steady_repicks() {
+        let cfg = shipped_cfg();
+        let snap = pinned_snapshot();
+        let tracker = ThrashTracker::new();
+        let t0 = Instant::now();
+        // Tick 0: bandit settles on `code`.
+        let p0 = project(
+            &[arm(&cfg, "code")],
+            ShieldState::CoolAc,
+            &snap,
+            &cfg,
+            &tracker,
+            t0,
+        );
+        assert_eq!(p0.name, "code");
+        // Ticks 1..=60 at 1 Hz: the SAME arm is re-picked (steady
+        // state). No actual change occurs, so the anti-thrash window
+        // must keep marking tick 0.
+        for i in 1..=60 {
+            let _ = project(
+                &[arm(&cfg, "code")],
+                ShieldState::CoolAc,
+                &snap,
+                &cfg,
+                &tracker,
+                t0 + Duration::from_secs(i),
+            );
+        }
+        // Tick 61: a pin / bandit switch to `flat-out`. 61 s have
+        // elapsed since the last ACTUAL change (tick 0), well past the
+        // 30 s floor, so the switch must go through.
+        let p = project(
+            &[arm(&cfg, "flat-out")],
+            ShieldState::CoolAc,
+            &snap,
+            &cfg,
+            &tracker,
+            t0 + Duration::from_secs(61),
+        );
+        assert_eq!(
+            p.name, "flat-out",
+            "arm switch must take effect after a steady run of re-picks; got {}",
+            p.name,
+        );
+    }
+
+    /// BUG-20260712-1046: an unchanged re-pick must NOT slide the
+    /// anti-thrash window forward — `last_change` marks the last actual
+    /// arm CHANGE, not the last `record` call.
+    #[test]
+    fn repick_does_not_refresh_last_change() {
+        let tracker = ThrashTracker::new();
+        let t0 = Instant::now();
+        let min = Duration::from_secs(30);
+        tracker.record("code", t0);
+        // A same-arm re-pick 29 s later must not move the window.
+        tracker.record("code", t0 + Duration::from_secs(29));
+        // 31 s after the real change at t0, switching arms is allowed
+        // even though a re-pick happened at t0+29s.
+        assert!(
+            !tracker.would_thrash("flat-out", t0 + Duration::from_secs(31), min),
+            "unchanged re-pick must not refresh last_change",
+        );
+    }
+
+    /// BUG-20260712-1046 regression guard: the anti-thrash floor's real
+    /// purpose survives the fix — a genuine rapid flap A→B→A inside the
+    /// window still collapses to the conservative baseline.
+    #[test]
+    fn rapid_flap_within_window_still_suppressed() {
+        let cfg = shipped_cfg();
+        let snap = pinned_snapshot();
+        let tracker = ThrashTracker::new();
+        let t0 = Instant::now();
+        // Settle on `code`.
+        let p0 = project(
+            &[arm(&cfg, "code")],
+            ShieldState::CoolAc,
+            &snap,
+            &cfg,
+            &tracker,
+            t0,
+        );
+        assert_eq!(p0.name, "code");
+        // 1 s later flip to `build` — blocked, collapses to baseline.
+        let p1 = project(
+            &[arm(&cfg, "build")],
+            ShieldState::CoolAc,
+            &snap,
+            &cfg,
+            &tracker,
+            t0 + Duration::from_secs(1),
+        );
+        assert_eq!(p1.name, "browse");
+        // 2 s later flip back to `code` — still inside the window,
+        // still suppressed to the baseline.
+        let p2 = project(
+            &[arm(&cfg, "code")],
+            ShieldState::CoolAc,
+            &snap,
+            &cfg,
+            &tracker,
+            t0 + Duration::from_secs(2),
+        );
+        assert_eq!(
+            p2.name, "browse",
+            "rapid A->B->A flap must stay suppressed; got {}",
+            p2.name,
+        );
+    }
+
+    /// BUG-20260712-1136: an operator pin must actuate even when the
+    /// anti-thrash window is warm. `project_forced` bypasses the
+    /// `would_thrash` veto (the floor exists to damp bandit oscillation,
+    /// not to override explicit operator intent), while the safety
+    /// shield constraints still apply.
+    #[test]
+    fn forced_pin_bypasses_thrash_floor() {
+        let cfg = shipped_cfg();
+        let snap = pinned_snapshot();
+        let tracker = ThrashTracker::new();
+        let t0 = Instant::now();
+        // Settle on the baseline arm.
+        let p0 = project(
+            &[arm(&cfg, "browse")],
+            ShieldState::CoolAc,
+            &snap,
+            &cfg,
+            &tracker,
+            t0,
+        );
+        assert_eq!(p0.name, "browse");
+        // 1 s later an operator pins `flat-out` — inside the 30 s
+        // window, so the un-forced path would collapse to the baseline.
+        // A forced pin must go through.
+        let p1 = project_forced(
+            &[arm(&cfg, "flat-out")],
+            ShieldState::CoolAc,
+            &snap,
+            &cfg,
+            &tracker,
+            t0 + Duration::from_secs(1),
+        );
+        assert_eq!(
+            p1.name, "flat-out",
+            "operator pin must bypass the anti-thrash floor; got {}",
+            p1.name,
+        );
+    }
+
+    /// BUG-20260712-1136: a forced pin still honours the SPEC §4 safety
+    /// shield — pinning a `performance` arm while `Hot` must not defeat
+    /// the thermal guard; it falls back to the rules baseline.
+    #[test]
+    fn forced_pin_still_respects_shield_safety() {
+        let cfg = shipped_cfg();
+        let snap = pinned_snapshot();
+        let tracker = ThrashTracker::new();
+        let picked = project_forced(
+            &[arm(&cfg, "flat-out")],
+            ShieldState::Hot,
+            &snap,
+            &cfg,
+            &tracker,
+            Instant::now(),
+        );
+        assert_ne!(
+            picked.name, "flat-out",
+            "a forced performance pin must not defeat the Hot thermal guard",
+        );
     }
 
     /// DoD bullet 1: shield projection completes in <50 µs. No

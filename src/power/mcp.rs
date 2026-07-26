@@ -223,6 +223,8 @@ mod tests {
             snapshot: json!({}),
             last_audit: None,
             drift: DriftStatus::default(),
+            model: None,
+            onboarding: None,
         };
         let cfg = PowerConfig::default();
         let onboarding = super::super::onboarding::OnboardingStatus {

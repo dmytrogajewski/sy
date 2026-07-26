@@ -1,0 +1,36 @@
+# Pinned style for sy-plugin-md renders.
+#
+# Colours are gruvbox-dark (mirrors `themes/gruvbox-material.toml`).
+# Pinned here so the golden PNG fixtures stay stable even if the
+# global theme file is edited — the canary's pixel contract is
+# orthogonal to user theme.
+[font]
+serif = "DejaVu Sans"
+sans = "DejaVu Sans"
+mono = "DejaVu Sans"
+
+[font.size]
+body_px = 16
+h1_px = 28
+h2_px = 24
+h3_px = 20
+code_px = 14
+
+[palette]
+bg = "#282828"
+fg = "#ebdbb2"
+fg_dim = "#a89984"
+accent = "#89b482"
+red = "#ea6962"
+yellow = "#d8a657"
+code_bg = "#32302f"
+code_fg = "#a9b665"
+link = "#7daea3"
+rule = "#504945"
+
+[layout]
+width_px = 800
+margin_px = 32
+line_height = 1.4
+paragraph_spacing_px = 8
+scroll_line_px = 24

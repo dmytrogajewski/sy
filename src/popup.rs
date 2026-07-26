@@ -25,7 +25,7 @@ pub(crate) struct Spec {
 /// Toggle a named popup window. If a previously-spawned process for this
 /// key is alive, kill it. Otherwise spawn the associated command.
 ///
-/// PID state lives at /tmp/sy-popup-<key>.pid (with ':' replaced by '-').
+/// PID state lives at `/tmp/sy-popup-<key>.pid` (with ':' replaced by '-').
 pub fn toggle(key: &str) -> Result<()> {
     toggle_with_pid_dir(key, Path::new("/tmp"))
 }

@@ -68,12 +68,46 @@ once, then incrementally synced on a schedule. Exposes the search via
 CLI and via an MCP server (`sy knowledge mcp`) auto-registered with
 your agents by `sy auto`.
 
+Retrieval is **hybrid**: a dense (embedding) leg and a sparse (BM25-style
+lexical) leg are fused server-side by qdrant's Reciprocal Rank Fusion
+(`k=60`, needs qdrant ≥1.16) and reranked, so literal tokens (`X5`,
+file paths, SHAs) land even when the embedding alone would miss them.
+Each source carries a `kind` (`telegram`, `claude-transcripts`,
+`notes`, …); per-source pipelines chunk per logical unit (one Telegram
+message, one transcript turn) with structured payload. Agent
+transcripts (`~/.claude/projects/**`, `kind=claude-transcripts`) are
+**excluded from the default search scope** so a live prompt can't
+retrieve itself — opt back in with `--kind claude-transcripts`.
+
 ```
 sy knowledge add ~/Documents/notes
 sy knowledge daemon
 sy knowledge search "rust async cancellation"
+
+# Structured pre-search filters (also `SY_KB_*` env; flags > env > default):
+sy knowledge search "новый год X5 Магнит" \
+    --date-from 2023-12-01 --date-to 2024-02-29 \
+    --kind telegram --from "Анна Лу"
+#   --include-source / --exclude-source <name>   scope by registered source
+#   (results carry a stable `chunk_id`; fetch full text with get-chunk)
+
+sy knowledge get-chunk <chunk_id>   # full, uncapped text for one result
+sy knowledge eval --json            # recall@1/5, MRR, abstain accuracy vs the golden set
 sy knowledge status --json
 ```
+
+Search responses carry a `confidence` (calibrated from the reranker)
+and honour an `abstain_threshold` — below it the tool returns no
+results with `reason: "no high-confidence match"` rather than
+quoting background noise. Natural-language time phrases ("новогодние
+праздники 2024", "last summer") auto-fill the date range when no
+explicit `--date-from/--date-to` is given, and a user-editable
+`~/.config/sy-knowledge/synonyms.yaml` (shipped by `sy apply`) expands
+known aliases (`X5 → Пятёрочка/Перекрёсток/Чижик`) into the lexical leg.
+
+Voice/video notes can be transcribed into the index (Whisper, CPU/iGPU)
+by building with `--features transcribe` (off by default — it vendors
+whisper.cpp and downloads a model).
 
 ### `power` — adaptive power governor
 
@@ -89,6 +123,17 @@ sy power status            # current profile, source, rationale
 sy power apply             # apply config rules
 sy power show --json       # full snapshot (governor, EPP, bandit weights)
 ```
+
+`sy power show` renders an offline PDF report over the decision journal:
+an executive summary, the per-arm decision mix, cumulative regret against
+the rules-only baseline, and power/reward plots — so you can audit what
+the bandit actually did over a window. Add `--json` for the
+`sy.power.report/v1` schema instead of a PDF, `--out` to pin the path, and
+`--since` to widen the window. The PDF is byte-identical over the same
+audit window once its two wall-clock inputs are pinned via
+`SY_POWER_REPORT_TIMESTAMP` and `SY_POWER_REPORT_MODEL_SHA`.
+
+<img src="assets/sy-power-report.png" alt="sy power show report — executive summary and methodology page" width="600" />
 
 ### Rice — niri + waybar + …
 
@@ -106,8 +151,7 @@ configs/
 ├── mako/config
 ├── fuzzel/fuzzel.ini
 ├── foot/foot.ini
-├── swaylock/config
-└── yazi/{package.toml,theme.toml,yazi.toml,keymap.toml,init.lua}
+└── swaylock/config
 ```
 
 Stack:
@@ -120,7 +164,7 @@ Stack:
 | Launcher         | fuzzel          | `dnf`                           |
 | Terminal         | foot            | `dnf`                           |
 | Notifications    | mako            | `dnf`                           |
-| File manager     | yazi (+ `ya`)   | `cargo install yazi-build`      |
+| File manager     | `sy file` (iced) | productivised under `configs/sy/file*.toml`; opens via `Mod+E` / `sy file --ipc` |
 | Lock             | swaylock        | `dnf`                           |
 | Idle             | swayidle        | `dnf` (DPMS via `niri msg`)     |
 | Night light      | wlsunset        | `dnf`                           |
@@ -166,7 +210,7 @@ the PAM module's control flags and arguments are in
 │   └── …                     # bat, bright, bt, cal, gpu, npu, net, … (bar tiles)
 ├── configs/                  # declarative config (rendered by `sy apply`)
 │   ├── systemd/{system,user}/*.service|*.target
-│   ├── niri/ waybar/ mako/ fuzzel/ foot/ swaylock/ yazi/
+│   ├── niri/ waybar/ mako/ fuzzel/ foot/ swaylock/
 │   ├── sy/{power,intent_whitelist}.toml
 │   ├── dbus-1/ policy/ selinux/ udev/ modprobe.d/ grub/ dracut/
 │   └── …
@@ -200,8 +244,6 @@ unzip -q -o /tmp/JBM.zip -d ~/.local/share/fonts/JetBrainsMono '*.ttf'
 rm /tmp/JBM.zip
 fc-cache -f
 
-cargo install --locked --force yazi-build
-rm -f ~/.cargo/bin/yazi-build
 GOBIN=~/.local/bin go install go.senan.xyz/cliphist@latest
 ```
 
@@ -222,9 +264,12 @@ cargo build --release
 niri msg action load-config-file
 killall -SIGUSR2 waybar
 makoctl reload
-
-./scripts/yazi-plugins.sh               # yazi plugins + flavor (idempotent)
 ```
+
+`sy file` (the in-tree iced file manager) is the primary file
+manager — see the [`Stack`](#planes) row above and
+[`docs/how-to/run-sy-file.md`](docs/how-to/run-sy-file.md) for the
+first-session recipe.
 
 Override target dir with `--target` or `$XDG_CONFIG_HOME`. Override
 repo root with `--root` or `$SY_ROOT`. The active theme lives in
@@ -327,8 +372,13 @@ sy knowledge daemon                # supervises qdrant + scheduled embed
 sy knowledge status [--json]
 sy knowledge pause / resume / toggle-pause / cancel
 sy knowledge bench --n 1024
-sy knowledge search <query>
-sy knowledge mcp                   # MCP server (stdio) for AI agents
+sy knowledge search <query> [--date-from D --date-to D --from WHO --kind K \
+                            --include-source N --exclude-source N]
+sy knowledge get-chunk <chunk_id> # full uncapped text for one search result
+sy knowledge eval [--json]        # recall@1/5, MRR, abstain accuracy (golden set)
+sy knowledge mcp                   # MCP server (stdio): knowledge_search,
+                                   #   knowledge_get_chunk, knowledge_index,
+                                   #   knowledge_list_sources
 
 # power
 sy power status [--json]
@@ -368,7 +418,7 @@ Mod key is **Super** (Mod4). Full list below.
 | Keys                              | Action                                   |
 |-----------------------------------|------------------------------------------|
 | `Super+Return`                    | Terminal (foot)                          |
-| `Super+n`                         | File manager (yazi in foot)              |
+| `Mod+E` / `Mod+Shift+E` / `Mod+Slash` | `sy file` (the new iced file manager) |
 | `Super+d` / `Super+Shift+d`       | Launcher / dmenu mode                    |
 | `Super+c`                         | Clipboard history (cliphist + fuzzel)    |
 | `Super+Escape`                    | Lock screen                              |
@@ -445,14 +495,10 @@ The palette lives in `themes/<name>.toml` and is injected into every
   `niri/language` (XKB layout indicator). Needs waybar 0.11+.
 - **Idle & DPMS**: swayidle uses `niri msg action power-off-monitors`
   / `power-on-monitors` for DPMS.
-- **Yazi**: `configs/yazi/` ships the full config — `yazi.toml`
-  (previewers + git fetcher), `keymap.toml` (plugin keybindings),
-  `init.lua` (guarded `:setup()` calls), `theme.toml` (flavor pin) and
-  `package.toml` (32 `ya pkg` deps + the gruvbox flavor). Plugins not
-  reachable via `ya pkg` (dual-pane, easyjump, searchjump, whoosh)
-  are git-cloned by `scripts/yazi-plugins.sh`. Run that script after
-  `sy apply` (or `make yazi-plugins`); it is idempotent and safe to
-  re-run on upgrade.
+- **File manager**: `sy file` is the productivised path; first-session
+  recipe in [`docs/how-to/run-sy-file.md`](docs/how-to/run-sy-file.md)
+  and the plugin-author path in
+  [`docs/how-to/write-a-sy-plugin.md`](docs/how-to/write-a-sy-plugin.md).
 
 ## Contributing
 

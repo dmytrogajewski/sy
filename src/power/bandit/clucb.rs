@@ -27,7 +27,30 @@
 //! `tests::propose_ranked_p99_under_100us` keeps the closed-form
 //! solver within the SPEC's 100 µs budget.
 
+use serde::{Deserialize, Serialize};
+
 use crate::power::snapshot::FEATURE_LEN;
+
+/// Serde mirror of [`Clucb`]'s private state. Built by
+/// [`Clucb::snapshot`] and consumed by [`Clucb::restore`]; the
+/// checkpoint module ([`crate::power::checkpoint`]) is the only
+/// production caller. Field-for-field mirror so a serde round-trip is
+/// lossless — `arms` is included so the checkpoint loader can refuse
+/// a stale on-disk state whose arm vocabulary has drifted from
+/// `power.toml`. `d` (context dimension) is similarly mirrored so a
+/// re-config of [`FEATURE_LEN`] cleanly invalidates the checkpoint
+/// rather than silently truncating.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClucbState {
+    pub arms: Vec<String>,
+    pub alpha: f32,
+    pub a_mats: Vec<Vec<f32>>,
+    pub b_vecs: Vec<Vec<f32>>,
+    pub update_counts: Vec<u64>,
+    pub d: usize,
+    pub baseline_mean: f32,
+    pub baseline_decay: f32,
+}
 
 /// Tikhonov ridge parameter `λ` for the Gram matrix prior `λ·I`. The
 /// value matches the LinUCB convention (Li 2010 §3.1); larger λ shrinks
@@ -49,7 +72,7 @@ pub struct Clucb {
     /// Per-arm response vectors, length `d` each.
     b_vecs: Vec<Vec<f32>>,
     /// Per-arm count of accepted `update()` calls. Exposed via
-    /// [`Clucb::arm_update_count`] so the Step 22 daemon's
+    /// `Clucb::arm_update_count` so the Step 22 daemon's
     /// `reward_update_lags_one_tick` test can assert the bandit's
     /// posterior is updated exactly once per *completed* tick (a tick
     /// can register a reward only after the next tick produces an
@@ -119,6 +142,39 @@ impl Clucb {
         self.baseline_mean
     }
 
+    /// Snapshot every accumulator into a serde-round-trippable
+    /// [`ClucbState`]. The checkpoint module ([`crate::power::checkpoint`])
+    /// is the only production caller — see BUG-20260525-2353.
+    pub fn snapshot(&self) -> ClucbState {
+        ClucbState {
+            arms: self.arms.clone(),
+            alpha: self.alpha,
+            a_mats: self.a_mats.clone(),
+            b_vecs: self.b_vecs.clone(),
+            update_counts: self.update_counts.clone(),
+            d: self.d,
+            baseline_mean: self.baseline_mean,
+            baseline_decay: self.baseline_decay,
+        }
+    }
+
+    /// Overwrite every accumulator from a [`ClucbState`] loaded off
+    /// disk. Public surface intentionally limited to
+    /// deserialise-then-overwrite — no other mutation path. Mismatched
+    /// arm vocabulary or context dimension is the caller's
+    /// responsibility to detect before calling (the checkpoint loader
+    /// rejects the stale file via the arms-hash gate).
+    pub fn restore(&mut self, state: ClucbState) {
+        self.arms = state.arms;
+        self.alpha = state.alpha;
+        self.a_mats = state.a_mats;
+        self.b_vecs = state.b_vecs;
+        self.update_counts = state.update_counts;
+        self.d = state.d;
+        self.baseline_mean = state.baseline_mean;
+        self.baseline_decay = state.baseline_decay;
+    }
+
     /// Context dimension this CLUCB was constructed against. Step 29
     /// widens the dim from 12 → 13 (snapshot features + activity
     /// label), so the daemon test pins the new width through this
@@ -131,8 +187,8 @@ impl Clucb {
     }
 
     /// Compute UCB scores for every arm at `context` and return them
-    /// sorted descending by score. Output length equals
-    /// [`Clucb::arm_count`]; ties are broken by the arms' original
+    /// sorted descending by score. Output length equals the number of
+    /// `arms`; ties are broken by the arms' original
     /// order (stable sort).
     pub fn propose_ranked(&self, context: &[f32]) -> Vec<(String, f32)> {
         let mut scored: Vec<(String, f32)> = self

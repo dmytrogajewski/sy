@@ -4,7 +4,6 @@
 
 use serde::Serialize;
 
-const CHUNK_TOKENS: usize = 512;
 const OVERLAP_TOKENS: usize = 64;
 
 #[derive(Debug, Clone, Serialize)]
@@ -13,7 +12,12 @@ pub struct Chunk {
     pub text: String,
 }
 
-pub fn chunk(text: &str) -> Vec<Chunk> {
+/// Sliding-window chunker with a caller-chosen target chunk size (in
+/// whitespace tokens). The generic pipeline passes its own
+/// `GENERIC_CHUNK_TOKENS` target. Overlap is fixed at [`OVERLAP_TOKENS`];
+/// the id scheme (see [`point_id`]) is unchanged.
+pub fn chunk_sized(text: &str, chunk_tokens: usize) -> Vec<Chunk> {
+    let chunk_tokens = chunk_tokens.max(1);
     // Tokenise on whitespace, keeping byte ranges so we can splice without
     // per-chunk allocation explosions.
     let tokens: Vec<&str> = text.split_whitespace().collect();
@@ -21,12 +25,12 @@ pub fn chunk(text: &str) -> Vec<Chunk> {
         return Vec::new();
     }
 
-    let step = CHUNK_TOKENS.saturating_sub(OVERLAP_TOKENS).max(1);
+    let step = chunk_tokens.saturating_sub(OVERLAP_TOKENS).max(1);
     let mut out = Vec::new();
     let mut start = 0usize;
     let mut idx = 0u32;
     while start < tokens.len() {
-        let end = (start + CHUNK_TOKENS).min(tokens.len());
+        let end = (start + chunk_tokens).min(tokens.len());
         let body = tokens[start..end].join(" ");
         out.push(Chunk {
             index: idx,

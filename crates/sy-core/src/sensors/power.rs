@@ -1,4 +1,4 @@
-//! Read-only adapter over the [`crate::power`] daemon's in-memory
+//! Read-only adapter over the `crate::power` daemon's in-memory
 //! bandit/shield state. Per the sy-mon SPEC §4 `SystemSnapshot` JSON
 //! example, the `power` panel surfaces three values:
 //!
@@ -11,7 +11,7 @@
 //! is below it in the dependency graph and cannot import it. This
 //! module therefore exposes a tiny [`PowerSource`] trait that any
 //! caller in the binary can implement on top of its in-memory state
-//! (e.g. the power daemon's bandit registry + the [`BanditMetrics`]
+//! (e.g. the power daemon's bandit registry + the `BanditMetrics`
 //! shape in `src/power/report/metrics.rs`), and a pure projection
 //! [`PowerSample::from_source`] that bundles the three reads into one
 //! `*Sample` for [`crate::mon::snapshot::SystemSnapshot`] (Step 6).
@@ -46,7 +46,7 @@ pub trait PowerSource {
     /// Cumulative regret vs the rules baseline since the daemon last
     /// reset its counter. Negative values mean the bandit consumed
     /// less power than the rules baseline (the sign convention from
-    /// [`crate::power::report::metrics::BanditMetrics::cumulative_regret_vs_baseline`]
+    /// `crate::power::report::metrics::BanditMetrics::cumulative_regret_vs_baseline`
     /// in `src/power/report/metrics.rs`).
     fn regret_cum(&self) -> f32;
 }

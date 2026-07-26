@@ -1,0 +1,51 @@
+# sy-plugin-fake — manifest for the in-tree conformance fixture
+# (SPEC §3.3 item 17). The conformance harness rewrites the
+# `[plugin.binary] exec` field at test time with the path to the
+# `CARGO_BIN_EXE_sy-plugin-fake` binary, so this file is the
+# wire-shape reference + per-scenario `[needs]` / `[limits]` source.
+#
+# `[needs]` is intentionally empty so the `cap_violation` scenario
+# can issue a `host.fs.read` request and the host (which gates on
+# `[needs].fs_read`) returns `-32099 CAP_NOT_GRANTED` — the literal
+# wire shape the conformance test asserts on.
+#
+# `[limits].memory_mb = 64` is the SPEC §2.2 default; the
+# `rlimit_breach` scenario sets `SY_FAKE_TRIGGER=rlimit_breach` so the
+# fake's `try_reserve_exact(4 GiB)` fails inside RLIMIT_AS and emits a
+# `-32097 LIMIT_EXCEEDED` reply.
+api = "1"
+
+[plugin]
+id = "sy-plugin-fake"
+name = "sy Plugin Fake (conformance fixture)"
+version = "0.1.0"
+description = "In-tree fake plugin used by tests/sy_plugin_conformance.rs"
+authors = ["sy maintainers"]
+license = "MIT"
+api_min = "1"
+api_max = "1"
+
+[plugin.binary]
+exec = "./sy-plugin-fake"
+
+[[capability]]
+kind = "previewer"
+mime = "text/markdown"
+
+[needs]
+fs_read = []
+fs_write = []
+preview = []
+knowledge = []
+network = []
+exec = []
+
+[limits]
+memory_mb = 64
+cpu_seconds = 10
+nofile = 64
+spawn_timeout_ms = 1500
+shutdown_timeout_ms = 1000
+
+[env]
+PATH = "/usr/bin:/bin"

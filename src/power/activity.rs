@@ -91,11 +91,42 @@ impl ActivityLabel {
 /// One per-class FTRL state. Three `FEATURE_LEN`-wide vectors per
 /// class: `z` (negative gradient accumulator), `n` (squared-gradient
 /// accumulator), `w` (the current weight, derived lazily from `z`/`n`
-/// inside [`predict`]).
-#[derive(Debug, Clone)]
+/// inside `predict`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct FtrlClass {
     z: [f32; FEATURE_LEN],
     n: [f32; FEATURE_LEN],
+}
+
+/// Serde mirror of [`OnlineClassifier`]'s per-class FTRL state. Built
+/// by [`OnlineClassifier::snapshot`] and consumed by
+/// [`OnlineClassifier::restore`]; the checkpoint module
+/// ([`crate::power::checkpoint`]) is the only production caller.
+/// Round-trips every per-class `(z, n)` weight vector — `w` is
+/// derived on demand from `(z, n)` inside [`FtrlClass::weight`], so
+/// it is intentionally NOT carried in the snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassifierState {
+    classes: Vec<FtrlClassState>,
+}
+
+impl ClassifierState {
+    /// Number of per-class FTRL slots — always
+    /// [`ACTIVITY_CLASS_COUNT`] in v1, surfaced for the daemon's
+    /// "checkpoint hydrated" log line so an operator can sanity-check
+    /// the taxonomy.
+    pub fn class_count(&self) -> usize {
+        self.classes.len()
+    }
+}
+
+/// Per-class FTRL accumulators in their on-disk shape. `Vec<f32>` for
+/// serde portability (arrays serialise fine but the Vec form is
+/// trivially extensible if [`FEATURE_LEN`] ever changes).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FtrlClassState {
+    z: Vec<f32>,
+    n: Vec<f32>,
 }
 
 impl FtrlClass {
@@ -163,7 +194,7 @@ fn sigmoid(z: f32) -> f32 {
 
 /// Online one-vs-rest FTRL-Proximal classifier over the 12-channel
 /// `Snapshot::features` vec. Five binary models share a single
-/// `OnlineClassifier`; [`classify`] picks the argmax of the sigmoid
+/// `OnlineClassifier`; [`Self::classify`] picks the argmax of the sigmoid
 /// scores.
 #[derive(Debug, Clone)]
 pub struct OnlineClassifier {
@@ -215,6 +246,47 @@ impl OnlineClassifier {
         for (i, class) in self.classes.iter_mut().enumerate() {
             let y = if i == target_idx { 1.0 } else { 0.0 };
             class.partial_fit(&snap.features, y);
+        }
+    }
+
+    /// Snapshot every per-class FTRL accumulator into a
+    /// serde-round-trippable [`ClassifierState`]. The checkpoint
+    /// module ([`crate::power::checkpoint`]) is the only production
+    /// caller — see BUG-20260525-2353.
+    pub fn snapshot(&self) -> ClassifierState {
+        ClassifierState {
+            classes: self
+                .classes
+                .iter()
+                .map(|c| FtrlClassState {
+                    z: c.z.to_vec(),
+                    n: c.n.to_vec(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Overwrite every per-class FTRL accumulator from a
+    /// [`ClassifierState`] loaded off disk. Public surface limited to
+    /// deserialise-then-overwrite. Silently no-ops if `state.classes`
+    /// is the wrong width or carries `(z, n)` vectors that are not
+    /// [`FEATURE_LEN`]-wide — the checkpoint loader rejects the stale
+    /// file via the arms-hash + schema gate before reaching this
+    /// point, so a partial restore here would mean the on-disk file
+    /// was corrupted between gate and load. Conservative path: leave
+    /// the live state untouched.
+    pub fn restore(&mut self, state: ClassifierState) {
+        if state.classes.len() != ACTIVITY_CLASS_COUNT {
+            return;
+        }
+        for (live, persisted) in self.classes.iter_mut().zip(state.classes) {
+            if persisted.z.len() != FEATURE_LEN || persisted.n.len() != FEATURE_LEN {
+                return;
+            }
+            for i in 0..FEATURE_LEN {
+                live.z[i] = persisted.z[i];
+                live.n[i] = persisted.n[i];
+            }
         }
     }
 

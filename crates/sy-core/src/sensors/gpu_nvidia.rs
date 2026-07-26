@@ -93,7 +93,7 @@ const NVIDIA_SMI_ARGS: [&str; 2] = [
     "--format=csv,noheader,nounits",
 ];
 
-/// I/O wrapper: spawn `nvidia-smi` with [`NVIDIA_SMI_ARGS`] and feed
+/// I/O wrapper: spawn `nvidia-smi` with `NVIDIA_SMI_ARGS` and feed
 /// its stdout into [`parse_smi_csv`]. Returns an empty snapshot if
 /// the binary is missing or exits non-zero — both indicate "no
 /// NVIDIA GPU here", not a sensor failure.

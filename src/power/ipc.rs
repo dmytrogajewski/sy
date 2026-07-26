@@ -24,11 +24,13 @@
 
 use std::io;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::power::drift::DriftStatus;
 use crate::power::log::AuditEntry;
+use crate::power::onboarding::OnboardingStatus;
 use crate::power::snapshot::Snapshot;
 
 /// SPEC §4 schema id pinned on every [`StatusResponse`]. Matches the
@@ -130,6 +132,70 @@ pub struct StatusResponse {
     /// compatible.
     #[serde(default)]
     pub drift: DriftStatus,
+    /// Step T3 (BUG-20260525-2352) model-health block. Populated by
+    /// the daemon when the most recent retrain attempt aborted with
+    /// per-class-coverage / per-class-recall gates so
+    /// `sy power status --json | jq .model.missing_classes` surfaces
+    /// the gap. `None` means "last retrain succeeded or hasn't fired".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelStatus>,
+    /// BUG-20260712-1530 onboarding block, computed daemon-side so the
+    /// `sy power status --json` `onboarding` document reflects the gate
+    /// the daemon is *actually* enforcing — not the CLI process's own
+    /// re-computation, which diverges whenever the two load different
+    /// `SY_POWER_ONBOARDING_DAYS` (e.g. a systemd drop-in scoping the
+    /// env to `sy-powerd` only). The daemon is the source of truth for
+    /// its own gate. `None` on a wire frame from a pre-fix daemon; the
+    /// CLI then falls back to its local computation, so old ↔ new frames
+    /// stay compatible in both directions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub onboarding: Option<OnboardingWire>,
+}
+
+/// Daemon-authoritative onboarding view carried on
+/// [`StatusResponse::onboarding`]. Mirrors the SPEC §4
+/// `sy.power.status/v1` `onboarding` block keys 1:1 — `active`,
+/// `days_collected`, `ready_at` come from the daemon's
+/// [`OnboardingStatus`]; `target_days` is the daemon's *effective*
+/// `cfg.onboarding.days` (post env-override), which is the field that
+/// diverged in BUG-20260712-1530. Carries `Deserialize` (unlike
+/// [`OnboardingStatus`], which is `Serialize`-only) so the CLI can
+/// decode it off the wire.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OnboardingWire {
+    pub active: bool,
+    pub days_collected: u32,
+    pub ready_at: DateTime<Utc>,
+    pub target_days: u32,
+}
+
+impl OnboardingWire {
+    /// Build the wire view from the daemon's computed
+    /// [`OnboardingStatus`] plus the daemon's effective `target_days`
+    /// (`cfg.onboarding.days` after env overrides).
+    pub fn from_status(status: &OnboardingStatus, target_days: u32) -> Self {
+        Self {
+            active: status.active,
+            days_collected: status.days_collected,
+            ready_at: status.ready_at,
+            target_days,
+        }
+    }
+}
+
+/// Step T3 model-health surface carried on [`StatusResponse::model`].
+/// Currently a single field — the trainer's last-known missing-classes
+/// list — but kept in its own struct so future health signals
+/// (training wall-time, validation accuracy, version-sha) can be added
+/// without re-bumping the wire schema.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelStatus {
+    /// Names of activity classes that fell below the trainer's
+    /// per-class row floor on the last retrain attempt. Empty when the
+    /// last attempt failed for a different reason; absent (`None` on
+    /// [`StatusResponse::model`]) when no retrain has ever fired.
+    #[serde(default)]
+    pub missing_classes: Vec<String>,
 }
 
 impl StatusResponse {
@@ -146,6 +212,8 @@ impl StatusResponse {
             snapshot: value,
             last_audit: None,
             drift: DriftStatus::default(),
+            model: None,
+            onboarding: None,
         }
     }
 }

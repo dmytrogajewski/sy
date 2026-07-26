@@ -26,6 +26,7 @@ mod crash;
 mod disk;
 mod doctor;
 mod fido;
+mod file;
 mod gpu;
 mod ipc_cli;
 mod knowledge;
@@ -35,6 +36,14 @@ mod mon_exporter;
 mod net;
 mod notif;
 mod npu;
+// Roadmap Step 8 lifts the `#[cfg(test)]` gate: `Cmd::Plugin` below
+// is the first non-test bin consumer of the plugin runtime. The
+// dispatcher in `plugin::cli::dispatch` reaches every other plugin
+// submodule (`manifest`, `registry`, `proc`, `sandbox`, `host_fns`,
+// `capability`, `rpc`, `transport`) at runtime, so the workspace's
+// `clippy::dead_code = "deny"` gate stays clean without a per-module
+// per-module dead-code suppression.
+mod plugin;
 mod popup;
 mod power;
 mod pwr;
@@ -48,6 +57,7 @@ mod vol;
 mod wallpaper;
 mod waybar;
 mod wifi;
+mod wwan;
 
 /// sy — apply niri rice configs with themes and templating.
 #[derive(Parser)]
@@ -77,7 +87,7 @@ enum Cmd {
     ///   sy apply --yes                # confirm destructive ops
     ///   sy apply                      # apply everything
     Apply {
-        /// Theme name (resolved as themes/<name>.toml)
+        /// Theme name (resolved as `themes/<name>.toml`)
         #[arg(short, long)]
         theme: Option<String>,
         /// Don't write anything — print what would change.
@@ -142,8 +152,13 @@ enum Cmd {
     Cal,
     /// Fuzzel-based wifi picker via nmcli
     Wifi,
-    /// Fuzzel-based network dropdown (wifi, VPN, toggles, nmtui)
-    Net,
+    /// Fuzzel network dropdown (wifi, VPN, WWAN, toggles); `--waybar` emits
+    /// the captive-portal indicator tile as JSON.
+    Net {
+        /// Emit the captive-portal / no-internet indicator as waybar JSON.
+        #[arg(long)]
+        waybar: bool,
+    },
     /// Copy the running sy binary into ~/.local/bin (real file, SELinux-safe)
     Install,
     /// Open the rendered Telegram palette in Telegram Desktop to apply it
@@ -253,6 +268,20 @@ enum Cmd {
         /// enable | disable | status (default: status)
         action: Option<String>,
     },
+    /// Mobile-broadband (WWAN / 4G-LTE USB modem) plane: declares carrier
+    /// APN profiles in `configs/sy/wwan.toml` and reconciles them into
+    /// NetworkManager `gsm` connections.
+    /// Subcommands: enable | disable | up | down | status (+ `--json`).
+    Wwan {
+        /// enable | disable | up | down | status | modeswitch (default: status)
+        action: Option<String>,
+        /// Emit machine-readable JSON (status only).
+        #[arg(long)]
+        json: bool,
+        /// Confirm the one-time, persistent MBIM mode switch (modeswitch only).
+        #[arg(long)]
+        yes: bool,
+    },
     /// Silent hours — quiet output during a configurable time window.
     Silent {
         /// toggle (default) | enable | disable | auto | status | watch
@@ -316,6 +345,17 @@ enum Cmd {
         #[command(subcommand)]
         cmd: crash::CrashCmd,
     },
+    /// `sy file` — niri-tiled iced file manager
+    /// (sy-file-manager roadmap Step 13; see SPEC §3.1).
+    /// Step 13 ships the carrier (`sy file [PATH]` prints `scaffold`,
+    /// `sy file doctor [--json]` returns the not-implemented marker);
+    /// Steps 14-22 fill in state, fs, IPC; Steps 23-29 land the GUI.
+    File {
+        /// Path to open (journey-J1's `sy file ~` shape).
+        path: Option<PathBuf>,
+        #[command(subcommand)]
+        cmd: Option<file::cli::FileCmd>,
+    },
     /// `sy mon` — on-demand system-health dashboard (sy-mon SPEC §3).
     /// Subcommands: `collect` (Step 11/13 aggregator), `snapshot`
     /// (Step 14 CLI consumer), `mcp` (Step 14 stdio MCP server),
@@ -326,6 +366,15 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<mon::cli::MonCmd>,
     },
+    /// `sy plugin` — discover / inspect / drive `sy file` plugins
+    /// (sy-file-manager roadmap Step 8; see plugin SPEC §4.5).
+    /// Subcommands: list, enable, disable, doctor, exec, cat-manifest,
+    /// validate, reload. Exit codes per SPEC §4.5 table
+    /// (0 ok / 2 usage / 8 plugin unhealthy).
+    Plugin {
+        #[command(subcommand)]
+        cmd: plugin::cli::PluginCmd,
+    },
     /// `systemctl --user` / `journalctl --user` wrapper per SPEC §4.7
     /// (arch-supervision Step 3). Subcommands: start|stop|restart|
     /// status|enable|disable|logs. See `sy service --help`.
@@ -334,7 +383,7 @@ enum Cmd {
     ///   sy service start aiplane
     ///   sy service status knowledge --json
     ///   sy service logs aiplane -f -n 200
-    ///   sy service logs agentd --trace <uuid>
+    ///   sy service logs agentd --trace `<uuid>`
     Service {
         #[command(subcommand)]
         cmd: supervision::service::ServiceCmd,
@@ -457,7 +506,7 @@ fn run() -> Result<()> {
         Cmd::Popup { key } => popup::toggle(&key),
         Cmd::Cal => cal::run(),
         Cmd::Wifi => wifi::pick(),
-        Cmd::Net => net::menu(),
+        Cmd::Net { waybar } => net::run(waybar),
         Cmd::Install => install(false),
         Cmd::TgTheme => tg_theme(),
         Cmd::Wallpaper {
@@ -495,6 +544,7 @@ fn run() -> Result<()> {
         Cmd::Pwr { waybar } => pwr::run(waybar),
         Cmd::Power { cmd } => power::dispatch(cmd),
         Cmd::Fido { action } => fido::run(action.as_deref()),
+        Cmd::Wwan { action, json, yes } => wwan::run(action.as_deref(), json, yes),
         Cmd::Silent { action, waybar } => silent::run(action.as_deref(), waybar),
         Cmd::Snd { action } => match action.as_str() {
             "login" => sound::login(),
@@ -509,8 +559,10 @@ fn run() -> Result<()> {
         Cmd::Ipc { sub } => ipc_cli::dispatch(sub),
         Cmd::Doctor { json, only } => doctor::dispatch(doctor::DoctorOpts { json, only }),
         Cmd::Crash { cmd } => crash::dispatch(cmd),
+        Cmd::File { path, cmd } => file::cli::dispatch(path, cmd),
         Cmd::Service { cmd } => supervision::service::dispatch(cmd),
         Cmd::Mon { cmd } => mon::cli::dispatch(cmd.unwrap_or(mon::cli::default_subcommand())),
+        Cmd::Plugin { cmd } => plugin::cli::dispatch(cmd),
     }
 }
 
@@ -657,7 +709,7 @@ fn apply_units(root: &Path, dry: bool, json: bool, yes: bool) -> Result<()> {
     supervision::apply::run_cli(root, &default_target()?, dry, json, yes)
 }
 
-const QDRANT_VERSION: &str = "1.12.4";
+const QDRANT_VERSION: &str = "1.18.1";
 
 /// Download the qdrant binary into `~/.local/bin/qdrant` if missing or
 /// out-of-date. Mirrors `ensure_bridges` for the ACP-bridge npm package.
