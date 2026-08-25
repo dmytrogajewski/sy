@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="280" viewBox="0 0 840 280" role="img" aria-labelledby="t d">
+  <title id="t">Spark keeps Docker off the laptop and off the TLS listener</title>
+  <desc id="d">The laptop talks HTTPS to an unprivileged Spark agent. That agent talks a private Unix socket to a root executor that owns Docker. Chat clients use OpenAI- and Anthropic-shaped URLs on the agent.</desc>
+  <rect width="840" height="280" fill="#101010"/>
+  <g font-family="ui-monospace, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace" font-size="13">
+    <rect x="24" y="88" width="200" height="88" fill="#0c0c0c" stroke="#2a2a2a"/>
+    <text x="124" y="124" text-anchor="middle" fill="#89b482">laptop</text>
+    <text x="124" y="148" text-anchor="middle" fill="#e8e4d4">sy spark</text>
+    <text x="124" y="168" text-anchor="middle" fill="#9a9584" font-size="12">no Docker</text>
+
+    <text x="300" y="64" text-anchor="middle" fill="#9a9584" font-size="12">HTTPS :9843</text>
+    <path d="M224 132 L316 132" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <polygon points="322,132 312,127 312,137" fill="#89b482"/>
+
+    <rect x="328" y="36" width="232" height="208" fill="#0c0c0c" stroke="#89b482" stroke-width="1.25"/>
+    <text x="444" y="64" text-anchor="middle" fill="#89b482">DGX Spark</text>
+    <rect x="348" y="84" width="192" height="64" fill="#101010" stroke="#2a2a2a"/>
+    <text x="444" y="110" text-anchor="middle" fill="#e8e4d4">agent</text>
+    <text x="444" y="130" text-anchor="middle" fill="#9a9584" font-size="11">User=sy-spark</text>
+    <text x="444" y="168" text-anchor="middle" fill="#9a9584" font-size="11">Unix socket</text>
+    <path d="M444 148 L444 176" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <polygon points="444,182 439,172 449,172" fill="#89b482"/>
+    <rect x="348" y="184" width="192" height="44" fill="#101010" stroke="#2a2a2a"/>
+    <text x="444" y="212" text-anchor="middle" fill="#e8e4d4">executor + Docker</text>
+
+    <text x="680" y="64" text-anchor="middle" fill="#9a9584" font-size="12">OpenAI / Anthropic URLs</text>
+    <path d="M664 116 L572 116" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <polygon points="566,116 576,111 576,121" fill="#89b482"/>
+    <rect x="664" y="88" width="152" height="88" fill="#0c0c0c" stroke="#2a2a2a"/>
+    <text x="740" y="128" text-anchor="middle" fill="#e8e4d4">chat clients</text>
+    <text x="740" y="152" text-anchor="middle" fill="#9a9584" font-size="12">after health</text>
+  </g>
+</svg>

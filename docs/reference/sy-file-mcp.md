@@ -1,28 +1,16 @@
-# `sy file mcp` — MCP tool reference
+# `sy file mcp` — MCP tools
 
-Encyclopaedic reference for the eleven `file_*` tools `sy file mcp`
-advertises. Source of truth: [`src/file/mcp.rs`](../../src/file/mcp.rs)
-and SPEC §4.3 of [`sy-file-manager`](../../specs/research/sy-file-manager/SPEC.md).
+The eleven `file_*` tools that `sy file mcp` advertises on stdio
+JSON-RPC. Each tool is a thin wrapper around a `file.*` IPC call to
+the running daemon (`$XDG_RUNTIME_DIR/sy-file.sock`, or
+`$SY_FILE_SOCK`).
 
-For the cross-cutting CLI contract (`--json`, exit codes, env vars),
-see [the CLI reference](cli.md).
+Source of truth: `src/file/mcp.rs`. For flags and exit codes, see
+[the CLI reference](cli.md#sy-file). To open the window as a human,
+see [browse files with sy file](../tutorials/browse-your-files.md).
 
-> Template: Good Docs Project reference. Diátaxis reference quadrant.
-> Each tool below is one H2 section: synopsis → arguments → returns
-> → IPC mapping → errors.
-
-## Overview
-
-`sy file mcp` is a stdio JSON-RPC MCP server that exposes the SPEC
-§4.3 file-manager surface to agents. Each tool is a thin transcoder:
-the MCP argument shape maps onto a `file.*` IPC op against the
-running `sy-file` daemon, dialled over
-`$SY_FILE_SOCK` (default
-`$XDG_RUNTIME_DIR/sy-file.sock`). The transport frame is
-line-delimited JSON — one request per line, one response per line —
-the same shape `sy stack mcp`, `sy knowledge mcp`, and `sy power mcp`
-implement, so a single MCP host can speak to all four with one
-handshake. `protocolVersion` is pinned at `2024-11-05`.
+`protocolVersion` is `2024-11-05`. The transport is one JSON object
+per line — the same shape as `sy knowledge mcp` and `sy power mcp`.
 
 Every tool's response travels inside the MCP `content` / `isError`
 envelope:

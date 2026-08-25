@@ -63,6 +63,23 @@ ort-sys = { version = "=2.0.0-rc.12", features = ["api-18"] }
 # scripts/prep_npu_embed.py and live in ~/.cache/sy/npu-embed.
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "http2", "json", "query", "tokio"] }
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+tower = { version = "0.5", default-features = false, features = ["limit", "timeout", "util"] }
+utoipa = { version = "5", default-features = false, features = ["macros"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
+hmac = "0.12"
+secrecy = "0.10"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+x509-parser = { version = "0.18", default-features = false, features = ["verify"] }
+rusqlite = { version = "0.40.0", default-features = false, features = ["backup", "bundled"] }
+rusqlite_migration = { version = "2.6.0", default-features = false }
+governor = { version = "0.10.4", default-features = false, features = ["dashmap", "std"] }
+bollard = { version = "0.21.1", default-features = false, features = ["pipe"] }
+http-body-util = "0.1"
+hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+hf-hub = { version = "1.0.0", default-features = false, features = ["rustls-tls"] }
 notify = "8"
 notify-debouncer-mini = "0.6"
 ignore = "0.4"
@@ -98,13 +115,15 @@ tokio-util = { version = "0.7", default-features = false, features = ["codec"] }
 # `Receiver` ↔ `Stream` shim.
 tokio-stream = { version = "0.1", default-features = false }
 bytes = "1"
+base64 = "0.22"
 ulid = { version = "1", features = ["serde"] }
-# IPC v1 Step 2 (Server/Client). `rustix/process` for `geteuid()`
+# IPC v1 Step 2 (Server/Client). `rustix/process` for `geteuid()` and
+# `rustix/system` for namespace-safe in-process `uname()`.
 # alongside tokio's `UnixStream::peer_cred()` — together they implement
 # the SPEC §4.2 `SO_PEERCRED` origin gate. `futures-util/sink` is the
 # minimal slice of `futures-rs` needed to call `.send()` / `.next()`
 # on the `tokio_util::codec::Framed` Stream+Sink halves.
-rustix = { version = "1", default-features = false, features = ["std", "process", "thread"] }
+rustix = { version = "1", default-features = false, features = ["std", "fs", "process", "thread", "system"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 # arch-agent-sandbox Step 3: in-process Landlock LSM ruleset
 # construction (SPEC §4.4 step 3 layer 2). 0.4.x exposes ABI v4 which
@@ -460,6 +479,27 @@ mon-exporter = ["sy-core/mon-exporter"]
 # without io_uring). Drop the feature (e.g. on non-Linux cross builds)
 # and the dep + io_uring dispatch fall out entirely.
 file-iouring = ["dep:tokio-uring"]
+# DGX Spark ARM64 artifact boundary. Step 1 adds only the fixed read-only
+# bootstrap inspector; later server-only dependencies attach exclusively here.
+spark-agent = [
+    "dep:axum",
+    "dep:axum-server",
+    "dep:hmac",
+    "dep:governor",
+    "dep:rcgen",
+    "dep:rusqlite",
+    "dep:rusqlite_migration",
+    "dep:rustls",
+    "dep:secrecy",
+    "dep:tower",
+    "dep:utoipa",
+    "dep:x509-parser",
+    "dep:bollard",
+    "dep:http-body-util",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:hf-hub",
+]
 
 [dependencies]
 anyhow.workspace = true
@@ -483,6 +523,23 @@ tokenizers.workspace = true
 # dep comment for the no-new-download / audit rationale.
 rustfft.workspace = true
 reqwest.workspace = true
+axum = { workspace = true, optional = true }
+axum-server = { workspace = true, optional = true }
+tower = { workspace = true, optional = true }
+utoipa = { workspace = true, optional = true }
+rcgen = { workspace = true, optional = true }
+hmac = { workspace = true, optional = true }
+secrecy = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+x509-parser = { workspace = true, optional = true }
+rusqlite = { workspace = true, optional = true }
+rusqlite_migration = { workspace = true, optional = true }
+governor = { workspace = true, optional = true }
+bollard = { workspace = true, optional = true }
+http-body-util = { workspace = true, optional = true }
+hyper = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
+hf-hub = { workspace = true, optional = true }
 notify.workspace = true
 notify-debouncer-mini.workspace = true
 ignore.workspace = true
@@ -499,8 +556,8 @@ blake3.workspace = true
 sha2.workspace = true
 libc.workspace = true
 toml_edit.workspace = true
-sy-core = { path = "crates/sy-core" }
-sy-ipc = { path = "crates/sy-ipc" }
+sy-core = { version = "=0.1.0", path = "crates/sy-core" }
+sy-ipc = { version = "=0.1.0", path = "crates/sy-ipc" }
 tokio-util.workspace = true
 # sy-file-manager Step 16 (`fs::copy`): `Stream<Item = OpEvent>` shim
 # over the executor-owned `mpsc::channel`. See workspace dep block.
@@ -509,6 +566,7 @@ tokio-stream.workspace = true
 # encode/decode buffer for `JsonRpcCodec` in `src/plugin/transport.rs`.
 # Same `bytes` version the workspace already pins for sy-ipc's codec.
 bytes.workspace = true
+base64.workspace = true
 # sy-file-manager Step 3 (plugin runtime sandbox): `setrlimit` wrapper
 # for `RLIMIT_AS / RLIMIT_CPU / RLIMIT_NOFILE` applied inside the
 # `pre_exec` closure of `src/plugin/sandbox.rs::build_command`. The

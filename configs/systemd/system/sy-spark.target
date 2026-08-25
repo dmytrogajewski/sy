@@ -1,0 +1,7 @@
+[Unit]
+Description=sy DGX Spark model appliance
+Requires=sy-spark-executor.service sy-spark-agent.service
+After=network-online.target docker.service
+
+[Install]
+WantedBy=multi-user.target

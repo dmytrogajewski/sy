@@ -1,19 +1,17 @@
 # `sy` CLI reference
 
-Encyclopaedic reference for every `sy` subcommand: synopsis, options,
-exit codes, environment variables, examples. Generated from
-`src/main.rs` and the per-plane CLI modules; the source code is the
-source of truth.
+Flags, exit codes, environment variables, and examples for the `sy`
+planes and applets. The clap `--help` text in the binary is the
+source of truth if this page and the code disagree.
 
-For task-oriented walkthroughs, see [tutorials](../tutorials/) and
-[how-to guides](../how-to/). For the cross-cutting CLI contract
-(`--json` / `--dry-run` / exit codes / `NO_COLOR` / `SY_*` env vars),
-start with the [global conventions](#global-conventions) section
-below.
+For walkthroughs, see [tutorials](../tutorials/) and
+[how-to guides](../how-to/). For the cross-cutting contract
+(`--json` / `--dry-run` / exit codes / `NO_COLOR` / `SY_*`), start
+with [global conventions](#global-conventions) below.
 
 > Template: Good Docs Project reference. Source attribution and the
 > Diátaxis reference quadrant are described in
-> [`/home/dmitriy/sources/sy/.agents/skills/documenter/SKILL.md`](../../.agents/skills/documenter/SKILL.md).
+> [`.agents/skills/documenter/SKILL.md`](../../.agents/skills/documenter/SKILL.md).
 
 ## Global conventions
 
@@ -64,6 +62,14 @@ source):
 - **`sy agt`** — `list`, `diag`.
 - **`sy auto`** — `configure`, `list-detectors`.
 - **`sy stack`** — `push --json`, `list --json`.
+- **`sy spark`** — `install`, `status`, `doctor`, `operations`, `token`,
+  `recipes`, `download`, `serve`, `ps`, `logs`, `stop`, `ls`, `show`,
+  `rm`, `client-config`, `cert status`.
+- **`sy file`** — `doctor`. `sy file ipc <op>` prints the JSON
+  response envelope by default.
+- **`sy plugin`** — `list`, `doctor`.
+- **`sy mon`** — `snapshot`, `doctor`.
+- **`sy wwan`** — `status`.
 
 Subcommands not listed above do not currently accept `--json`. Adding
 the flag to them is a backwards-compatible extension.
@@ -79,6 +85,10 @@ diff without applying. Honoured by:
 - `sy knowledge mcp-enable` / `sy knowledge mcp-disable` (dry-run is
   the default; `--apply` opts in).
 - `sy stack push` (`--dry-run` prints the planned push).
+- `sy spark <host> install` (inspect without installing).
+- `sy spark <host> serve` / `download` / `stop` / `rm` / `token` /
+  `operations cancel` (admission or mutation preview; no Docker or
+  GPU side effects on serve dry-run).
 
 Knowledge `mcp-enable` / `mcp-disable` and `auto configure` invert the
 usual default: they refuse to mutate disk unless `--apply` is set, so
@@ -97,9 +107,9 @@ constants live in the source under each plane's `exit` module
 | `0`  | success                  | every plane                                                               |
 | `1`  | generic failure          | every plane                                                               |
 | `2`  | usage error              | clap (`ErrorKind::ValueValidation`), `policy`, `power`, `service`, `crash`|
-| `3`  | drift / warn-only / lint-fail | `doctor` (warn-only), `ipc` (degraded), `service` (status drift), `power` (ADWIN drift alarm), `policy lint` |
-| `4`  | not-ready / daemon-unreachable / not-found | `ipc` (starting/failed), `service` (not-ready), `power` (daemon-unreachable), `crash` (record not found), `agt` (daemon unavailable), `knowledge` (qdrant-unreachable) |
-| `5`  | embedding-failed / polkit-denied | `knowledge`, `power`                                                |
+| `3`  | drift / warn-only / lint-fail | `doctor` (warn-only), `ipc` (degraded), `service` (status drift), `power` (ADWIN drift alarm), `policy lint`, `spark` (remote policy/state rejection), `mon snapshot` (aggregator unreachable), `file ipc` (daemon unreachable) |
+| `4`  | not-ready / daemon-unreachable / not-found | `ipc` (starting/failed), `service` (not-ready), `power` (daemon-unreachable), `crash` (record not found), `agt` (daemon unavailable), `knowledge` (qdrant-unreachable), `spark` (OpenSSH/TLS/auth unreachable), `file ipc` (op refused) |
+| `5`  | embedding-failed / polkit-denied / plugin-error | `knowledge`, `power`, `file ipc` (plugin error)                |
 | `6`  | unsupported hardware     | `power`                                                                   |
 | `7`  | onboarding-not-complete  | `power` (`sy power show` with insufficient audit window)                  |
 
@@ -128,6 +138,14 @@ load-bearing globals are:
   `SY_AGT_REQUEST_ID` — `sy agt` sandbox + launcher overrides.
 - `SY_SYSFS_ROOT` — `sy power status` sysfs probe root override (test
   hermeticity).
+- `SY_SPARK_*` — Spark client flags (`JSON`, `DRY_RUN`, `YES`,
+  `CONFIG_DIR`, `PROBE`, `LISTEN_ADDRESS`, `LISTEN_PORT`,
+  `RELEASE_SIGNATURE`, `RELEASE_PUBLIC_KEY`, and per-command
+  `REVISION` / `ALIAS` / `RECIPE` / …). See [`sy spark`](#sy-spark).
+- `SY_FILE_SOCK` — override `$XDG_RUNTIME_DIR/sy-file.sock` for
+  `sy file ipc`.
+- `SY_MON_HISTORY_SIZE`, `SY_MON_TICK_MS`, `SY_MON_BIND`,
+  `SY_MON_HISTORY_PATH` — aggregator ring and socket for `sy mon collect`.
 - `NO_COLOR` and `TERM=dumb` — honoured by the tracing subscriber on
   stderr; agent stdout output is plain text regardless.
 
@@ -1093,6 +1111,278 @@ sy stack toggle
 
 ---
 
+## `sy spark`
+
+Inspect, install, and drive one configured DGX Spark appliance.
+`<HOST>` is passed to OpenSSH as a single argument; there is no
+arbitrary-command escape hatch. OpenSSH owns `known_hosts`, agents,
+hardware tokens, and password prompts. Credentials are never accepted
+as `sy` arguments and are never stored by `sy`.
+
+Source: `src/spark/cli.rs`. Hidden unit entrypoints (`run-agent`,
+`run-executor`, `activate`, `inspect`) are not part of the laptop
+CLI.
+
+### Synopsis
+
+```text
+sy spark <HOST> <COMMAND>
+```
+
+### Subcommands
+
+| Subcommand | Purpose |
+|------------|---------|
+| `install` | Inspect the appliance (`--dry-run`) or apply the signed ARM64 install (`--yes`). |
+| `upgrade` | Stage and verify a signed side-by-side release, preserve engines, and automatically roll back failed semantic health. |
+| `rollback` | SSH-only exact rollback to the verified preceding control-plane release. |
+| `status` | Compact authenticated agent/executor health over pinned HTTPS. |
+| `doctor` | Authenticated, read-only compatibility and security checks. |
+| `operations` | Inspect, `--follow`, or `cancel` durable operations. |
+| `token` | `create` / `list` / `revoke` scoped bearer tokens. Create returns the secret once on stdout. |
+| `recipes` | Explain signed engine recipes and preview selection. Read-only: never downloads, pulls, or starts. |
+| `bench` | Evaluate one exact installed recipe against bounded functional gates; never measures speed or downloads/starts engines. |
+| `tune` | Persist the deterministic compatible winner from installed locally verified recipes; vLLM remains the visible fallback. |
+| `download` | Acquire and verify one immutable Hugging Face model snapshot. |
+| `serve` | Start one recipe-selected instance after fail-closed admission. |
+| `ps` | Desired versus observed managed instances. Does not print the internal bridge address. |
+| `logs` | Bounded, redacted logs for one instance. |
+| `stop` | Persist stopped intent, drain, and remove one instance. An already-absent instance is an idempotent success. |
+| `ls` | List complete verified local model snapshots. |
+| `show` | Immutable identity, provenance, aliases, and references for one model. |
+| `rm` | Preview or remove only unreferenced native-cache model data. |
+| `client-config` | Render a user-level Codex or Claude Code projection. Names the token env var; does not read or write it. |
+| `cert status` | Authenticated leaf-certificate identity. |
+| `cert rotate` | SSH-only leaf rotation with overlap; `--ca` rotates and atomically re-pins the local CA. |
+
+### Options (`install`)
+
+| Name | Type | Default | Env | Description |
+|------|------|---------|-----|-------------|
+| `--dry-run` | bool | `false` | `SY_SPARK_DRY_RUN` | Upload a content-addressed probe, run `spark bootstrap inspect`, verify the hash, remove the probe. No install. |
+| `--yes` | bool | `false` | `SY_SPARK_YES` | Apply the reviewed manifest. Requires `--release-signature` and `--release-public-key`. |
+| `--json` | bool | `false` | `SY_SPARK_JSON` | Emit `sy.spark.install-manifest/v1`. |
+| `--probe` | path | `/usr/libexec/sy/spark-bootstrap-aarch64` | `SY_SPARK_PROBE` | ARM64 feature-minimal probe artefact. |
+| `--listen-address` | IP | none | `SY_SPARK_LISTEN_ADDRESS` | Explicit LAN address for the HTTPS listener. |
+| `--listen-port` | u16 | `9843` | `SY_SPARK_LISTEN_PORT` | HTTPS listener port. |
+| `--release-signature` | path | none | `SY_SPARK_RELEASE_SIGNATURE` | Minisign signature for the ARM64 release (required with `--yes`). |
+| `--release-public-key` | path | none | `SY_SPARK_RELEASE_PUBLIC_KEY` | Pinned minisign public key (required with `--yes`). |
+| `--config-dir` | path | Spark config root | `SY_SPARK_CONFIG_DIR` | Local Spark configuration root. |
+
+`upgrade` accepts the same options. `rollback` and `cert rotate` accept
+`--dry-run`, `--yes`, `--json`, and `--config-dir`; exactly one of `--dry-run`
+and `--yes` is required. `cert rotate --ca` explicitly replaces the local CA.
+
+### Token scopes (`token create --scope`)
+
+`models:read`, `models:write`, `instances:read`, `instances:write`,
+`inference`, `logs:read`, `operations:read`, `operations:cancel`,
+`benchmarks:read`, `benchmarks:write`. Repeat `--scope` for each.
+
+### Exit codes
+
+- `0` — success.
+- `1` — unexpected failure.
+- `2` — usage or local configuration.
+- `3` — remote policy or state rejection (admission denied, recipe
+  refused, and similar).
+- `4` — OpenSSH/SFTP/agent unreachable, TLS identity mismatch, or
+  authentication failure.
+
+### Examples
+
+```bash
+sy spark dgx-spark install --dry-run --json
+sy spark dgx-spark install --yes --release-signature sy-aarch64.minisig \
+  --release-public-key sy-release.pub
+sy spark dgx-spark upgrade --dry-run --json
+sy spark dgx-spark rollback --dry-run --json
+sy spark dgx-spark cert rotate --dry-run --json
+sy spark dgx-spark status --json
+sy spark dgx-spark doctor --json
+sy spark dgx-spark serve ornith-1.5:9b --dry-run --json
+sy spark dgx-spark ps --json
+sy spark dgx-spark token create --name reader --scope models:read \
+  --scope operations:read --detach --json
+sy spark dgx-spark client-config ornith --client codex
+```
+
+### See also
+
+- [How to install the Spark agent](../how-to/install-spark.md)
+- [How to serve a model on Spark](../how-to/serve-a-model-on-spark.md)
+- [Spark reference](spark.md)
+
+---
+
+## `sy file`
+
+Native niri-tiled file manager (iced). Bare `sy file [PATH]` opens
+the window (prints `scaffold` then enters the GUI when stdout is a
+TTY and `gui-iced` is on). Source: `src/file/cli.rs`.
+
+### Synopsis
+
+```text
+sy file [PATH]
+sy file doctor [--json]
+sy file ipc <OP> …
+sy file mcp
+sy file waybar
+```
+
+### Subcommands
+
+| Subcommand | Purpose |
+|------------|---------|
+| *(none)* | Open the manager on `PATH` (default: launch cwd / `$HOME` via niri binds). |
+| `doctor` | Six health probes. Emits `sy.file.doctor/v1` with `--json`. |
+| `ipc serve` | Run the daemon in-process on `$XDG_RUNTIME_DIR/sy-file.sock` (or `SY_FILE_SOCK` / `--sock`). |
+| `ipc open` / `cd` / `select` / `copy` / `move` / `trash` / `restore` / `search` / `preview` / `ops-list` / `op-cancel` / `state` | One-shot JSON ops against the running daemon. |
+| `mcp` | Stdio JSON-RPC MCP server for the `file_*` tools. |
+| `waybar` | One-shot waybar custom-module tile (running-op count). Exits 0 even if the daemon is down. |
+
+Doctor probes: `file.daemon.reachable`, `file.fonts.jetbrainsmono_nerd`,
+`file.niri.binds`, `file.systemd.unit_installed`,
+`file.bookmarks.writable`, `file.plugins.registry`.
+
+### Exit codes (`ipc`)
+
+- `0` — success.
+- `1` — generic failure.
+- `2` — usage error.
+- `3` — daemon unreachable.
+- `4` — op cancelled or refused.
+- `5` — plugin error.
+
+`sy file doctor` exits `0` when every probe passed, `1` when any
+probe failed, and `2` when there are warnings only (not `3` — that
+code is top-level `sy doctor` warn-only).
+
+### Examples
+
+```bash
+sy file ~
+sy file doctor --json
+sy file ipc state
+sy file mcp
+sy file waybar
+```
+
+### See also
+
+- [How to run sy file](../how-to/run-sy-file.md)
+- [How to troubleshoot sy file](../how-to/troubleshoot-sy-file.md)
+- [sy file doctor](sy-file-doctor.md)
+- [sy file MCP](sy-file-mcp.md)
+
+---
+
+## `sy plugin`
+
+Discover, install, and inspect previewer plugins for `sy file`.
+Source: `src/plugin/cli.rs`.
+
+### Synopsis
+
+```text
+sy plugin list [--json]
+sy plugin doctor [--json]
+sy plugin install <SOURCE> [--unsigned] [--rev <REF>]
+sy plugin uninstall <ID>
+sy plugin enable <ID>
+sy plugin disable <ID>
+sy plugin exec <ID> <METHOD> [--params <JSON>]
+sy plugin cat-manifest <ID>
+sy plugin validate <PATH>
+sy plugin reload
+```
+
+`<SOURCE>` for `install` is a directory that contains `plugin.toml`,
+or a git URL prefixed `git+`. Signature verification is on unless
+you pass `--unsigned` (local development only).
+
+### Exit codes
+
+- `0` — success.
+- `1` — generic failure.
+- `2` — usage or validation (bad args, bad glob, malformed TOML).
+- `6` — manifest invalid at install.
+- `7` — signature mismatch at install.
+- `8` — plugin unreachable or unhealthy (`doctor` uses this when any
+  check fails).
+
+### Examples
+
+```bash
+sy plugin list --json
+sy plugin doctor --json
+sy plugin install ./crates/sy-plugin-md
+sy plugin exec sy-plugin-md preview --params '{"path":"README.md"}'
+```
+
+### See also
+
+- [How to write a sy plugin](../how-to/write-a-sy-plugin.md)
+- [sy file doctor](sy-file-doctor.md)
+
+---
+
+## `sy mon`
+
+On-demand Wayland layer-shell health dashboard plus a 1 Hz
+aggregator. Bare `sy mon` toggles the popup (`Mod+M` / `Super+m`).
+Without `gui-iced`, bare `sy mon` falls back to `snapshot --json`.
+Source: `src/mon/cli.rs`.
+
+### Synopsis
+
+```text
+sy mon
+sy mon collect [--history-size N] [--tick-ms MS] [--bind PATH] [--history-path PATH]
+sy mon snapshot [--json]
+sy mon mcp
+sy mon open
+sy mon close
+sy mon doctor [--json]
+sy mon waybar
+```
+
+### Subcommands
+
+| Subcommand | Purpose |
+|------------|---------|
+| *(none)* / `open` / `close` | Toggle, open, or close the iced layer-shell popup. `close` is idempotent. |
+| `collect` | Long-lived aggregator (`sy-mon-collect.service`). Ring default 600 s, tick 1000 ms. Socket `$XDG_RUNTIME_DIR/sy/mon.sock`. |
+| `snapshot` | Latest `SystemSnapshot`. `--json` is the machine document. |
+| `mcp` | Stdio JSON-RPC: `system.mon.snapshot` and `system.mon.history`. |
+| `doctor` | Plumbing checks (`mon.collect.running`, per-plane sockets, history writable). |
+| `waybar` | One-shot `ok` / `degraded` / `down` tile. Missing aggregator → `down`, not an error exit. |
+
+### Exit codes (`snapshot`)
+
+- `0` — success.
+- `3` — aggregator unreachable after the connect-retry budget
+  (same code as doctor warn-only / power drift, so agents dispatch
+  identically).
+
+### Examples
+
+```bash
+sy mon
+sy mon snapshot --json
+sy mon doctor --json
+sy mon mcp
+sy mon waybar
+```
+
+### See also
+
+- [mon schema](../agents/mon-schema.md)
+- [mon remote scrape](../admin/mon-remote.md)
+
+---
+
 ## `sy syauth`
 
 Phone-as-key sudo applet. Wraps upstream `syauth`. Source:
@@ -1247,6 +1537,12 @@ Set the desktop wallpaper (`swaybg`).
 
 Fuzzel-based wifi picker via `nmcli`. No args.
 
+### `sy wwan`
+
+Mobile broadband (USB 4G modem). Subcommands:
+`enable | disable | up | down | status | modeswitch`.
+`status` accepts `--json`. `modeswitch` requires `--yes`.
+
 ### `sy cal`
 
 Interactive terminal calendar (`h/l` prev/next month, `j/k` year,
@@ -1266,6 +1562,7 @@ Open the rendered Telegram palette in Telegram Desktop to apply it.
 ## See also
 
 - [`sy apply`](#sy-apply) — the bootstrap entry point.
+- [`sy spark`](#sy-spark), [`sy file`](#sy-file), [`sy plugin`](#sy-plugin), [`sy mon`](#sy-mon)
 - [tutorial: getting started](../tutorials/getting-started.md)
 - [how-to: add a knowledge source](../how-to/add-a-knowledge-source.md)
 - [`CLAUDE.md`](../../CLAUDE.md) — the CLIG + agent-friendly CLI contract.

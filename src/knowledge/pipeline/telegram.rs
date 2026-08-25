@@ -31,7 +31,7 @@
 use std::path::Path;
 
 use super::{Pipeline, Record, RecordPayload};
-use crate::knowledge::{chunk, transcribe::Transcriber, transcribe::transcribe_cached};
+use crate::knowledge::{chunk, transcribe::transcribe_cached, transcribe::Transcriber};
 
 mod html;
 mod json;
@@ -61,7 +61,8 @@ fn window_records(msgs: Vec<Message>, key: &str) -> Vec<Record> {
     let mut idx = 0u32;
     for m in msgs {
         let tokens = m.text.split_whitespace().count();
-        if !cur.is_empty() && (cur_tokens + tokens > WINDOW_TOKENS || cur.len() >= WINDOW_MAX_MSGS) {
+        if !cur.is_empty() && (cur_tokens + tokens > WINDOW_TOKENS || cur.len() >= WINDOW_MAX_MSGS)
+        {
             if let Some(rec) = window_into_record(&cur, key, idx) {
                 out.push(rec);
                 idx += 1;

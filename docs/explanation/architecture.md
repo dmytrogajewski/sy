@@ -3,11 +3,13 @@
 # How the planes fit together
 
 This page is for readers who already know *what* `sy` does and want
-to understand *why* it is shaped the way it is. It does not teach
-you any new command. If you are looking for steps, start with
-[the getting-started tutorial](../tutorials/getting-started.md);
-if you are looking for flags and exit codes, start with
-[the CLI reference](../reference/cli.md).
+the mechanical why: one binary, sockets, NPU ownership, Spark’s two
+processes. If you do not have that picture yet, start with
+[What sy is](what-sy-is.md). For steps, use
+[the getting-started tutorial](../tutorials/getting-started.md).
+For flags, use [the CLI reference](../reference/cli.md).
+
+![One binary becomes many planes; JSON sockets sit between them](../img/sy-planes.svg)
 
 ## Why this exists
 
@@ -15,7 +17,8 @@ if you are looking for flags and exit codes, start with
 stock laptop behave like an agent-first workstation: one place
 that owns the NPU, one place that runs sandboxed agents, one place
 that indexes your files, one place that picks a power profile,
-one place that renders the desktop. The shape of `sy` follows from
+one place that opens a file manager, one place that serves models
+on a Spark, one place that renders the desktop. The shape of `sy` follows from
 two commitments the project refuses to walk back.
 
 The first commitment is **no snowflakes**. Every change to your
@@ -34,8 +37,9 @@ a single supervision surface.
 
 Both commitments push the project toward one binary and a small
 number of long-running services that all speak the same wire
-format. That is what `sy` is, and the rest of this page explains
-why that shape beats the obvious alternatives.
+format. The rest of this page explains why that shape beats the
+obvious alternatives. The product picture — a day using it, what
+is optional — stays on [What sy is](what-sy-is.md).
 
 ## How it works
 
@@ -43,12 +47,16 @@ why that shape beats the obvious alternatives.
 
 `sy` ships as a single Rust binary. Every capability — NPU
 inference, semantic search, agent sandboxing, power management,
-the layer-shell bar, phone-as-key sudo — is a subcommand of that
+the layer-shell bar, phone-as-key sudo, the file manager, the
+health popup, remote Spark serving — is a subcommand of that
 binary. A *plane* is the long-running service behind one of those
 capabilities. The `aiplane` is the NPU plane. The `knowledge`
 plane is the semantic-search plane. The `agt` plane is the agent
 runner. The `power` plane is the adaptive governor. The `stack`
-plane is the bar.
+plane is the bar. The `file` plane is the iced file manager. The
+`mon` plane is the health dashboard. Spark is the same binary
+running on a different machine: laptop CLI, unprivileged HTTPS
+agent, root Docker executor.
 
 A plane is not a separate program. It is a mode the single
 binary runs in when invoked with the right subcommand
@@ -114,6 +122,34 @@ times out work that overruns its deadline. The user-visible
 surface — `sy aiplane run --workload …` — hides all of that, but
 the reason it is fast on a warm path and graceful under pressure
 is that scheduler.
+
+![knowledge, the runner, and the CLI all embed through the aiplane](../img/sy-npu.svg)
+
+### The Spark plane is a remote appliance
+
+Spark is not a user unit on the laptop. It is the same `sy` binary
+in three roles:
+
+- On the laptop, `sy spark <host> …` talks to OpenSSH for install
+  and to pinned HTTPS for everything after. The laptop process
+  never holds Docker authority.
+- On the Spark, `sy-spark-agent.service` runs as unprivileged
+  `User=sy-spark`. It owns the HTTPS listener (default port 9843),
+  desired state, admission, and the public OpenAI / Anthropic
+  gateways.
+- On the Spark, `sy-spark-executor.service` runs as root. It owns
+  Docker. Its address families are Unix sockets only, on a private
+  network. The agent reaches it over that socket; nothing on the
+  LAN does.
+
+The split is load-bearing. The process that accepts TLS from your
+laptop must not have a Docker socket. A compromised listener can
+then refuse or lie about desired state; it cannot start or stop
+engines. Install still goes through OpenSSH as a single host
+argument — there is no remote-command escape hatch, and credentials
+never appear on `sy`'s argv.
+
+![Laptop HTTPS to an unprivileged agent; Docker stays on the executor](../img/sy-spark.svg)
 
 ### The agent runner is a sandbox
 
@@ -226,6 +262,14 @@ have visible downsides.
   recovery is (cache invalidation, model reload, lost warm
   state), the stricter contract is worth the lost flexibility.
 
+- **Spark's two-process split trades one unit for a closed
+  blast radius.** Putting Docker on the HTTPS agent would be
+  fewer moving parts. The cost is that a compromised
+  network-facing process would own every engine. The
+  unprivileged agent plus a root executor on a private network
+  is the extra unit; the win is that TLS exposure and container
+  authority do not share a process.
+
 - **Policy-driven sandboxing trades convenience for blast
   radius.** Adding a new tool means writing or extending a
   profile. A tool that is not in any profile cannot run. The
@@ -325,7 +369,14 @@ the reason the rejection still holds.
 
 ## See also
 
+- [What sy is](what-sy-is.md)
+- [Start here](../intro.md)
 - [Tutorial: bring up sy on a fresh Fedora 43 laptop](../tutorials/getting-started.md)
+- [Tutorial: browse files with sy file](../tutorials/browse-your-files.md)
+- [How to install the Spark agent](../how-to/install-spark.md)
+- [Why there are no snowflakes](no-snowflakes.md)
+- [Why the CLI is agent-first](agent-first-cli.md)
+- [Why embeddings run on the NPU, not the GPU](why-npu-not-gpu.md)
 - [Reference: the sy CLI](../reference/cli.md)
 - The internal design document this page is grounded in lives at
   `specs/research/architecture-refactor/SPEC.md` in the

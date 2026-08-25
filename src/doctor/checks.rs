@@ -214,7 +214,7 @@ impl QdrantVersionMin {
     /// Classify a (possibly absent) root body into a `CheckResult`. Pure
     /// over its input so the pass/fail/warn mapping is unit-testable.
     fn classify(&self, root_body: Option<String>) -> CheckResult {
-        use crate::knowledge::qdrant::{MIN_HYBRID_VERSION, meets_min_version, parse_version};
+        use crate::knowledge::qdrant::{meets_min_version, parse_version, MIN_HYBRID_VERSION};
         let (min_major, min_minor) = MIN_HYBRID_VERSION;
         match root_body.as_deref().and_then(parse_version) {
             Some(v) if meets_min_version(v, MIN_HYBRID_VERSION) => CheckResult {

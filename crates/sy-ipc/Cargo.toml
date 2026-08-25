@@ -14,7 +14,7 @@ description = "IPC v1 envelope + framing for the sy workspace (SPEC §4.2). Leng
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sy-core = { path = "../sy-core" }
+sy-core = { version = "=0.1.0", path = "../sy-core" }
 tokio.workspace = true
 tokio-util.workspace = true
 bytes.workspace = true

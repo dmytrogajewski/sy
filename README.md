@@ -8,12 +8,25 @@ agent-first workstation. One repo, one source of truth, zero
 snowflakes: `cargo build --release && ./target/release/sy apply` on a
 fresh machine reproduces the entire system.
 
+You get a desktop that matches this git tree, search over folders
+you register, a file manager on Super+E, a power governor you can
+ask *why*, and the same CLI for a coding agent. An NPU, a DGX
+Spark, and phone-as-key sudo are extras — bring-up does not need
+them. The story is
+[What sy is](docs/explanation/what-sy-is.md); the rest of the docs
+starts at [Start here](docs/intro.md).
+
+![sy sits on Fedora; you and an agent drive the same binary](docs/img/sy-stack.svg)
+
 ```
 sy apply              # render configs/* → ~/.config/, ~/.local/share/, /etc/* (via diff)
 sy aiplane daemon     # on-device NPU inference plane (ORT + VitisAI EP)
 sy agt …              # sandboxed agent runner
 sy knowledge daemon   # semantic search over local files (NPU-accelerated)
 sy power status       # adaptive power governor (ppd shim + bandit + MCP)
+sy file               # native iced file manager (Mod+E)
+sy mon                # layer-shell health dashboard (Super+m)
+sy spark HOST …       # remote DGX Spark model appliance
 sy auto               # auto-configure MCP servers across agents (Claude, …)
 sy stack bar          # layer-shell waybar replacement
 sy syauth doctor      # phone-as-key sudo (PAM + BlueZ + Android)
@@ -29,7 +42,10 @@ for the "no snowflakes" rule that drives the single-binary choice
 and [`AGENTS.md`](AGENTS.md) for the coding-agent persona. For
 one-line definitions of `sy`-specific terms (plane, aiplane,
 re-exec dance, snowflake, VitisAI EP, …) see the
-[glossary](docs/reference/glossary.md).
+[glossary](docs/reference/glossary.md). The browsable site (the
+story, tutorials, how-tos, reference) lives under `docs/` and is
+built by Docusaurus in `website/` — `cd website && npm start` to
+preview.
 
 ## Planes
 
@@ -51,6 +67,98 @@ what to load at start-up.
   scaffolds.
 - A `workloads::fake` impl returns deterministic vectors so daemon
   tests run on CI without `/dev/accel/accel0`.
+
+### `spark` — remote DGX Spark model appliance
+
+`sy spark <host>` manages a separately installed, authenticated Spark agent.
+Install it with `sy spark <host> install --dry-run --json`, then
+`--yes` plus the minisign signature and public key; see
+[How to install the Spark agent](docs/how-to/install-spark.md).
+Before an engine lifecycle is authorized, the agent requires one fresh
+executor-owned snapshot and checks aggregate cold-start memory, live
+`MemAvailable`, full-memory PSI, swap-in activity, disk reserve, recipe
+compatibility, and the single high-memory transition lease.
+
+```text
+sy spark dgx-spark install --dry-run --json
+sy spark dgx-spark install --yes --release-signature sy-aarch64.minisig --release-public-key sy-release.pub
+sy spark dgx-spark status --json
+sy spark dgx-spark serve ornith-1.5:9b --dry-run --json
+sy spark dgx-spark serve ornith-1.5:9b --recipe spark-fixture-http-echo-1.0.0 --name fixture
+sy spark dgx-spark ps --json
+sy spark dgx-spark logs fixture --limit 100
+sy spark dgx-spark client-config ornith --client codex
+sy spark dgx-spark client-config ornith --client claude-code
+sy spark dgx-spark download Qwen/Qwen3-Embedding-0.6B --revision 97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3 --alias qwen3-embedding:0.6b
+sy spark dgx-spark bench ornith-1.5:9b --dry-run --json
+sy spark dgx-spark tune ornith-1.5:9b --objective agent --json
+sy spark dgx-spark upgrade --dry-run --json
+sy spark dgx-spark rollback --dry-run --json
+sy spark dgx-spark cert rotate --dry-run --json
+sy spark dgx-spark serve qwen3-embedding:0.6b --recipe qwen3-embedding-0.6b-vllm-0.19.1 --name embeddings --allow-unverified
+sy spark dgx-spark stop fixture
+```
+
+`bench` and `tune` perform bounded functional compatibility evaluation only:
+exact identity, API capabilities, semantic evidence, resource safety, isolation,
+health, and durability. They do not measure speed or implicitly download, pull,
+convert, or launch unsupported engines. `tune` persists a deterministic winner
+from installed locally verified recipes; exact verified vLLM remains the visible
+fallback when no valid winner exists.
+
+The named fixture recipe is a signed, digest-pinned ARM64 HTTP engine used to
+verify the complete Docker lifecycle without loading model weights or using the
+GPU. Omitting `--recipe` uses an exact tuned winner when valid and otherwise
+reports and uses verified vLLM as the fallback. Engines
+run only on the internal managed bridge; `ps` exposes desired versus observed
+state without leaking its address, logs are bounded and redacted, and repeated
+`stop` is successful.
+
+After the engine passes both its health check and an exact model-identity
+completion probe, the agent publishes OpenAI-compatible routes at
+`https://<spark>:9843/openai/<instance>/v1` and native Anthropic Messages routes
+below `/anthropic/<instance>/v1`. The allowlist exposes authenticated models,
+completions, protocol-native chat completions, Responses, Messages, and token
+count with bounded SSE and client-side tool continuation. The read-only
+`client-config` output supports Codex's `wire_api = "responses"` provider and a
+Claude Code 2.1.241 projection; both name the protected token and CA environment
+variables without reading, printing, or persisting the token. Engine-native
+health, metrics, tokenizer, debug, admin, and addresses remain private; the
+control plane exposes only its authenticated, bounded metrics document. Warming or
+recovering generations return protocol-native `503` errors with `Retry-After`
+and never inherit a stale route.
+
+Capabilities are taken only from the selected signed recipe. Ornith accepts
+bounded inline JPEG, PNG, or WebP images through OpenAI Responses and Anthropic
+Messages; the adapters validate the declared media type, file magic, decoded
+bytes, image count, and dimensions before contacting vLLM. Remote URLs, local
+paths, traversal, unsupported media, and images sent to text-only instances are
+rejected. `Qwen/Qwen3-Embedding-0.6B` has its own embedding-only recipe and
+serves strict float vectors at
+`POST /openai/<instance>/v1/embeddings`; it does not expose generation routes.
+Embedding input order, 1024 dimensions, unit normalization, usage, and public
+model identity are checked by the gateway rather than trusted from the engine.
+
+The admission report exposes the declarative 8 GiB system reserve, 8 GiB
+emergency floor, and 100 GiB disk reserve. Missing or stale telemetry fails
+closed. The root executor independently samples pressure and durably suppresses
+restart before an emergency victim can be stopped; it never selects unlabeled
+work.
+
+Spark application releases are signed, content-addressed, and installed side by
+side. `upgrade` validates active recipes, the N/N-1 database schema, a verified
+backup, and the protected host fingerprint before switching only the control
+plane; healthy engine containers remain running. Failed semantic health requests
+automatic rollback. `rollback` re-verifies both artifacts and swaps the exact
+`current`/`previous` links. `cert rotate` is SSH-only, preserves overlap material,
+hot-reloads a leaf under the pinned CA, and updates the workstation pin only when
+`--ca` explicitly rotates the CA. Every maintenance mutation requires exactly
+one of `--dry-run` or `--yes`.
+
+These commands never update the DGX OS, kernel, NVIDIA driver, CUDA, firmware,
+Docker, container toolkit, system Python, firewall, swap, clocks, or power
+configuration. Docker restart and host reboot are separate optional operator
+actions and are reported as `not_run` by default.
 
 ### `agt` — sandboxed agent runner
 
@@ -164,7 +272,7 @@ Stack:
 | Launcher         | fuzzel          | `dnf`                           |
 | Terminal         | foot            | `dnf`                           |
 | Notifications    | mako            | `dnf`                           |
-| File manager     | `sy file` (iced) | productivised under `configs/sy/file*.toml`; opens via `Mod+E` / `sy file --ipc` |
+| File manager     | `sy file` (iced) | configs under `configs/sy/file*.toml`; opens via `Mod+E` / `sy file` |
 | Lock             | swaylock        | `dnf`                           |
 | Idle             | swayidle        | `dnf` (DPMS via `niri msg`)     |
 | Night light      | wlsunset        | `dnf`                           |

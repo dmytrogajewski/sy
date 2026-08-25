@@ -1,0 +1,32 @@
+//! DGX Spark workstation client and feature-gated appliance bootstrap.
+
+pub mod cli;
+pub mod client;
+pub mod install;
+#[cfg(feature = "spark-agent")]
+pub mod reconcile;
+pub mod wire;
+
+#[cfg(feature = "spark-agent")]
+pub mod agent;
+#[cfg(feature = "spark-agent")]
+pub mod bench;
+#[cfg(feature = "spark-agent")]
+pub mod executor;
+#[cfg(feature = "spark-agent")]
+pub mod gateway;
+#[cfg(feature = "spark-agent")]
+pub mod model;
+#[cfg(feature = "spark-agent")]
+pub mod recipe;
+pub mod resources;
+#[cfg(feature = "spark-agent")]
+pub mod state;
+#[cfg(feature = "spark-agent")]
+pub mod upstream;
+
+pub const EXIT_INTERNAL: i32 = 1;
+pub const EXIT_USAGE: i32 = 2;
+pub const EXIT_REJECTED: i32 = 3;
+pub const EXIT_UNREACHABLE: i32 = 4;
+pub const EXIT_OPERATION_FAILED: i32 = 5;

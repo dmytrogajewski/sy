@@ -54,6 +54,9 @@
   "ignores": [
     "target/**",
     "node_modules/**",
+    "website/node_modules/**",
+    "website/build/**",
+    "website/.docusaurus/**",
     "specs/runs/**",
     ".vale/**",
     ".github/ISSUE_TEMPLATE/**"

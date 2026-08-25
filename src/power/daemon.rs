@@ -926,7 +926,9 @@ fn apply_lever(
             reasons.push(failure_token(lever, &e));
         }
         LatchOutcome::Skipped { backoff_secs } => {
-            reasons.push(format!("{lever}: latched-failed (retry in {backoff_secs}s)"));
+            reasons.push(format!(
+                "{lever}: latched-failed (retry in {backoff_secs}s)"
+            ));
         }
     }
 }
@@ -1561,8 +1563,7 @@ async fn run_async() -> anyhow::Result<()> {
                         arms: accept_arms.clone(),
                     };
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection_full(stream, state).await
-                        {
+                        if let Err(e) = handle_connection_full(stream, state).await {
                             tracing::debug!(
                                 target: "sy::power::daemon",
                                 error = %e,
@@ -3574,8 +3575,7 @@ mod tests {
             target_days: 0,
         });
 
-        let (server, mut client) =
-            tokio::net::UnixStream::pair().expect("in-process socket pair");
+        let (server, mut client) = tokio::net::UnixStream::pair().expect("in-process socket pair");
         let state = ConnState {
             latest,
             pin: new_pin_slot(),

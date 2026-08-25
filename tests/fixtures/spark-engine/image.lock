@@ -1,0 +1,7 @@
+repository = "hashicorp/http-echo"
+tag_observed = "1.0.0"
+arm64_digest = "sha256:3f5c9a5a28daf63a712bbf45f2fa0741be9cd34339ba598a5c13af02959f108d"
+entrypoint = ["/http-echo"]
+argv = ["-listen=:8000", "-text=sy-spark-fixture-ok"]
+run_as_uid = 65532
+gpu_required = false

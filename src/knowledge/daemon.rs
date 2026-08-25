@@ -27,9 +27,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
+        mpsc, Arc,
     },
     thread,
     time::{Duration, Instant},
@@ -40,8 +39,8 @@ use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 
 use super::{
-    QDRANT_PORT, calibrate, cli, embed, ipc, manifest, qdrant, query, repair, runctx::RunCtx,
-    sources, sparse, state, status,
+    calibrate, cli, embed, ipc, manifest, qdrant, query, repair, runctx::RunCtx, sources, sparse,
+    state, status, QDRANT_PORT,
 };
 use sources::SourceMode;
 
@@ -922,11 +921,9 @@ fn init_aiplane_supervisor() -> Result<()> {
     // snapshot fresh and recovers from worker crashes without
     // user intervention.
     let supv_for_poll = supv.clone();
-    thread::spawn(move || {
-        loop {
-            supv_for_poll.poll_once();
-            thread::sleep(Duration::from_secs(1));
-        }
+    thread::spawn(move || loop {
+        supv_for_poll.poll_once();
+        thread::sleep(Duration::from_secs(1));
     });
 
     supervisor::set_current(supv);
@@ -1385,14 +1382,12 @@ fn install_signal_handlers(flag: Arc<AtomicBool>) {
         libc::signal(libc::SIGTERM, handler as *const () as usize);
         libc::signal(libc::SIGINT, handler as *const () as usize);
     }
-    thread::spawn(move || {
-        loop {
-            if SIGNAL_RECEIVED.load(Ordering::SeqCst) {
-                flag.store(true, Ordering::SeqCst);
-                return;
-            }
-            thread::sleep(Duration::from_millis(100));
+    thread::spawn(move || loop {
+        if SIGNAL_RECEIVED.load(Ordering::SeqCst) {
+            flag.store(true, Ordering::SeqCst);
+            return;
         }
+        thread::sleep(Duration::from_millis(100));
     });
 }
 

@@ -272,6 +272,9 @@ fn run_scaffold(path: Option<PathBuf>) -> Result<()> {
 #[cfg(feature = "gui-iced")]
 fn run_gui_if_tty(path: Option<PathBuf>) -> Result<()> {
     use std::io::IsTerminal as _;
+    if cfg!(test) {
+        return Ok(());
+    }
     if !std::io::stdout().is_terminal() {
         return Ok(());
     }
@@ -883,10 +886,8 @@ mod tests {
 
     #[test]
     fn dispatch_routes_bare_form_to_scaffold() {
-        // Smoke-level: the dispatcher accepts the bare shape (no
-        // subcommand) without panicking. Step 14 will replace this
-        // with a state-model assertion once `run_scaffold` grows
-        // real behaviour.
+        // A PTY-backed test still runs on a harness worker thread;
+        // dispatch must not initialize winit away from process main.
         dispatch(None, None).expect("bare dispatch must succeed");
     }
 

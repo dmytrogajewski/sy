@@ -9,7 +9,8 @@ alphabetised by the headword; case and punctuation in the headword
 are ignored for sort order.
 
 Use this page when a `sy` doc, log line, or `--help` blurb uses a
-word you have not seen before. For the user-facing mental model of
+word you have not seen before. For what `sy` is and what you can
+do with it, see [`What sy is`](../explanation/what-sy-is.md). For
 how the named things fit together, see
 [`How the planes fit together`](../explanation/architecture.md). For
 the wire-level contract, see
@@ -40,6 +41,20 @@ for half the bytes so the `multilingual-e5-base` graph fits under
 VitisAI EP's 2 GiB ModelProto cap. Referenced from
 [`README.md` — NPU one-time setup](../../README.md#npu-one-time-setup).
 
+### doctor
+
+Cross-plane health probes: `sy doctor` walks a linear check list
+and exits `0` (all pass), `1` (any fail), `2` (usage), or `3`
+(warn-only drift). JSON document is `sy.doctor/v1`. See
+[how to run sy doctor](../how-to/run-doctor.md).
+
+### file (plane)
+
+The in-tree iced file manager (`sy file`): window, plugin
+previewers, MCP mirror, and its own doctor schema.
+Opens from `Mod+E` on niri. See
+[browse files with sy file](../tutorials/browse-your-files.md).
+
 ### IPC v1
 
 The canonical JSON-over-Unix-socket envelope every plane speaks
@@ -59,18 +74,31 @@ its MCP server. See
 
 [Model Context Protocol](https://modelcontextprotocol.io) — the
 stdio JSON-RPC dialect agents (Claude, Cursor, Codex, Gemini) speak
-to discover and call tools; `sy` exposes `sy knowledge mcp` and
-`sy power mcp` servers and `sy auto` plumbs them into each agent's
-config.
+to discover and call tools. `sy` exposes `sy knowledge mcp`,
+`sy power mcp`, `sy mon mcp`, and `sy file mcp`. `sy auto` writes
+those servers into each agent's config.
+
+### mon
+
+On-demand Wayland layer-shell health dashboard (`sy mon`), backed
+by a 1 Hz aggregator. `Super+m` toggles the popup;
+`sy mon snapshot --json` is the machine document. See
+[`docs/agents/mon-schema.md`](../agents/mon-schema.md).
 
 ### plane
 
 A long-running service hosted by the single `sy` binary, identified
 by its top-level subcommand (`sy aiplane`, `sy knowledge`,
-`sy power`, `sy agt`, `sy stack`); all planes share one CLIG +
-JSON-over-stdio surface so agents drive any plane the same way a
-human does. See
+`sy power`, `sy agt`, `sy stack`, `sy file`, `sy mon`, `sy spark`).
+All planes share one CLI + JSON surface so agents drive any plane
+the same way a human does. See
 [`How the planes fit together` — One binary, many planes](../explanation/architecture.md#one-binary-many-planes).
+
+### plugin
+
+A small program `sy file` starts to preview a MIME type. Installed
+with `sy plugin install`, checked with `sy plugin doctor`. See
+[how to write a sy plugin](../how-to/write-a-sy-plugin.md).
 
 ### power (plane)
 
@@ -100,9 +128,9 @@ the binary would set `AT_SECURE` and the dynamic linker would drop
 
 The desktop look-and-feel produced by rendering
 [`configs/`](../../configs/) (niri, waybar, mako, fuzzel, foot,
-swaylock, yazi, …) through minijinja templates with the active
-palette from `themes/<name>.toml`; running `sy apply` is what
-materialises the rice into `~/.config/`. See
+swaylock, …) through minijinja templates with the active
+palette from `themes/<name>.toml`. Running `sy apply` is what
+writes that look into `~/.config/`. See
 [`README.md` — Rice](../../README.md#rice--niri--waybar--).
 
 ### session pool
@@ -122,6 +150,17 @@ bespoke env var. Snowflakes are prohibited; every environment
 change ships under [`configs/`](../../configs/) or inside the `sy`
 binary so `cargo build --release && sy apply` on a fresh machine
 reproduces the system. See [`CLAUDE.md` — Core rule: no snowflakes](../../CLAUDE.md#core-rule-no-snowflakes).
+
+### spark
+
+Remote DGX Spark model-serving plane: `sy spark <host>` talks to an
+authenticated agent that owns HTTPS and desired state; a root
+executor owns Docker. Install with
+[How to install the Spark agent](../how-to/install-spark.md).
+Engines run on an internal bridge; the
+gateway publishes OpenAI- and Anthropic-compatible routes after
+health and identity probes. See
+[Spark reference](spark.md).
 
 ### stack-bar
 

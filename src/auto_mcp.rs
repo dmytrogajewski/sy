@@ -592,9 +592,9 @@ fn write_hermes_entry(path: &Path, name: &str, entry: &McpEntry) -> Result<()> {
     let servers = root_map
         .entry(Value::String("mcp_servers".into()))
         .or_insert_with(|| Value::Mapping(Mapping::new()));
-    let servers = servers
-        .as_mapping_mut()
-        .ok_or_else(|| anyhow::anyhow!("{}: `mcp_servers` is not a YAML mapping", path.display()))?;
+    let servers = servers.as_mapping_mut().ok_or_else(|| {
+        anyhow::anyhow!("{}: `mcp_servers` is not a YAML mapping", path.display())
+    })?;
 
     // Mirror what `hermes mcp add` writes: command + args + enabled. We do
     // not touch per-tool selection — `enabled: true` enables the server and
@@ -747,7 +747,10 @@ mod tests {
         write_hermes_entry(&cfg, SERVER_NAME, &entry()).expect("write");
 
         let mode = fs::metadata(&cfg).expect("stat").permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "atomic rewrite must not widen a private config");
+        assert_eq!(
+            mode, 0o600,
+            "atomic rewrite must not widen a private config"
+        );
     }
 
     #[test]

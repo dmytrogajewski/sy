@@ -1,0 +1,42 @@
+[advisories]
+yanked = "warn"
+ignore = [
+  { id = "RUSTSEC-2026-0190", reason = "temporary lock exception: patched anyhow >=1.0.103 was unavailable in the offline release environment; expires 2026-09-15" },
+  { id = "RUSTSEC-2025-0141", reason = "transitive bincode is confined to the inactive power-model dependency graph in the Spark service; replace through burn upstream; expires 2026-09-15" },
+  { id = "RUSTSEC-2026-0204", reason = "temporary lock exception: patched crossbeam-epoch >=0.9.20 was unavailable in the offline release environment; expires 2026-09-15" },
+  { id = "RUSTSEC-2026-0258", reason = "temporary lock exception: patched h2 >=0.4.16 was unavailable in the offline release environment; HTTP request bounds remain enforced; expires 2026-09-15" },
+  { id = "RUSTSEC-2026-0186", reason = "temporary lock exception: patched memmap2 >=0.9.11 was unavailable in the offline release environment; affected range APIs are not used by Spark; expires 2026-09-15" },
+  { id = "RUSTSEC-2024-0436", reason = "transitive paste is confined to tokenizers and inactive power dependencies; replace through upstream releases; expires 2026-09-15" },
+  { id = "RUSTSEC-2026-0194", reason = "quick-xml is used only by the local file bookmark command, not the Spark agent HTTP surface; upgrade to >=0.41.0; expires 2026-09-15" },
+  { id = "RUSTSEC-2026-0195", reason = "Spark does not instantiate quick-xml NsReader; upgrade to >=0.41.0; expires 2026-09-15" },
+  { id = "RUSTSEC-2025-0068", reason = "serde_yml is confined to local auto/knowledge commands and is unreachable from the Spark service; migrate to serde_norway; expires 2026-09-15" },
+  { id = "RUSTSEC-2026-0217", reason = "Spark serving never loads NNEF through tract; upgrade the tract family to >=0.22.2; expires 2026-09-15" },
+]
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "NCSA",
+  "Unicode-3.0",
+  "Zlib",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

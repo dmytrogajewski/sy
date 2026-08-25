@@ -12,9 +12,11 @@ patch merged.
 
 `sy` is an **Agentic OS layer for Fedora** — a single Rust binary
 plus declarative configs that turn a stock Fedora 43 laptop into an
-agent-first workstation. See [`README.md`](README.md) for the
-project overview and [`AGENTS.md`](AGENTS.md) for the coding-agent
-persona that drives every change (tests-first, zero dead code, no
+agent-first workstation. The product story is
+[`docs/explanation/what-sy-is.md`](docs/explanation/what-sy-is.md);
+the docs map is [`docs/intro.md`](docs/intro.md).
+See [`README.md`](README.md) for the planes and [`AGENTS.md`](AGENTS.md)
+for the coding-agent persona (tests-first, zero dead code, no
 snowflakes).
 
 ## Code of conduct
@@ -168,6 +170,13 @@ Documentation is a deliverable, not an afterthought.
   clean under `RUSTDOCFLAGS="-D warnings"`.
 - Long-form design lives under [`specs/`](specs/) (journeys, bugs,
   roadmaps, research SPECs). User-facing prose lives under `docs/`.
+  The browsable site is built from that tree by Docusaurus in
+  [`website/`](website/); preview with `cd website && npm start`,
+  or `make docs-site` for a production build. GitHub Pages deploys
+  from `.github/workflows/docs-site.yml` on push to `main`. The
+  workflow cannot flip repository Settings: set **Pages → Source**
+  to **GitHub Actions** once, then the next `main` push publishes
+  `https://<owner>.github.io/sy/`.
 - A docs-lint pipeline (markdownlint, Vale, cspell, lychee) is on
   the roadmap; once it lands, `make docs-lint` will be a gate
   before pushing. Until then, please proofread.

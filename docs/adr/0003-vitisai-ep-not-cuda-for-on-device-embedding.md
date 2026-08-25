@@ -2,6 +2,9 @@
 
 - Status: accepted
 
+Who this is for: readers asking why local search embeddings do not
+use the GPU.
+
 > Template: [MADR 4.0](https://adr.github.io/madr/).
 > Sources: `README.md` §aiplane + §NPU one-time setup + §Knowledge
 > hardware tier; `AGENTS.md` §NPU-specific norms.

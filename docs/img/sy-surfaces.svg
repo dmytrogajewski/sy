@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="240" viewBox="0 0 840 240" role="img" aria-labelledby="t d">
+  <title id="t">The same plane answers you and the agent</title>
+  <desc id="d">A human runs sy knowledge search in a terminal. An agent calls knowledge_search over MCP. Both hit the knowledge plane.</desc>
+  <rect width="840" height="240" fill="#101010"/>
+  <g font-family="ui-monospace, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace" font-size="14">
+    <rect x="40" y="28" width="320" height="80" fill="#0c0c0c" stroke="#2a2a2a"/>
+    <text x="200" y="60" text-anchor="middle" fill="#e8e4d4">you</text>
+    <text x="200" y="84" text-anchor="middle" fill="#9a9584" font-size="12">sy knowledge search</text>
+    <rect x="480" y="28" width="320" height="80" fill="#0c0c0c" stroke="#2a2a2a"/>
+    <text x="640" y="60" text-anchor="middle" fill="#e8e4d4">agent</text>
+    <text x="640" y="84" text-anchor="middle" fill="#9a9584" font-size="12">knowledge_search MCP</text>
+    <path d="M200 108 L200 140 L420 140" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <path d="M640 108 L640 140 L420 140" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <path d="M420 140 L420 160" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <polygon points="420,166 415,156 425,156" fill="#89b482"/>
+    <rect x="170" y="168" width="500" height="48" fill="#0c0c0c" stroke="#89b482" stroke-width="1.5"/>
+    <text x="420" y="198" text-anchor="middle" fill="#e8e4d4">knowledge plane - one answer</text>
+  </g>
+</svg>

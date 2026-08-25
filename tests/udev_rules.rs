@@ -29,9 +29,9 @@ fn drm_vendor_match_uses_parent_walking_attrs() {
     // the parent-walking `ATTRS{vendor}` form. A bare `ATTR{vendor}`
     // (same-device) can never match on a drm event and is the exact
     // BUG-20260712-0111 regression.
-    let uses_attr_singular = rule_lines
-        .iter()
-        .any(|l| l.contains(&format!("ATTR{{{AMD_VENDOR}")) && !l.contains(&format!("ATTRS{{{AMD_VENDOR}")));
+    let uses_attr_singular = rule_lines.iter().any(|l| {
+        l.contains(&format!("ATTR{{{AMD_VENDOR}")) && !l.contains(&format!("ATTRS{{{AMD_VENDOR}"))
+    });
     assert!(
         !uses_attr_singular,
         "99-sy-power.rules matches the PCI `vendor` attribute with the \

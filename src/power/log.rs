@@ -958,7 +958,10 @@ mod tests {
             .iter()
             .filter(|l| l.contains("\"marker\":\"rotated:size_cap\""))
             .count();
-        assert_eq!(marker_count, 1, "marker must be written exactly once per day");
+        assert_eq!(
+            marker_count, 1,
+            "marker must be written exactly once per day"
+        );
 
         // The cap WARN fires exactly once for the day despite two rolls.
         logs_assert(|lines: &[&str]| {

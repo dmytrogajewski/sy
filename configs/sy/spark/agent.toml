@@ -1,0 +1,29 @@
+schema = "sy.spark.agent/v1"
+listen = "10.1.30.143:9843"
+allowed_client_cidrs = ["10.1.30.0/24"]
+plain_http_loopback_only = true
+executor_socket = "/run/sy-spark/executor.sock"
+
+[models]
+cache_root = "/var/lib/sy-spark/huggingface"
+endpoint = "https://huggingface.co"
+fallback_executable = "/opt/sy-spark/hf-http-fallback/current/venv/bin/huggingface-cli"
+no_progress_seconds = 300
+
+[operations]
+max_parallel_downloads = 1
+max_parallel_starts = 1
+max_parallel_tunes = 1
+
+[resources]
+system_reserve_gib = 8
+emergency_available_floor_gib = 8
+disk_reserve_gib = 100
+startup_guard_interval_ms = 500
+steady_guard_interval_ms = 2000
+emergency_consecutive_samples = 3
+memory_full_psi_avg10_percent = 2.0
+
+[retention]
+operation_days = 90
+database_backups = 7

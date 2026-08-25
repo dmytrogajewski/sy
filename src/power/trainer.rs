@@ -1875,7 +1875,11 @@ mod tests {
         let out_path = tmp.path().join("model.onnx");
         let report = retrain_gru(tmp.path(), &out_path).expect("directory corpus trains");
         assert_eq!(report.rows_used, SYNTH_ROWS);
-        assert!(out_path.exists(), "model should land at {}", out_path.display());
+        assert!(
+            out_path.exists(),
+            "model should land at {}",
+            out_path.display()
+        );
     }
 
     /// BUG-20260712-1545 part 1: overflow segments of one day are named

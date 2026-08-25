@@ -1,0 +1,41 @@
+#include <tunables/global>
+
+profile sy-spark-executor /opt/sy-spark/current/sy flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  /opt/sy-spark/releases/*/sy mr,
+  /etc/sy/spark-executor.toml r,
+  /etc/sy/spark-agent.toml r,
+  /etc/sy/spark-recipes.d/ r,
+  /etc/sy/spark-recipes.d/** r,
+  /etc/hostname r,
+  /etc/machine-id r,
+  /run/sy-spark/ rw,
+  /run/sy-spark/executor.sock rwk,
+  /run/systemd/notify w,
+  /var/run/docker.sock rw,
+  /run/docker.sock rw,
+  /var/lib/sy-spark/executor/ rw,
+  /var/lib/sy-spark/executor/** rwk,
+  /var/lib/sy-spark/compile-cache/ rw,
+  /var/lib/sy-spark/compile-cache/** rwk,
+  /proc/*/cgroup r,
+  /proc/*/stat r,
+  /proc/meminfo r,
+  /proc/vmstat r,
+  /proc/pressure/memory r,
+  /sys/fs/cgroup/**/cpu.max r,
+  /sys/fs/cgroup/system.slice/docker-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].scope/memory.current r,
+  /sys/fs/cgroup/system.slice/docker-*.scope/cgroup.kill w,
+
+  network unix stream,
+  network unix dgram,
+
+  deny network inet,
+  deny network inet6,
+  deny /home/** rwklx,
+  deny /var/lib/sy-spark/tls/** rwklx,
+  deny /var/lib/sy-spark/ca/** rwklx,
+  deny /etc/sy/spark-bootstrap-admin.credential rwklx,
+}

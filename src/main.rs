@@ -36,19 +36,14 @@ mod mon_exporter;
 mod net;
 mod notif;
 mod npu;
-// Roadmap Step 8 lifts the `#[cfg(test)]` gate: `Cmd::Plugin` below
-// is the first non-test bin consumer of the plugin runtime. The
-// dispatcher in `plugin::cli::dispatch` reaches every other plugin
-// submodule (`manifest`, `registry`, `proc`, `sandbox`, `host_fns`,
-// `capability`, `rpc`, `transport`) at runtime, so the workspace's
-// `clippy::dead_code = "deny"` gate stays clean without a per-module
-// per-module dead-code suppression.
+// `Cmd::Plugin` reaches the full runtime through `plugin::cli::dispatch`.
 mod plugin;
 mod popup;
 mod power;
 mod pwr;
 mod silent;
 mod sound;
+mod spark;
 mod stack;
 mod supervision;
 mod syauth;
@@ -375,6 +370,10 @@ enum Cmd {
         #[command(subcommand)]
         cmd: plugin::cli::PluginCmd,
     },
+    Spark {
+        #[command(flatten)]
+        cli: spark::cli::SparkCli,
+    },
     /// `systemctl --user` / `journalctl --user` wrapper per SPEC §4.7
     /// (arch-supervision Step 3). Subcommands: start|stop|restart|
     /// status|enable|disable|logs. See `sy service --help`.
@@ -389,7 +388,6 @@ enum Cmd {
         cmd: supervision::service::ServiceCmd,
     },
 }
-
 #[derive(Deserialize, Default)]
 struct SyFile {
     theme: Option<String>,
@@ -430,6 +428,9 @@ fn main() -> Result<()> {
             eprintln!("error: {}", pe.msg);
             std::process::exit(pe.code);
         }
+        if let Some(se) = e.downcast_ref::<spark::cli::SparkError>() {
+            se.exit();
+        }
         if let Some(me) = e.downcast_ref::<mon::MonError>() {
             eprintln!("error: {}", me.msg);
             std::process::exit(me.code);
@@ -441,10 +442,8 @@ fn main() -> Result<()> {
 fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    // Commands that render templates need the repo root + sy.toml; all
-    // others (agents, popup, wifi, net, install) run without repo context
-    // so they work even when cwd is outside the sy tree (e.g. when waybar
-    // is spawned at startup with cwd=~).
+    // Rendering commands need the repo; planes including Spark do not, so
+    // startup and remote-appliance commands work from any directory.
     let resolve_repo = || -> Result<(PathBuf, SyFile, PathBuf)> {
         let root = match &cli.root {
             Some(p) => p.clone(),
@@ -563,6 +562,7 @@ fn run() -> Result<()> {
         Cmd::Service { cmd } => supervision::service::dispatch(cmd),
         Cmd::Mon { cmd } => mon::cli::dispatch(cmd.unwrap_or(mon::cli::default_subcommand())),
         Cmd::Plugin { cmd } => plugin::cli::dispatch(cmd),
+        Cmd::Spark { cli } => spark::cli::dispatch(cli),
     }
 }
 

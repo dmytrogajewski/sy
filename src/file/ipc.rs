@@ -752,7 +752,7 @@ async fn handle_search(this: &FileHandler, req: Request) -> Response {
                     req.request_id,
                     ErrorCode::Internal,
                     format!("knowledge query: {e}"),
-                )
+                );
             }
         };
         knowledge::merge(outcome.hits, filename_hits)

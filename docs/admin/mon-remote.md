@@ -1,14 +1,16 @@
 # Reading `sy mon` from a remote host
 
-`sy` is single-host by design — the `sy-mon-collect` aggregator binds
-a Unix-domain socket under `$XDG_RUNTIME_DIR/sy/mon.sock` and never
-listens on TCP. Per [SPEC §3 anti-goals][spec-antigoals], a network
-exposition surface would drag in trust-boundary work, secret
-management, and firewall rules — explicit snowflake hazard.
+Who this is for: someone who already runs `sy mon` locally and
+needs a scrape from another machine. This is not a supported
+product feature.
 
-If you genuinely want to scrape `sy mon` from another machine, bridge
-the UDS to TCP yourself with `socat` so the trust boundary stays
-outside sy.
+`sy` is single-host by design. The aggregator binds a Unix socket
+under `$XDG_RUNTIME_DIR/sy/mon.sock` and never listens on TCP. A
+network listener would mean auth, secrets, and firewall rules —
+snowflake territory.
+
+If you still want a remote scrape, bridge the socket yourself with
+`socat` so the trust boundary stays outside `sy`.
 
 ## Recipe — `socat` UDS-to-TCP bridge
 

@@ -102,8 +102,7 @@ fn status_json_round_trips_against_fake_daemon() {
     // stray NPU-probe log document once leaked here (BUG-20260712-*),
     // breaking `sy power status --json | jq`. Stream the stdout through
     // a serde `Deserializer` and assert a single value.
-    let mut stream =
-        serde_json::Deserializer::from_str(&stdout).into_iter::<serde_json::Value>();
+    let mut stream = serde_json::Deserializer::from_str(&stdout).into_iter::<serde_json::Value>();
     let first = stream
         .next()
         .expect("stdout must contain a JSON document")

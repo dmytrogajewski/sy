@@ -31,6 +31,21 @@ pub struct ResponseCodec {
     inner: LdJsonCodec,
 }
 
+impl RequestCodec {
+    /// Build a decoder that rejects a length prefix above `max` before allocating.
+    pub fn with_max_frame_length(max: usize) -> Self {
+        Self {
+            inner: LdJsonCodec(
+                LengthDelimitedCodec::builder()
+                    .length_field_length(4)
+                    .big_endian()
+                    .max_frame_length(max)
+                    .new_codec(),
+            ),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct LdJsonCodec(LengthDelimitedCodec);
 
@@ -205,6 +220,21 @@ mod tests {
             payload_len,
             buf.len() - 4,
             "header must encode payload length"
+        );
+    }
+
+    #[test]
+    fn configured_request_limit_rejects_oversized_frame() {
+        const LIMIT: usize = 64;
+        let mut codec = RequestCodec::with_max_frame_length(LIMIT);
+        let mut frame = BytesMut::from(&[0, 0, 0, 65][..]);
+        frame.resize(4 + 65, b'x');
+        assert_eq!(
+            codec
+                .decode(&mut frame)
+                .expect_err("oversized frame")
+                .kind(),
+            io::ErrorKind::InvalidData
         );
     }
 }

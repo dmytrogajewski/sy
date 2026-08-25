@@ -18,15 +18,16 @@ The Optional entries in llms.txt that are included here:
 - docs/adr/0001-use-adrs.md
 - docs/adr/0002-virtual-workspace-with-sy-core-vocabulary.md
 - docs/adr/0003-vitisai-ep-not-cuda-for-on-device-embedding.md
+- docs/adr/0004-publish-policy.md
 - specs/research/architecture-refactor/SPEC.md
 
-There are no Optional entries from llms.txt that were skipped: the SPEC
-is large (~52 KiB) but well under the proposal's recommended budget when
-totalled with the canonical docs. -->
-
+There are no Optional entries from llms.txt that were skipped.
+-->
 # README.md
 
 ## sy
+
+<img src="assets/sy.png" alt="sy mascot — a tiny kitten" align="right" width="220" />
 
 An **Agentic OS layer for Fedora** — a single Rust binary plus
 declarative configs that turn a stock Fedora 43 laptop into an
@@ -34,12 +35,25 @@ agent-first workstation. One repo, one source of truth, zero
 snowflakes: `cargo build --release && ./target/release/sy apply` on a
 fresh machine reproduces the entire system.
 
+You get a desktop that matches this git tree, search over folders
+you register, a file manager on Super+E, a power governor you can
+ask *why*, and the same CLI for a coding agent. An NPU, a DGX
+Spark, and phone-as-key sudo are extras — bring-up does not need
+them. The story is
+[What sy is](docs/explanation/what-sy-is.md); the rest of the docs
+starts at [Start here](docs/intro.md).
+
+![sy sits on Fedora; you and an agent drive the same binary](docs/img/sy-stack.svg)
+
 ```
 sy apply              # render configs/* → ~/.config/, ~/.local/share/, /etc/* (via diff)
 sy aiplane daemon     # on-device NPU inference plane (ORT + VitisAI EP)
 sy agt …              # sandboxed agent runner
 sy knowledge daemon   # semantic search over local files (NPU-accelerated)
 sy power status       # adaptive power governor (ppd shim + bandit + MCP)
+sy file               # native iced file manager (Mod+E)
+sy mon                # layer-shell health dashboard (Super+m)
+sy spark HOST …       # remote DGX Spark model appliance
 sy auto               # auto-configure MCP servers across agents (Claude, …)
 sy stack bar          # layer-shell waybar replacement
 sy syauth doctor      # phone-as-key sudo (PAM + BlueZ + Android)
@@ -55,7 +69,10 @@ for the "no snowflakes" rule that drives the single-binary choice
 and [`AGENTS.md`](AGENTS.md) for the coding-agent persona. For
 one-line definitions of `sy`-specific terms (plane, aiplane,
 re-exec dance, snowflake, VitisAI EP, …) see the
-[glossary](docs/reference/glossary.md).
+[glossary](docs/reference/glossary.md). The browsable site (the
+story, tutorials, how-tos, reference) lives under `docs/` and is
+built by Docusaurus in `website/` — `cd website && npm start` to
+preview.
 
 ### Planes
 
@@ -78,6 +95,69 @@ what to load at start-up.
 - A `workloads::fake` impl returns deterministic vectors so daemon
   tests run on CI without `/dev/accel/accel0`.
 
+#### `spark` — remote DGX Spark model appliance
+
+`sy spark <host>` manages a separately installed, authenticated Spark agent.
+Install it with `sy spark <host> install --dry-run --json`, then
+`--yes` plus the minisign signature and public key; see
+[How to install the Spark agent](docs/how-to/install-spark.md).
+Before an engine lifecycle is authorized, the agent requires one fresh
+executor-owned snapshot and checks aggregate cold-start memory, live
+`MemAvailable`, full-memory PSI, swap-in activity, disk reserve, recipe
+compatibility, and the single high-memory transition lease.
+
+```text
+sy spark dgx-spark install --dry-run --json
+sy spark dgx-spark install --yes --release-signature sy-aarch64.minisig --release-public-key sy-release.pub
+sy spark dgx-spark status --json
+sy spark dgx-spark serve ornith-1.5:9b --dry-run --json
+sy spark dgx-spark serve ornith-1.5:9b --recipe spark-fixture-http-echo-1.0.0 --name fixture
+sy spark dgx-spark ps --json
+sy spark dgx-spark logs fixture --limit 100
+sy spark dgx-spark client-config ornith --client codex
+sy spark dgx-spark client-config ornith --client claude-code
+sy spark dgx-spark download Qwen/Qwen3-Embedding-0.6B --revision 97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3 --alias qwen3-embedding:0.6b
+sy spark dgx-spark serve qwen3-embedding:0.6b --recipe qwen3-embedding-0.6b-vllm-0.19.1 --name embeddings --allow-unverified
+sy spark dgx-spark stop fixture
+```
+
+The named fixture recipe is a signed, digest-pinned ARM64 HTTP engine used to
+verify the complete Docker lifecycle without loading model weights or using the
+GPU. Omitting `--recipe` keeps verified vLLM as the default fallback. Engines
+run only on the internal managed bridge; `ps` exposes desired versus observed
+state without leaking its address, logs are bounded and redacted, and repeated
+`stop` is successful.
+
+After the engine passes both its health check and an exact model-identity
+completion probe, the agent publishes OpenAI-compatible routes at
+`https://<spark>:9843/openai/<instance>/v1` and native Anthropic Messages routes
+below `/anthropic/<instance>/v1`. The allowlist exposes authenticated models,
+completions, protocol-native chat completions, Responses, Messages, and token
+count with bounded SSE and client-side tool continuation. The read-only
+`client-config` output supports Codex's `wire_api = "responses"` provider and a
+Claude Code 2.1.241 projection; both name the protected token and CA environment
+variables without reading, printing, or persisting the token. Health, metrics,
+tokenizer, debug, admin, and engine-native addresses remain private. Warming or
+recovering generations return protocol-native `503` errors with `Retry-After`
+and never inherit a stale route.
+
+Capabilities are taken only from the selected signed recipe. Ornith accepts
+bounded inline JPEG, PNG, or WebP images through OpenAI Responses and Anthropic
+Messages; the adapters validate the declared media type, file magic, decoded
+bytes, image count, and dimensions before contacting vLLM. Remote URLs, local
+paths, traversal, unsupported media, and images sent to text-only instances are
+rejected. `Qwen/Qwen3-Embedding-0.6B` has its own embedding-only recipe and
+serves strict float vectors at
+`POST /openai/<instance>/v1/embeddings`; it does not expose generation routes.
+Embedding input order, 1024 dimensions, unit normalization, usage, and public
+model identity are checked by the gateway rather than trusted from the engine.
+
+The admission report exposes the declarative 8 GiB system reserve, 8 GiB
+emergency floor, and 100 GiB disk reserve. Missing or stale telemetry fails
+closed. The root executor independently samples pressure and durably suppresses
+restart before an emergency victim can be stopped; it never selects unlabeled
+work.
+
 #### `agt` — sandboxed agent runner
 
 `sy agt` runs coding/inference agents under an intent-whitelisted
@@ -94,12 +174,46 @@ once, then incrementally synced on a schedule. Exposes the search via
 CLI and via an MCP server (`sy knowledge mcp`) auto-registered with
 your agents by `sy auto`.
 
+Retrieval is **hybrid**: a dense (embedding) leg and a sparse (BM25-style
+lexical) leg are fused server-side by qdrant's Reciprocal Rank Fusion
+(`k=60`, needs qdrant ≥1.16) and reranked, so literal tokens (`X5`,
+file paths, SHAs) land even when the embedding alone would miss them.
+Each source carries a `kind` (`telegram`, `claude-transcripts`,
+`notes`, …); per-source pipelines chunk per logical unit (one Telegram
+message, one transcript turn) with structured payload. Agent
+transcripts (`~/.claude/projects/**`, `kind=claude-transcripts`) are
+**excluded from the default search scope** so a live prompt can't
+retrieve itself — opt back in with `--kind claude-transcripts`.
+
 ```
 sy knowledge add ~/Documents/notes
 sy knowledge daemon
 sy knowledge search "rust async cancellation"
+
+# Structured pre-search filters (also `SY_KB_*` env; flags > env > default):
+sy knowledge search "новый год X5 Магнит" \
+    --date-from 2023-12-01 --date-to 2024-02-29 \
+    --kind telegram --from "Анна Лу"
+#   --include-source / --exclude-source <name>   scope by registered source
+#   (results carry a stable `chunk_id`; fetch full text with get-chunk)
+
+sy knowledge get-chunk <chunk_id>   # full, uncapped text for one result
+sy knowledge eval --json            # recall@1/5, MRR, abstain accuracy vs the golden set
 sy knowledge status --json
 ```
+
+Search responses carry a `confidence` (calibrated from the reranker)
+and honour an `abstain_threshold` — below it the tool returns no
+results with `reason: "no high-confidence match"` rather than
+quoting background noise. Natural-language time phrases ("новогодние
+праздники 2024", "last summer") auto-fill the date range when no
+explicit `--date-from/--date-to` is given, and a user-editable
+`~/.config/sy-knowledge/synonyms.yaml` (shipped by `sy apply`) expands
+known aliases (`X5 → Пятёрочка/Перекрёсток/Чижик`) into the lexical leg.
+
+Voice/video notes can be transcribed into the index (Whisper, CPU/iGPU)
+by building with `--features transcribe` (off by default — it vendors
+whisper.cpp and downloads a model).
 
 #### `power` — adaptive power governor
 
@@ -115,6 +229,17 @@ sy power status            # current profile, source, rationale
 sy power apply             # apply config rules
 sy power show --json       # full snapshot (governor, EPP, bandit weights)
 ```
+
+`sy power show` renders an offline PDF report over the decision journal:
+an executive summary, the per-arm decision mix, cumulative regret against
+the rules-only baseline, and power/reward plots — so you can audit what
+the bandit actually did over a window. Add `--json` for the
+`sy.power.report/v1` schema instead of a PDF, `--out` to pin the path, and
+`--since` to widen the window. The PDF is byte-identical over the same
+audit window once its two wall-clock inputs are pinned via
+`SY_POWER_REPORT_TIMESTAMP` and `SY_POWER_REPORT_MODEL_SHA`.
+
+<img src="assets/sy-power-report.png" alt="sy power show report — executive summary and methodology page" width="600" />
 
 #### Rice — niri + waybar + …
 
@@ -132,8 +257,7 @@ configs/
 ├── mako/config
 ├── fuzzel/fuzzel.ini
 ├── foot/foot.ini
-├── swaylock/config
-└── yazi/{package.toml,theme.toml,yazi.toml,keymap.toml,init.lua}
+└── swaylock/config
 ```
 
 Stack:
@@ -146,7 +270,7 @@ Stack:
 | Launcher         | fuzzel          | `dnf`                           |
 | Terminal         | foot            | `dnf`                           |
 | Notifications    | mako            | `dnf`                           |
-| File manager     | yazi (+ `ya`)   | `cargo install yazi-build`      |
+| File manager     | `sy file` (iced) | configs under `configs/sy/file*.toml`; opens via `Mod+E` / `sy file` |
 | Lock             | swaylock        | `dnf`                           |
 | Idle             | swayidle        | `dnf` (DPMS via `niri msg`)     |
 | Night light      | wlsunset        | `dnf`                           |
@@ -192,7 +316,7 @@ the PAM module's control flags and arguments are in
 │   └── …                     # bat, bright, bt, cal, gpu, npu, net, … (bar tiles)
 ├── configs/                  # declarative config (rendered by `sy apply`)
 │   ├── systemd/{system,user}/*.service|*.target
-│   ├── niri/ waybar/ mako/ fuzzel/ foot/ swaylock/ yazi/
+│   ├── niri/ waybar/ mako/ fuzzel/ foot/ swaylock/
 │   ├── sy/{power,intent_whitelist}.toml
 │   ├── dbus-1/ policy/ selinux/ udev/ modprobe.d/ grub/ dracut/
 │   └── …
@@ -226,8 +350,6 @@ unzip -q -o /tmp/JBM.zip -d ~/.local/share/fonts/JetBrainsMono '*.ttf'
 rm /tmp/JBM.zip
 fc-cache -f
 
-cargo install --locked --force yazi-build
-rm -f ~/.cargo/bin/yazi-build
 GOBIN=~/.local/bin go install go.senan.xyz/cliphist@latest
 ```
 
@@ -248,9 +370,12 @@ cargo build --release
 niri msg action load-config-file
 killall -SIGUSR2 waybar
 makoctl reload
-
-./scripts/yazi-plugins.sh               # yazi plugins + flavor (idempotent)
 ```
+
+`sy file` (the in-tree iced file manager) is the primary file
+manager — see the [`Stack`](#planes) row above and
+[`docs/how-to/run-sy-file.md`](docs/how-to/run-sy-file.md) for the
+first-session recipe.
 
 Override target dir with `--target` or `$XDG_CONFIG_HOME`. Override
 repo root with `--root` or `$SY_ROOT`. The active theme lives in
@@ -353,14 +478,26 @@ sy knowledge daemon                # supervises qdrant + scheduled embed
 sy knowledge status [--json]
 sy knowledge pause / resume / toggle-pause / cancel
 sy knowledge bench --n 1024
-sy knowledge search <query>
-sy knowledge mcp                   # MCP server (stdio) for AI agents
+sy knowledge search <query> [--date-from D --date-to D --from WHO --kind K \
+                            --include-source N --exclude-source N]
+sy knowledge get-chunk <chunk_id> # full uncapped text for one search result
+sy knowledge eval [--json]        # recall@1/5, MRR, abstain accuracy (golden set)
+sy knowledge mcp                   # MCP server (stdio): knowledge_search,
+                                   #   knowledge_get_chunk, knowledge_index,
+                                   #   knowledge_list_sources
 
 # power
 sy power status [--json]
 sy power apply
 sy power show --json
 sy power mcp
+
+# mon — system health popup + 1 Hz aggregator
+sy mon                             # toggle the layer-shell popup (Super+m)
+sy mon snapshot [--json]           # one-shot snapshot from the aggregator
+sy mon doctor [--json]             # plumbing checks (folds into sy doctor)
+sy mon mcp                         # MCP stdio server (system.mon.{snapshot,history})
+sy mon waybar                      # waybar custom-module tile (ok/degraded/down)
 
 # agent runner
 sy agt run <prompt> [--profile <name>]
@@ -387,7 +524,7 @@ Mod key is **Super** (Mod4). Full list below.
 | Keys                              | Action                                   |
 |-----------------------------------|------------------------------------------|
 | `Super+Return`                    | Terminal (foot)                          |
-| `Super+n`                         | File manager (yazi in foot)              |
+| `Mod+E` / `Mod+Shift+E` / `Mod+Slash` | `sy file` (the new iced file manager) |
 | `Super+d` / `Super+Shift+d`       | Launcher / dmenu mode                    |
 | `Super+c`                         | Clipboard history (cliphist + fuzzel)    |
 | `Super+Escape`                    | Lock screen                              |
@@ -411,6 +548,7 @@ Mod key is **Super** (Mod4). Full list below.
 | `Print` / `Shift+Print`           | Interactive / whole-screen screenshot → clipboard |
 | `Super+Print` / `Super+Shift+Print` | Whole-screen / active-window → `~/Pictures/` |
 | Volume / brightness / media keys  | Work out of the box                      |
+| `Super+m`                         | Toggle `sy mon` system health popup      |
 
 #### Niri vs sway
 
@@ -463,14 +601,10 @@ The palette lives in `themes/<name>.toml` and is injected into every
   `niri/language` (XKB layout indicator). Needs waybar 0.11+.
 - **Idle & DPMS**: swayidle uses `niri msg action power-off-monitors`
   / `power-on-monitors` for DPMS.
-- **Yazi**: `configs/yazi/` ships the full config — `yazi.toml`
-  (previewers + git fetcher), `keymap.toml` (plugin keybindings),
-  `init.lua` (guarded `:setup()` calls), `theme.toml` (flavor pin) and
-  `package.toml` (32 `ya pkg` deps + the gruvbox flavor). Plugins not
-  reachable via `ya pkg` (dual-pane, easyjump, searchjump, whoosh)
-  are git-cloned by `scripts/yazi-plugins.sh`. Run that script after
-  `sy apply` (or `make yazi-plugins`); it is idempotent and safe to
-  re-run on upgrade.
+- **File manager**: `sy file` is the productivised path; first-session
+  recipe in [`docs/how-to/run-sy-file.md`](docs/how-to/run-sy-file.md)
+  and the plugin-author path in
+  [`docs/how-to/write-a-sy-plugin.md`](docs/how-to/write-a-sy-plugin.md).
 
 ### Contributing
 
@@ -495,7 +629,283 @@ instead of opening a public issue.
 
 MIT — see [LICENSE](LICENSE).
 
+# docs/intro.md
+
 ---
+title: Start here
+sidebar_label: Start here
+---
+
+<!-- Start-here: product story first, then the Diátaxis map.
+     The long-form story is docs/explanation/what-sy-is.md. -->
+
+## Start here
+
+`sy` turns a stock **Fedora 43** laptop into a workstation you and
+an AI agent can drive the same way.
+
+It is one Rust program and the `configs/` tree in this git repo.
+You build the binary, run `sy apply`, and enable `sy.target`. The
+compositor session, semantic search, file manager, power governor,
+and agent plumbing then match the repo. If the disk dies, a fresh
+Fedora install plus those steps is the same machine. That promise
+is the product.
+
+You do **not** need an AMD NPU, a DGX Spark, or an Android phone.
+Those are extras. Bring-up is a plain laptop and a network.
+
+![sy sits on Fedora; you and an agent drive the same binary](./img/sy-stack.svg)
+
+The longer story — a day using it, what is optional, why the rules
+are strict — is [What sy is](./explanation/what-sy-is.md).
+
+### What you can do
+
+On every install:
+
+- **Reproduce the desktop from git.** Colours, keybindings, units,
+  and the bar come from `sy apply`, not from a folder of one-off
+  edits. See [why there are no snowflakes](./explanation/no-snowflakes.md).
+- **Search your own files.** Register a folder, index it, search
+  from the CLI or from Claude / Cursor / Codex / Gemini. Tutorial:
+  [search your local files](./tutorials/search-your-files.md).
+- **Browse files in a window.** Super+E opens `sy file`. Markdown
+  preview does not spawn Chrome. Tutorial:
+  [browse files with sy file](./tutorials/browse-your-files.md).
+- **Hand the same tools to an agent.** `sy auto` writes MCP server
+  entries. The agent calls `knowledge_search` the way you call
+  `sy knowledge search`. Tutorial:
+  [drive sy from an agent](./tutorials/drive-sy-from-an-agent.md).
+- **Ask why the laptop picked a power profile**, open a health
+  popup (Super+M), run `sy doctor`.
+
+If you have the hardware:
+
+- **Ryzen AI NPU** — embeddings stay on the NPU so the GPU stays
+  free for models you chat with.
+  [Set up the NPU](./how-to/set-up-npu.md).
+- **DGX Spark** — signed model serving on the LAN, OpenAI- and
+  Anthropic-shaped URLs, Docker stays on the Spark and off the
+  laptop. [Install the Spark agent](./how-to/install-spark.md).
+- **Android phone** — tap to approve `sudo` over Bluetooth; if the
+  phone is away, password or FIDO still works.
+  [Unlock sudo with your phone](./tutorials/syauth-setup.md).
+
+A *plane* is one long-running role of that same binary (search,
+power, file manager, …). You do not install a separate package per
+plane.
+
+![You type a search; an agent calls the same plane over MCP](./img/sy-surfaces.svg)
+
+[How the planes fit together](./explanation/architecture.md)
+is the mechanical picture.
+
+### Learn by doing
+
+Follow these in order on a new laptop.
+
+1. [Bring up sy on a fresh Fedora 43 laptop](./tutorials/getting-started.md)
+2. [Search your local files](./tutorials/search-your-files.md)
+3. [Browse files with sy file](./tutorials/browse-your-files.md)
+4. [Drive sy from an agent](./tutorials/drive-sy-from-an-agent.md)
+5. [Unlock sudo with your phone](./tutorials/syauth-setup.md) — skip
+   without an Android phone.
+
+### Look up a job or a flag
+
+How-to (you already know the job):
+
+- [Set up the NPU](./how-to/set-up-npu.md)
+- [Add a knowledge source](./how-to/add-a-knowledge-source.md)
+- [Wire MCP into your agents](./how-to/wire-mcp-into-agents.md)
+- [Apply a theme](./how-to/apply-a-theme.md)
+- [Run sy doctor](./how-to/run-doctor.md)
+- [Read power status](./how-to/read-power-status.md)
+- [Install the Spark agent](./how-to/install-spark.md)
+- [Serve a model on Spark](./how-to/serve-a-model-on-spark.md)
+- [Run sy file from a shell](./how-to/run-sy-file.md)
+- [Troubleshoot sy file](./how-to/troubleshoot-sy-file.md)
+- [Write a sy plugin](./how-to/write-a-sy-plugin.md)
+- [Troubleshoot a sy plugin](./how-to/troubleshoot-sy-plugin.md)
+- [Troubleshoot syauth](./how-to/troubleshoot-syauth.md)
+
+Reference (flags, schemas, words):
+
+- [CLI](./reference/cli.md)
+- [Configuration](./reference/config.md)
+- [Spark](./reference/spark.md)
+- [Glossary](./reference/glossary.md)
+- [syauth PAM module](./reference/syauth-pam-module.md)
+- [sy file doctor](./reference/sy-file-doctor.md)
+- [sy file MCP](./reference/sy-file-mcp.md)
+
+Why (design, not steps):
+
+- [What sy is](./explanation/what-sy-is.md)
+- [How the planes fit together](./explanation/architecture.md)
+- [Why there are no snowflakes](./explanation/no-snowflakes.md)
+- [Why the CLI is agent-first](./explanation/agent-first-cli.md)
+- [Why embeddings run on the NPU, not the GPU](./explanation/why-npu-not-gpu.md)
+
+# docs/explanation/what-sy-is.md
+
+---
+title: What sy is
+sidebar_label: What sy is
+---
+
+<!-- Template source: Good Docs Project explanation template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/explanation. Diátaxis quadrant: explanation. -->
+
+## What sy is
+
+This page is the product story. It does not install anything. If you
+already know you want `sy` and need commands, go to
+[the bring-up tutorial](../tutorials/getting-started.md). If you want
+the engineering “why this shape”, go to
+[how the planes fit together](architecture.md).
+
+![sy sits on Fedora; you and an agent drive the same binary](../img/sy-stack.svg)
+
+### Why this exists
+
+A coding laptop in 2026 is not just a desktop. You search your own
+files, you let an agent run tools, you care which silicon burns
+power, and you still want a compositor, a bar, and a file manager
+that do not fight each other.
+
+The usual way to get that is a pile of projects: a compositor from
+here, a search daemon from there, MCP snippets pasted into four
+agent configs, a GPU left running because embeddings were easiest
+on CUDA, a Spark box you ssh into with a notebook. Each piece
+works. None of them share a CLI, a supervisor, or a git history.
+Six months later you cannot rebuild the laptop.
+
+`sy` is one answer to that: an **Agentic OS layer for Fedora 43**.
+One Rust binary plus the `configs/` tree in this repo. You clone,
+you build, you run `sy apply`, you enable `sy.target`. The desktop,
+the search index, the power governor, the file manager, and the
+agent plumbing come from that apply. An agent talks to the same
+`sy` commands you do.
+
+The name is short on purpose. `sy` is the orchestrator, not a
+Linux distribution. Fedora stays Fedora. `sy` sits on top and
+refuses to leave state that only exists on this one disk.
+
+### A day with it
+
+Morning: you log into niri. The bar, terminal colours, and
+keybindings are whatever the repo last applied. Super+E opens the
+file manager on `$HOME`. Hover a README; the preview is a PNG from
+a tiny plugin, not a headless browser.
+
+You registered `~/Documents/notes` yesterday. `sy knowledge search
+"re-exec dance"` returns the paragraph you wrote, with a chunk id
+you can fetch in full. In Cursor you ask the same question; the
+agent calls `knowledge_search` because `sy auto` already wrote the
+MCP server into the client config.
+
+You `sudo true`. If the phone is in your pocket and paired, syauth
+wins the PAM stack with a biometric tap. If the phone is in the
+other room, FIDO or your password still works. syauth is
+`sufficient`, never a lockout.
+
+The power governor has already picked a profile from battery,
+thermal headroom, and whether you are in a call. You can ask
+`sy power status --json` why. Super+M opens a health popup: CPU,
+NPU holders, knowledge queue, agent denials.
+
+If a DGX Spark is on the desk, `sy spark dgx-spark serve …` is how
+you start a signed engine. The laptop never holds Docker. Chat
+clients talk to `https://<spark>:9843/openai/<instance>/v1` after
+health checks pass.
+
+None of that required you to remember which unit file belongs to
+which git checkout. `sy.target` is the user systemd target. `sy
+doctor` is the health pass.
+
+### What you get
+
+Required hardware: a Fedora 43 x86_64 laptop and a network. That is
+the whole list for bring-up.
+
+| You can… | How it shows up |
+|----------|-----------------|
+| Rebuild the machine from git | `sy apply` renders `configs/` and starts `sy.target` |
+| Search folders you own | `sy knowledge` (CLI, MCP, waybar tile) |
+| Browse files in a window | `sy file`, Super+E |
+| Let an agent use the same tools | `sy auto` writes MCP configs; `sy knowledge mcp`, `sy power mcp`, `sy file mcp`, `sy mon mcp` |
+| See why the laptop picked a power profile | `sy power status` |
+| Glance at plane health | `sy mon` / Super+M, or `sy doctor` |
+| Theme the session from the repo | `sy apply --theme …` then reload niri |
+
+![You type a search; an agent calls the same plane over MCP](../img/sy-surfaces.svg)
+
+Optional, only if you have the device:
+
+| You can… | Needs |
+|----------|--------|
+| Run embeddings on the NPU, leave the GPU for LLMs | AMD Ryzen AI (`/dev/accel/accel0`) |
+| Serve a local-ish model with OpenAI- and Anthropic-shaped URLs | a DGX Spark on the LAN |
+| Approve `sudo` with the phone | Android 13+, BLE |
+
+Skip any optional row. The install does not fail because you lack
+an NPU.
+
+### How it is put together
+
+![sy apply renders this git repo onto the laptop](../img/sy-apply.svg)
+
+One binary. Systemd starts it as different *planes* (long-running
+roles): knowledge daemon, power daemon, file daemon, and so on.
+Planes do not call each other in-process. They send JSON over Unix
+sockets in `$XDG_RUNTIME_DIR`. That socket is also what you can
+debug with `socat` and what an MCP server proxies.
+
+![One binary becomes many planes; JSON sockets sit between them](../img/sy-planes.svg)
+
+`sy apply` is how the repo becomes the laptop. Templates under
+`configs/` are rendered with a theme from `themes/`. Units under
+`configs/systemd/user/` are linked into the user manager. A change
+that is not in the repo is a *snowflake*; snowflakes are banned
+because they are the thing you cannot reproduce.
+
+Agents are first-class. Commands that print a document take
+`--json`. Commands that change the machine take `--dry-run` (or
+they default to dry-run and want `--apply`). Exit codes are
+stable. There is no wizard that an agent cannot complete.
+
+The longer mechanical story — NPU single-owner, Spark’s
+unprivileged agent vs root executor, sandbox policy — is
+[how the planes fit together](architecture.md).
+
+### Why it is strict
+
+Reproducibility and agents pull in the same direction: one CLI,
+one config tree, one supervisor. The cost is that a one-line
+tweak in `~/.config/waybar/style.css` is the wrong move. You edit
+`themes/` or `configs/`, you apply, you get the colour on every
+machine that applies that commit.
+
+The other cost is Fedora-shaped. `sy` is not trying to be the
+agent layer for macOS or for “any systemd”. It is trying to be
+complete on one OS version.
+
+### Alternatives we considered
+
+- **Dotfiles plus a wiki of shell snippets.** Easy the first
+  week. The wiki drifts; the laptop does not. Rejected.
+- **A separate “syctl” API for agents.** Two surfaces drift.
+  Rejected: one `--help`.
+- **Let every tool open the NPU.** The device wedges. Rejected:
+  one owner.
+
+### See also
+
+- [Start here](../intro.md)
+- [Why there are no snowflakes](no-snowflakes.md)
+- [Why the CLI is agent-first](agent-first-cli.md)
+- [How the planes fit together](architecture.md)
+- [Tutorial: bring up sy](../tutorials/getting-started.md)
 
 # docs/tutorials/getting-started.md
 
@@ -505,42 +915,35 @@ MIT — see [LICENSE](LICENSE).
 
 ### Introduction
 
-In this tutorial you turn a stock Fedora 43 install into an
-agent-first workstation by building and applying `sy`. You clone
-the repo, install the Fedora prerequisites the rice depends on,
-build the single Rust binary, render every config under `configs/`
-into your home directory with `sy apply`, hand control of the
-planes to your user systemd manager via `sy.target`, and finally
-confirm the bring-up with `sy doctor` and `sy aiplane status`.
+In this tutorial you turn a stock Fedora 43 install into a `sy`
+workstation: clone the repo, install the Fedora packages the niri
+session needs, build the binary, apply every config, and start the
+user-level supervisor.
 
-When you finish, your user systemd manager supervises every `sy`
-plane (aiplane, knowledge, qdrant, agentd, powerd, stack-bar),
-`sy doctor` returns exit code `0`, and `sy aiplane status` reports
-the NPU plane as up.
+When you finish, `sy.target` is active, `sy doctor` is green (or
+warn-only on optional hardware), and `sy --help` lists the planes.
+You have a desktop that matches this git repo, search and a file
+manager ready to use, and a CLI an agent can call. You have not
+been required to own an NPU, a Spark, or a phone.
 
-A *plane* is one of the long-running services `sy` ships — for
-example the NPU inference daemon (`aiplane`), the semantic
-search index (`knowledge`), or the adaptive power governor
-(`power`). Every plane is a child unit of `sy.target` and speaks
-the same JSON-over-stdio surface, so an agent can drive any plane
-the same way you do.
+What you are installing is described in
+[What sy is](../explanation/what-sy-is.md). This page is only the
+bring-up.
 
-`sy apply` is the single command that renders the templates under
-`configs/` into the right paths on disk (`~/.config/`,
-`~/.local/share/`, `~/.config/systemd/user/`, plus the few
-system-level units), reloads systemd, and converges your machine
-on the contents of the repo.
+A *plane* is one long-running service the `sy` binary hosts — search
+(`knowledge`), power, the file manager, and so on. `sy apply` is the
+command that renders `configs/` onto disk and reloads systemd so the
+machine matches the repo.
+
+You do **not** need an AMD NPU or a DGX Spark for this tutorial.
 
 ### Prerequisites
 
-- Fedora 43 Workstation, freshly installed, fully updated
-  (`sudo dnf upgrade --refresh`).
-- An x86_64 CPU. AMD Ryzen AI hardware is optional for this
-  tutorial — the NPU one-time setup is covered in a separate
-  how-to and is not required for the planes to come up.
+- Fedora 43 Workstation, fully updated (`sudo dnf upgrade --refresh`).
+- An x86_64 CPU.
 - A working network connection.
 - `git`, `curl`, `unzip`, `make`, `gcc`, and the Rust toolchain
-  available through `rustup` (stable channel). Install with:
+  (`rustup`, stable channel):
 
   ```bash
   sudo dnf install -y git curl unzip make gcc
@@ -548,19 +951,12 @@ on the contents of the repo.
   source "$HOME/.cargo/env"
   ```
 
-- Your shell has `~/.local/bin` and `~/.cargo/bin` on `$PATH`. Add
-  the following to `~/.bashrc` if it is not already there:
-
-  ```bash
-  export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-  ```
-
-- `sudo` privileges on the host.
+- `sudo` on the host.
 
 ### Step 1 — Clone the repository
 
-Clone `sy` into `~/sources/sy`. The rest of the tutorial assumes
-that path because the repo's own scripts reference it.
+The rest of this tutorial (and several how-tos) assume
+`~/sources/sy`:
 
 ```bash
 mkdir -p ~/sources
@@ -570,9 +966,8 @@ cd ~/sources/sy
 
 ### Step 2 — Enable the Fedora COPR repositories sy depends on
 
-The rice pulls `niri` (the Wayland compositor `sy` targets) and
-`i3status-rust` (the waybar status backend) from two COPR
-repositories. Enable both:
+The session uses `niri` (Wayland compositor) and `i3status-rust`
+(status backend) from two COPRs:
 
 ```bash
 sudo dnf copr enable -y avengemedia/dms
@@ -580,9 +975,6 @@ sudo dnf copr enable -y atim/i3status-rust
 ```
 
 ### Step 3 — Install the Fedora package prerequisites
-
-Install `niri`, the waybar stack, and every package the rendered
-configs under `configs/` reference:
 
 ```bash
 sudo dnf install -y \
@@ -593,7 +985,7 @@ sudo dnf install -y \
   i3status-rust
 ```
 
-Install JetBrainsMono Nerd Font so the bar glyphs render:
+Install JetBrainsMono Nerd Font so bar glyphs render:
 
 ```bash
 mkdir -p ~/.local/share/fonts/JetBrainsMono
@@ -604,80 +996,75 @@ rm /tmp/JBM.zip
 fc-cache -f
 ```
 
-Install the two helpers that `sy` shells out to:
+Install the clipboard helper. The file manager is `sy file` (built
+with the rest of the binary); do not install yazi.
 
 ```bash
-cargo install --locked --force yazi-build
-rm -f ~/.cargo/bin/yazi-build
 sudo dnf install -y golang
 GOBIN=~/.local/bin go install go.senan.xyz/cliphist@latest
 ```
 
 ### Step 4 — Build the sy binary
 
-Build a release binary in-tree and copy it onto your `$PATH`. The
-project's `make install` target does both, plus a SELinux
-`restorecon` pass when the system is in enforcing mode:
+`make install` builds a release binary, copies it to `~/.local/bin`,
+and runs `restorecon` when SELinux is enforcing:
 
 ```bash
 make install
 ```
 
-Confirm the binary runs:
+If `sy` is not found, add `~/.local/bin` for this shell:
 
 ```bash
+export PATH="$HOME/.local/bin:$PATH"
 sy --help
 ```
 
-You see the top-level command list (`apply`, `aiplane`,
-`knowledge`, `power`, `doctor`, and the others).
+You see the top-level command list (`apply`, `aiplane`, `knowledge`,
+`power`, `file`, `doctor`, and the others). Persist PATH the way
+your distro already does (a login-shell profile), or log out and
+back in if `~/.local/bin` is already on PATH via systemd user
+environment. Do not treat a one-off `~/.bashrc` edit as the source
+of truth for the rest of `sy` — that is what `sy apply` is for.
 
 ### Step 5 — Apply the sy configs
 
-Run `sy apply`. The command renders every template under
-`configs/` to its destination on disk (the directory layout
-mirrors `~/.config/`), symlinks user-level systemd units into
-`~/.config/systemd/user/`, and runs `systemctl --user
-daemon-reload`:
+`sy apply` renders every template under `configs/` to its
+destination, symlinks user units into `~/.config/systemd/user/`, and
+runs `systemctl --user daemon-reload`:
 
 ```bash
 cd ~/sources/sy
-sy apply
-```
-
-If you want to preview the changes before they land, prepend a
-dry run on a separate invocation:
-
-```bash
 sy apply --dry-run
+sy apply
 ```
 
 ### Step 6 — Bring up sy.target
 
-`sy.target` is the user-level systemd target that supervises every
-`sy` plane. Enable it so it starts at every login, and start it
-now:
+`sy.target` is the user-level systemd target that starts the planes
+at login:
 
 ```bash
 systemctl --user enable --now sy.target
 ```
 
-Behind the scenes systemd starts the user-level units `sy.target`
-pulls in: `sy-agentd.service`, `sy-knowledge.service`,
-`sy-qdrant.service`, `sy-powerd.service`, and
-`sy-stack-bar.service`. The NPU inference plane (`aiplane`) joins
-the same group; the daemon binds `/dev/accel/accel0` on first use.
+That pulls in units such as `sy-agentd.service`,
+`sy-knowledge.service`, `sy-qdrant.service`, `sy-powerd.service`,
+and `sy-stack-bar.service`. The NPU plane (`aiplane`) joins the same
+group; it binds `/dev/accel/accel0` only if that device exists.
 
 ### Step 7 — Run sy doctor
 
-`sy doctor` runs the cross-plane health probes. On a successful
-bring-up it exits `0`:
-
 ```bash
 sy doctor
+echo $?
 ```
 
-To inspect the structured output, ask for JSON:
+`0` means every check passed. `3` means warn-only (optional probes,
+often missing NPU hardware). `1` means a real failure — read the
+failing row and `journalctl --user -u sy.target`.
+
+Machine-readable:
 
 ```bash
 sy doctor --json
@@ -685,52 +1072,582 @@ sy doctor --json
 
 ### Verify
 
-Confirm three things, in order:
-
 1. `sy.target` is active:
 
    ```bash
    systemctl --user is-active sy.target
    ```
 
-   The command prints `active` on success.
+   The command prints `active`.
 
-2. `sy doctor` exits `0`:
+2. `sy doctor` exits `0` or `3`:
 
    ```bash
    sy doctor
    echo $?
    ```
 
-   The exit code is `0` (all checks pass). Exit code `3` means
-   warn-only drift and is acceptable for the optional probes, but
-   the canonical success state is `0`.
+   Treat `3` as success for this tutorial if the warnings are about
+   hardware you do not have (NPU, Spark, phone). Treat `1` as a
+   failure to fix before you continue.
 
-3. `sy aiplane status` reports the NPU plane as up:
+3. The binary answers:
 
    ```bash
-   sy aiplane status
+   sy --help
    ```
 
-   The human-readable output names the registered workloads and
-   the active hardware backend. `sy aiplane status --json` gives
-   you the same data on stdout for scripting.
-
-When all three checks pass, the planes are up under your user
-systemd manager and `sy` is ready to drive.
+When those three hold, the planes are up and you can use `sy`.
 
 ### Next steps
 
-- To run on-device NPU inference on AMD Ryzen AI hardware, see
-  [how to set up the NPU](../how-to/set-up-npu.md).
-- To wire up phone-as-key sudo with `syauth`, see
-  [the syauth tutorial](syauth-setup.md).
-- For the full CLI surface, see
-  [the CLI reference](../reference/cli.md).
-- For the mental model of how the planes fit together, see
-  [the architecture explanation](../explanation/architecture.md).
+- [Start here](../intro.md) — map of the rest of the docs.
+- [What sy is](../explanation/what-sy-is.md) — the product story.
+- [Search your local files](search-your-files.md)
+- [Browse files with sy file](browse-your-files.md)
+- [Drive sy from an agent](drive-sy-from-an-agent.md)
+- [Set up the NPU](../how-to/set-up-npu.md) — only if you have Ryzen AI
+  hardware.
+- [Install the Spark agent](../how-to/install-spark.md) — only if you
+  have a DGX Spark.
+- [Unlock sudo with your phone](syauth-setup.md) — only if you have
+  an Android phone.
+- [CLI reference](../reference/cli.md)
+- [How the planes fit together](../explanation/architecture.md)
 
----
+# docs/tutorials/search-your-files.md
+
+<!-- Template source: Good Docs Project tutorial template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/tutorial. Diátaxis quadrant: tutorial. -->
+
+## Tutorial: search your local files
+
+### Introduction
+
+In this tutorial you register a folder with the `knowledge` plane,
+run one index pass, and search it from the CLI. You leave with a
+working local search that the same MCP server can later expose to
+your agents.
+
+When you finish, `sy knowledge search` returns hits from that folder
+and each hit carries a `chunk_id` you can fetch in full.
+
+### Prerequisites
+
+- You completed
+  [the bring-up tutorial](getting-started.md). `sy.target` is
+  active:
+
+  ```bash
+  systemctl --user is-active sy.target
+  ```
+
+  The command prints `active`.
+
+- `sy knowledge` is running:
+
+  ```bash
+  systemctl --user is-active sy-knowledge.service
+  ```
+
+  The command prints `active`. If it prints `inactive`, run
+  `systemctl --user start sy.target` and try again.
+
+- You have a folder of text you can read — notes, a git checkout,
+  or `~/Documents`. This tutorial uses `~/Documents/notes`. Create
+  it and drop a file in if it does not exist:
+
+  ```bash
+  mkdir -p ~/Documents/notes
+  echo "sy knowledge indexes local files through the aiplane embed workload." > ~/Documents/notes/first.txt
+  ```
+
+- An AMD NPU is **not** required. Without one, embeddings run on
+  CPU. The first index pass is slower; the commands stay the same.
+
+### Step 1 — Register the folder
+
+```bash
+sy knowledge add ~/Documents/notes
+```
+
+The command prints `+` and the absolute path on first registration.
+If the folder is already registered it prints `=` and
+`(already registered)`.
+
+### Step 2 — Confirm the source is listed
+
+```bash
+sy knowledge list
+```
+
+You see the folder, an enabled flag, and the sync schedule. Add
+`--json` if you want the same snapshot for a script.
+
+### Step 3 — Index once
+
+Scheduled sync can wait. Run a one-shot pass so the folder is
+searchable now:
+
+```bash
+sy knowledge index --source ~/Documents/notes
+```
+
+The command prints a line of the form
+`scanned N | indexed N | skipped N | deleted N | <ms>`. For the
+sample file you created, `indexed` is at least `1`.
+
+### Step 4 — Search
+
+```bash
+sy knowledge search "embed workload"
+```
+
+You get a short list of hits. The sample file you wrote in
+prerequisites should appear. Add `--json` to print structured
+results, including `chunk_id` and `confidence`.
+
+### Step 5 — Fetch one chunk in full
+
+Copy a `chunk_id` from the JSON search and fetch the uncapped text:
+
+```bash
+sy knowledge search "embed workload" --json
+sy knowledge get-chunk <chunk_id>
+```
+
+Replace `<chunk_id>` with the id from the search output. The command
+prints the full chunk, not the truncated snippet from search.
+
+### Verify
+
+Confirm three things:
+
+1. `sy knowledge list` shows `~/Documents/notes` (or its resolved
+   absolute path) as enabled.
+2. `sy knowledge search "embed workload"` returns at least one hit.
+3. `sy knowledge get-chunk` on that hit's `chunk_id` prints the
+   sentence you wrote into `first.txt`.
+
+If search returns nothing, wait a few seconds and retry the index
+pass. If the daemon is down, `sy knowledge search` exits `4`
+(qdrant unreachable). Start `sy.target` and run the search again.
+
+### Next steps
+
+- To add another folder, or to disable a source without deleting it,
+  see [how to add a knowledge source](../how-to/add-a-knowledge-source.md).
+- To browse files in a window (names and previews, not semantic
+  search), see [browse files with sy file](browse-your-files.md).
+- To expose the same search to Claude, Cursor, Codex, or Gemini, see
+  [drive sy from an agent](drive-sy-from-an-agent.md).
+- For flags, filters, and exit codes, see
+  [the CLI reference](../reference/cli.md#sy-knowledge).
+
+# docs/tutorials/browse-your-files.md
+
+<!-- Template source: Good Docs Project tutorial template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/tutorial. Diátaxis quadrant: tutorial. -->
+
+## Tutorial: browse files with sy file
+
+### Introduction
+
+In this tutorial you open the built-in file manager, land in your
+home directory, and hover a markdown file so the preview pane
+renders it. No extra file-manager package is involved: `sy file` is
+part of the same binary you already installed.
+
+When you finish, `Mod+E` (or `sy file ~`) opens a three-pane window
+and hovering `README.md` shows a preview without spawning Chrome or
+prompting the GNOME keyring.
+
+### Prerequisites
+
+- You completed
+  [the bring-up tutorial](getting-started.md). `sy.target` is
+  active:
+
+  ```bash
+  systemctl --user is-active sy.target
+  ```
+
+  The command prints `active`.
+
+- You are in a niri session (the compositor `sy apply` configures).
+  The keybinding `Mod+E` is part of that session. If you are on a
+  different compositor, use the CLI in step 1 instead.
+
+- You can read a markdown file under `$HOME`. This tutorial uses
+  `$HOME/README.md` if it exists; any other `.md` file you can read
+  is fine.
+
+### Step 1 — Open the window
+
+Press `Mod+E` (the Super/Windows key plus E). niri starts
+`sy file ~`.
+
+From a terminal, the same open is:
+
+```bash
+sy file ~
+```
+
+A three-pane window appears: parent directory, current directory,
+preview.
+
+`Mod+Shift+E` opens on the niri process working directory instead
+of `$HOME`. `Mod+/` is the same as `Mod+E`.
+
+### Step 2 — Confirm the plane is healthy
+
+```bash
+sy file doctor --json
+```
+
+The top-level `status` field is `"ok"` when the daemon, font, niri
+binds, systemd unit, bookmarks directory, and plugin registry all
+pass. If a probe is `fail`, the row's `fix_hint` names the repair
+(most often `systemctl --user start sy-file.socket`).
+
+### Step 3 — Hover a markdown file
+
+In the current-directory pane, move to a `.md` file. The preview
+pane paints a PNG of the rendered markdown.
+
+There is no Chrome process and no keyring popup. Preview is a
+small plugin (`sy-plugin-md`) that `sy apply` already installed.
+
+If the preview stays empty, see
+[how to troubleshoot sy file](../how-to/troubleshoot-sy-file.md).
+
+### Verify
+
+1. The window opened on `$HOME` (or the directory you passed).
+2. `sy file doctor --json` prints `"status": "ok"`.
+3. Hovering markdown fills the preview pane.
+
+### Next steps
+
+- For doctor details, IPC from a shell, and MCP, see
+  [how to run sy file](../how-to/run-sy-file.md).
+- To ship your own previewer, see
+  [how to write a sy plugin](../how-to/write-a-sy-plugin.md).
+- To search file *contents* (not names), see
+  [search your local files](search-your-files.md).
+
+# docs/tutorials/drive-sy-from-an-agent.md
+
+<!-- Template source: Good Docs Project tutorial template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/tutorial. Diátaxis quadrant: tutorial. -->
+
+## Tutorial: drive sy from an agent
+
+### Introduction
+
+In this tutorial you let `sy auto` find the MCP servers `sy` ships
+(search, power, file, and the others your install enables) and write
+them into the agent configs on this machine. You then confirm an
+agent can call `knowledge_search` the same way you called
+`sy knowledge search` in the previous tutorial.
+
+When you finish, `sy auto configure --apply` has updated the agent
+config files, `sy auto` no longer reports those detectors as pending,
+and a search from the agent returns hits from a registered source.
+
+### Prerequisites
+
+- You completed
+  [Search your local files](search-your-files.md). At least one
+  knowledge source is registered and indexed.
+- At least one of Claude Code, Cursor, Codex, or Gemini CLI is
+  installed so `sy auto` has a config file to write to. If none of
+  those are installed, this tutorial still works as a dry-run: you
+  will stop after the plan prints and skip the apply step.
+- `sy.target` is active.
+
+### Step 1 — See what auto would change
+
+`sy auto configure` is a dry-run unless you pass `--apply`. Run it
+once and read the plan:
+
+```bash
+sy auto configure
+```
+
+The output lists detectors (for example `mcp-claude`, `mcp-cursor`)
+and the files they would write. Nothing on disk changes yet.
+
+To see the same plan as JSON:
+
+```bash
+sy auto configure --json
+```
+
+To list every detector and whether it is on by default:
+
+```bash
+sy auto list-detectors --json
+```
+
+### Step 2 — Limit the plan to MCP, if you want
+
+If you only want MCP plumbing and not other auto detectors, pass
+`--only` with the detector ids from step 1. The names below are
+examples; use the ids `list-detectors` printed on your machine:
+
+```bash
+sy auto configure --only mcp-claude,mcp-cursor
+```
+
+Read the plan. If a detector would overwrite a file you care about,
+stop here and inspect that file first.
+
+### Step 3 — Apply the plan
+
+```bash
+sy auto configure --apply
+```
+
+If you used `--only` in step 2, pass the same `--only` here.
+
+`--apply` is required. The command refuses to rewrite agent configs
+on a dry-run, so an agent that shells `sy auto` cannot change disk
+by accident.
+
+### Step 4 — Restart the agent
+
+Restart Claude Code, Cursor, Codex, or Gemini so it reloads MCP
+server definitions. A running session does not pick up a new
+`mcp.json` (or equivalent) until it restarts.
+
+### Step 5 — Call knowledge_search from the agent
+
+In the agent, ask it to search for a phrase you know is in the
+folder you indexed — the sample sentence from the search tutorial
+works:
+
+> Search my notes for "embed workload" using the sy knowledge tool.
+
+The agent should call `knowledge_search` (stdio MCP from
+`sy knowledge mcp`) and return the same hit you saw from
+`sy knowledge search`.
+
+If the agent has no MCP tools listed after the restart, re-run
+`sy auto configure` without `--apply` and check that the detector
+for that agent reported a write.
+
+### Verify
+
+1. `sy auto configure` (dry-run) no longer proposes the MCP writes
+   from step 3, or it reports them as already present.
+2. The agent lists a `knowledge_search` tool (names vary slightly by
+   client; the MCP server is `sy knowledge mcp`).
+3. A search from the agent returns a hit from your registered
+   source.
+
+If the knowledge daemon is down, the MCP tool returns a JSON-RPC
+error rather than crashing the agent. Start `sy.target` and retry.
+
+### Next steps
+
+- To add or remove sources the agent can see, see
+  [how to add a knowledge source](../how-to/add-a-knowledge-source.md).
+- To wire MCP without the rest of `sy auto`, see
+  [how to wire MCP into your agents](../how-to/wire-mcp-into-agents.md).
+- For the CLIG contract (`--json`, `--dry-run`, `SY_*`, exit codes)
+  see [why the CLI is agent-first](../explanation/agent-first-cli.md).
+
+# docs/tutorials/syauth-setup.md
+
+<!-- Template source: Good Docs Project tutorial template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/tutorial. Diátaxis quadrant: tutorial. -->
+
+## Tutorial: unlock sudo with your phone using syauth
+
+### Introduction
+
+In this tutorial you wire up [syauth](https://github.com/dmytrogajewski/syauth)
+— the phone-as-key PAM module `sy` wraps — on a fresh `sy` host so
+that `sudo` consults your phone over Bluetooth Low Energy before
+falling back to the standard authentication stack. You build and
+install `pam_syauth.so`, bring up the user-level daemon, edit
+`/etc/pam.d/sudo` through the `sy` wrapper, sideload the companion
+Android app, pair the phone with the desktop, and confirm the
+end-to-end unlock chain.
+
+When you finish, `sudo true` on your laptop succeeds whenever your
+phone is in BLE range with the screen unlocked, the audit log
+shows a `grantors=pam_syauth` line, and pulling the phone off the
+desk transparently falls through to FIDO or password authentication.
+
+PAM `sufficient` means syauth wins when it succeeds, and a denial
+never blocks the remaining authenticators (FIDO or password). The
+wrapper sets `timeout=8000` so the phone has time for a biometric
+prompt.
+
+### Prerequisites
+
+- A working `sy` install — complete
+  [the bring-up tutorial](getting-started.md) first so
+  `sy --help` works and `sy.target` is active.
+- The [`syauth`](https://github.com/dmytrogajewski/syauth) repo
+  cloned at `~/sources/syauth`. The Android sources live under
+  `~/sources/syauth/syauth-android`.
+- An Android phone (Android 13 or later) with developer mode and
+  `adb` access enabled.
+- The desktop and the phone in BLE range of each other.
+- `sudo` privileges on the host.
+- `pamtester` installed for the post-step verification:
+
+  ```bash
+  sudo dnf install -y pamtester
+  ```
+
+### Step 1 — Build and install `pam_syauth.so`
+
+Build the PAM module in release mode and copy it into the system
+PAM library directory. Use `install`, not `cp`: `install` performs
+a rename under the hood, so an in-flight `sudo` that has the old
+inode mmap'd keeps reading the old bytes until it exits. `cp`
+overwrites the existing inode byte by byte and segfaults that
+in-flight reader.
+
+```bash
+cd ~/sources/syauth
+cargo build --release -p syauth-pam
+sudo install -m 644 \
+  target/release/libpam_syauth.so \
+  /usr/lib64/security/pam_syauth.so
+```
+
+### Step 2 — Install the syauth user daemon
+
+`syauth install-presenced --live` writes
+`~/.config/systemd/user/syauth-presenced.service`, runs
+`systemctl --user daemon-reload`, enables the unit, and starts it.
+The `--live` flag runs the daemon foreground for a quick smoke
+test before handing control to systemd:
+
+```bash
+syauth install-presenced --live
+```
+
+Confirm the unit is healthy:
+
+```bash
+systemctl --user status syauth-presenced
+journalctl --user -u syauth-presenced -n 20
+```
+
+### Step 3 — Wire `pam_syauth.so` into the sudo PAM stack
+
+`sy syauth install-pam` wraps upstream `syauth install-pam` with
+`--control sufficient` and `timeout=8000`. It writes a `.bak` of
+`/etc/pam.d/sudo` first. Undo with
+`sy syauth uninstall-pam --service sudo --yes`:
+
+```bash
+sy syauth install-pam --service sudo --yes
+```
+
+Verify the inserted line without spending a `sudo` cycle:
+
+```bash
+pamtester sudo $USER authenticate
+```
+
+### Step 4 — Install the syauth Android app
+
+Build and sideload the companion app from the upstream sources.
+The app holds the LESC-bonded Ed25519 keypair in the Android
+Keystore:
+
+```bash
+cd ~/sources/syauth/syauth-android
+# Follow the build steps in this directory's README.md, then:
+adb install -r app/build/outputs/apk/release/app-release.apk
+```
+
+Open the app once after install so it requests the Bluetooth and
+notification permissions it needs to respond to challenges.
+
+### Step 5 — Pair the phone with the desktop
+
+Run the pairing flow on the desktop. The `--waybar` flag routes
+the 6-digit numeric-comparison code through the waybar pill so you
+can read it without opening a terminal window:
+
+```bash
+syauth pair --waybar --force
+```
+
+On the phone:
+
+1. Open the syauth app.
+2. Tap **Pair**.
+3. Pick this desktop from the BLE scan list.
+4. Confirm the 6-digit LESC numeric-comparison code matches the
+   one shown in the waybar pill.
+5. Confirm the 4-word out-of-band phrase.
+
+### Step 6 — Verify the unlock chain
+
+With the phone on the desk and the screen unlocked, trigger a
+sudo cycle and confirm syauth grants it:
+
+```bash
+sudo true
+journalctl _COMM=sudo --since '1 min ago' | grep grantors=pam_syauth
+```
+
+The `grep` prints one `grantors=pam_syauth` line for the cycle
+you just ran.
+
+### Verify
+
+Confirm three things, in order:
+
+1. The PAM module is on disk and wired into `sudo`:
+
+   ```bash
+   sy syauth doctor
+   ```
+
+   The command runs every probe in the chain (daemon liveness,
+   bonds file, key file modes, BlueZ adapter, systemd user unit
+   state, audit-log tail, plus the two sy-only `pam_so_present`
+   and `pam_so_wired` probes) and exits `0` when all checks pass.
+
+2. A live sudo cycle invokes syauth:
+
+   ```bash
+   sudo true
+   journalctl _COMM=sudo --since '1 min ago' | grep grantors=pam_syauth
+   ```
+
+   You see one `grantors=pam_syauth` line.
+
+3. Pulling the phone off the desk does not lock you out:
+
+   Walk the phone out of BLE range (or disable Bluetooth on the
+   phone) and run:
+
+   ```bash
+   sudo true
+   ```
+
+   The cycle succeeds via the next authenticator in the stack
+   (FIDO or password). The `sufficient` control flag means a
+   syauth denial never blocks the remaining authenticators.
+
+When all three checks pass, phone-as-key sudo is live on your
+host.
+
+### Next steps
+
+- If a step in this tutorial does not behave the way it is
+  written here, see
+  [how to troubleshoot syauth](../how-to/troubleshoot-syauth.md).
+- For the full set of PAM control flags and module arguments
+  `pam_syauth.so` accepts, see
+  [the syauth PAM module reference](../reference/syauth-pam-module.md).
 
 # docs/how-to/add-a-knowledge-source.md
 
@@ -819,7 +1736,980 @@ the source up on every scheduled incremental sync from now on, and
 the `sy-knowledge` MCP server exposes the same hits to any agent
 registered through `sy auto`.
 
----
+### See also
+
+- [Tutorial: search your local files](../tutorials/search-your-files.md)
+- [CLI: `sy knowledge`](../reference/cli.md#sy-knowledge)
+- [How to wire MCP into your agents](wire-mcp-into-agents.md)
+
+# docs/how-to/set-up-npu.md
+
+<!-- Template source: Good Docs Project how-to template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/how-to. Diátaxis quadrant: how-to. -->
+
+## How to set up the NPU
+
+### Goal
+
+Install the AMD Ryzen AI runtime, compile the embed workload for the
+XDNA NPU, and confirm `sy aiplane` serves embeddings from
+`/dev/accel/accel0`.
+
+### Prerequisites
+
+- Fedora 43 on an AMD Ryzen AI laptop (Phoenix / Strix, with
+  `/dev/accel/accel0` once the kernel module is loaded). If you do
+  not have that hardware, stop here: the knowledge plane already
+  falls back to CPU and you do not need this how-to.
+- You completed
+  [the bring-up tutorial](../tutorials/getting-started.md). `sy` is
+  on `$PATH`.
+- `sudo` on the host.
+- Disk space for the compile cache (a few gigabytes under
+  `~/.cache/sy/npu-embed/`).
+
+### Steps
+
+1. Install the AMD Ryzen AI 1.7.1 system packages from the companion
+   repo [`ryzenai-rpm`](https://github.com/dmytrogajewski/ryzenai-rpm)
+   (XRT runtime, XDNA DKMS module, memlock config, AMD's Python
+   wheel set). Follow that repo's install instructions. When it is
+   done, these two paths exist:
+
+   ```bash
+   ls /dev/accel/accel0
+   ls /opt/AMD/ryzenai/venv/bin/activate
+   ```
+
+2. Load the AMD venv and compile the embed workload from this repo.
+   The script downloads `intfloat/multilingual-e5-base` from Hugging
+   Face, exports ONNX, BF16-quantises with Quark, and runs a one-shot
+   VitisAI compile. Output lands in `~/.cache/sy/npu-embed/`. The
+   compile is slow the first time and then reused:
+
+   ```bash
+   source /opt/AMD/ryzenai/venv/bin/activate
+   python ~/sources/sy/scripts/prep_npu_workload.py
+   ```
+
+3. Restart the planes so `aiplane` picks up AMD's libraries. On
+   start it re-execs itself with `LD_LIBRARY_PATH` pointing at the
+   Ryzen AI runtime (see [glossary: re-exec dance](../reference/glossary.md#re-exec-dance)):
+
+   ```bash
+   systemctl --user restart sy.target
+   ```
+
+4. Confirm the NPU plane is up and the embed backend is `vitisai`:
+
+   ```bash
+   sy aiplane status --json
+   sy knowledge status --json
+   ```
+
+   Look at `embed_backend` on the knowledge status document. It
+   should read `vitisai`. If it reads `cpu`, the venv was not
+   detected; check that `/opt/AMD/ryzenai/venv` exists and that you
+   restarted `sy.target` after installing it.
+
+### Result
+
+`/dev/accel/accel0` is owned by the `aiplane` daemon, embeddings
+run on the NPU, and the GPU stays free for other work. One-shot
+CLI calls go through the daemon's socket; do not start a second
+ORT session against the device.
+
+### See also
+
+- [Why embeddings run on the NPU, not the GPU](../explanation/why-npu-not-gpu.md)
+- [Glossary: re-exec dance](../reference/glossary.md#re-exec-dance)
+- [Glossary: VitisAI EP](../reference/glossary.md#vitisai-ep)
+
+# docs/how-to/wire-mcp-into-agents.md
+
+<!-- Template source: Good Docs Project how-to template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/how-to. Diátaxis quadrant: how-to. -->
+
+## How to wire MCP into your agents
+
+### Goal
+
+Register `sy`'s MCP servers with Claude Code, Cursor, Codex, or
+Gemini without hand-editing each client's config file.
+
+### Prerequisites
+
+- `sy` is installed and `sy.target` is active.
+- The client you care about is installed. `sy auto` writes the
+  config file that client already uses; it does not install the
+  client.
+
+### Steps
+
+1. Print the dry-run plan. Nothing is written yet:
+
+   ```bash
+   sy auto configure --json
+   ```
+
+2. Restrict the plan to MCP detectors if you do not want the other
+   auto detectors. Use the ids `sy auto list-detectors --json`
+   printed on your machine:
+
+   ```bash
+   sy auto list-detectors --json
+   sy auto configure --only mcp-claude,mcp-cursor,mcp-codex,mcp-gemini
+   ```
+
+3. Apply the same selection:
+
+   ```bash
+   sy auto configure --only mcp-claude,mcp-cursor,mcp-codex,mcp-gemini --apply
+   ```
+
+   Omit `--only` to apply every pending detector. `--apply` is
+   required; without it the command stays a dry-run.
+
+4. Restart the agent client so it reloads MCP server definitions.
+
+5. Optional: enable or disable the knowledge MCP server on its own
+   (also dry-run by default):
+
+   ```bash
+   sy knowledge mcp-enable --apply
+   sy knowledge mcp-status --json
+   ```
+
+### Result
+
+Each selected client has a `sy` MCP server entry. Tools such as
+`knowledge_search` and `power_status` show up in the client after
+restart. Re-running the command is safe: detectors that already
+wrote their files report as present.
+
+### See also
+
+- [Tutorial: drive sy from an agent](../tutorials/drive-sy-from-an-agent.md)
+- [CLI: `sy auto`](../reference/cli.md#sy-auto)
+
+# docs/how-to/install-spark.md
+
+<!-- Template source: Good Docs Project how-to template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/how-to. Diátaxis quadrant: how-to. -->
+
+## How to install the Spark agent
+
+### Goal
+
+Install the signed ARM64 Spark agent and root executor on a DGX Spark
+over OpenSSH, then confirm the authenticated HTTPS status plane
+answers from your laptop.
+
+### Prerequisites
+
+- An OpenSSH host alias that already works, for example `dgx-spark`.
+  `ssh dgx-spark true` must succeed with the keys, agent, or token
+  you already use. `sy` does not accept passwords, keys, or tokens as
+  arguments and does not store them.
+- A signed ARM64 `sy` release for the Spark: the binary, its minisign
+  signature, and the pinned minisign public key. `--yes` refuses to
+  run without `--release-signature` and `--release-public-key`.
+- `sy` on your laptop `$PATH`.
+
+This how-to installs the two Spark-host units
+[`sy-spark-agent.service`](../../configs/systemd/system/sy-spark-agent.service)
+(unprivileged `User=sy-spark`, HTTPS on port 9843) and
+[`sy-spark-executor.service`](../../configs/systemd/system/sy-spark-executor.service)
+(root, Docker, private network). The network-facing agent never gets
+a Docker socket.
+
+### Steps
+
+1. Print the non-mutating plan. Dry-run uploads one content-addressed
+   probe, invokes only `spark bootstrap inspect`, verifies the hash,
+   and removes that exact path:
+
+   ```bash
+   sy spark dgx-spark install --dry-run --json
+   ```
+
+   Substitute your OpenSSH alias for `dgx-spark`. Review the
+   `sy.spark.install-manifest/v1` document before you approve.
+
+2. Apply the reviewed plan. This uploads only the signed
+   content-addressed release and invokes the fixed bootstrap
+   activation entrypoint. No arbitrary remote command is accepted:
+
+   ```bash
+   sy spark dgx-spark install --yes \
+     --release-signature sy-aarch64.minisig \
+     --release-public-key sy-release.pub
+   ```
+
+   Point those two flags at the signature and public key that match
+   the ARM64 release you trust. Flags override `SY_SPARK_RELEASE_SIGNATURE`
+   and `SY_SPARK_RELEASE_PUBLIC_KEY`.
+
+3. Confirm the agent and executor over pinned HTTPS:
+
+   ```bash
+   sy spark dgx-spark status --json
+   sy spark dgx-spark doctor --json
+   ```
+
+### Result
+
+`status --json` reports the agent listening on the configured port
+(default 9843) and the executor healthy. `doctor --json` exits `0`.
+You can now [serve a model](serve-a-model-on-spark.md).
+
+Exit `2` is local configuration or usage. Exit `4` is OpenSSH, SFTP,
+TLS pin mismatch, or authentication failure — fix the SSH alias or
+the pinned CA, not the Spark units.
+
+### See also
+
+- [CLI: `sy spark`](../reference/cli.md#sy-spark)
+- [Spark reference](../reference/spark.md)
+- [How to serve a model on Spark](serve-a-model-on-spark.md)
+
+# docs/how-to/serve-a-model-on-spark.md
+
+<!-- Template source: Good Docs Project how-to template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/how-to. Diátaxis quadrant: how-to. -->
+
+## How to serve a model on Spark
+
+### Goal
+
+Ask a Spark host to run a signed recipe, wait until the instance is
+healthy, and confirm the OpenAI-compatible gateway path answers.
+
+### Prerequisites
+
+- A DGX Spark on the network with the `sy spark` agent and executor
+  already installed and authenticated. If they are not, follow
+  [How to install the Spark agent](install-spark.md) first.
+- `sy` on your laptop with Spark client credentials configured for
+  that host. Substitute `dgx-spark` below for the host name you use.
+- Enough free memory and disk on the Spark for the recipe. Missing
+  or stale telemetry fails closed; the agent will refuse the serve
+  rather than overcommit.
+
+### Steps
+
+1. Preview admission without starting anything. The report includes
+   the 8 GiB system reserve, 8 GiB emergency floor, and 100 GiB disk
+   reserve:
+
+   ```bash
+   sy spark dgx-spark serve ornith-1.5:9b --dry-run --json
+   ```
+
+   If the dry-run is denied, free memory or disk on the Spark and
+   retry. Do not pass `--allow-unverified` to skip a denial you do
+   not understand. Missing telemetry fails closed: the agent refuses
+   rather than guessing.
+
+2. Serve a signed fixture first if you want to prove the Docker
+   lifecycle without loading weights or using the GPU. The fixture
+   recipe is digest-pinned ARM64 HTTP:
+
+   ```bash
+   sy spark dgx-spark serve ornith-1.5:9b \
+     --recipe spark-fixture-http-echo-1.0.0 \
+     --name fixture
+   ```
+
+3. Watch desired versus observed state. `ps` does not print the
+   internal bridge address:
+
+   ```bash
+   sy spark dgx-spark ps --json
+   ```
+
+4. When you are ready for a real engine, omit `--recipe` to keep
+   verified vLLM as the default, or pass a named recipe. Example
+   embedding recipe:
+
+   ```bash
+   sy spark dgx-spark download Qwen/Qwen3-Embedding-0.6B \
+     --revision 97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3 \
+     --alias qwen3-embedding:0.6b
+   sy spark dgx-spark serve qwen3-embedding:0.6b \
+     --recipe qwen3-embedding-0.6b-vllm-0.19.1 \
+     --name embeddings \
+     --allow-unverified
+   ```
+
+   `--allow-unverified` is for recipes that are not yet in the
+   signed set. Prefer a signed recipe when one exists.
+
+5. Print a client config for Codex or Claude Code. The output names
+   the token and CA environment variables; it does not print or
+   persist the token:
+
+   ```bash
+   sy spark dgx-spark client-config ornith --client codex
+   sy spark dgx-spark client-config ornith --client claude-code
+   ```
+
+6. Stop when you are done. Repeated `stop` is successful:
+
+   ```bash
+   sy spark dgx-spark stop fixture
+   ```
+
+### Result
+
+`ps --json` shows the instance you named. After health check and
+model-identity probe pass, OpenAI-compatible routes are at
+`https://<spark>:9843/openai/<instance>/v1` and Anthropic Messages
+routes are under `/anthropic/<instance>/v1`. Warming or recovering
+generations return protocol-native `503` with `Retry-After`.
+
+### See also
+
+- [How to install the Spark agent](install-spark.md)
+- [Spark reference](../reference/spark.md)
+- [CLI: `sy spark`](../reference/cli.md#sy-spark)
+
+# docs/how-to/apply-a-theme.md
+
+<!-- Template source: Good Docs Project how-to template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/how-to. Diátaxis quadrant: how-to. -->
+
+## How to apply a theme
+
+### Goal
+
+Render the `configs/` tree with a named palette and reload the
+running niri session so the bar, terminal, and compositor pick up
+the colours.
+
+### Prerequisites
+
+- `sy` is installed. You completed
+  [the bring-up tutorial](../tutorials/getting-started.md).
+- You are logged into a niri session, or you are willing to log out
+  and pick **Niri** from the display manager after apply.
+
+### Steps
+
+1. List the palettes shipped under `themes/`:
+
+   ```bash
+   sy themes
+   ```
+
+2. Preview the diff for a theme without writing:
+
+   ```bash
+   sy apply --theme gruvbox-material --dry-run
+   ```
+
+   Use `--diff` for the same preview as JSON.
+
+3. Apply:
+
+   ```bash
+   sy apply --theme gruvbox-material
+   ```
+
+   `sy apply` is idempotent. Re-running it when nothing drifted is a
+   no-op.
+
+4. Reload the running session:
+
+   ```bash
+   niri msg action load-config-file
+   killall -SIGUSR2 waybar
+   makoctl reload
+   ```
+
+   If you use `sy stack bar` instead of waybar, restart that user
+   unit:
+
+   ```bash
+   systemctl --user restart sy-stack-bar.service
+   ```
+
+### Result
+
+Files under `~/.config/` match the rendered templates for that
+theme. The compositor, bar, and notifications show the new palette
+without a reboot. To change a colour for good, edit
+`themes/<name>.toml` in the repo and apply again — do not hand-edit
+`~/.config/`.
+
+### See also
+
+- [Configuration reference](../reference/config.md)
+- [Why there are no snowflakes](../explanation/no-snowflakes.md)
+- [CLI: `sy apply`](../reference/cli.md#sy-apply)
+
+# docs/how-to/run-doctor.md
+
+<!-- Template source: Good Docs Project how-to template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/how-to. Diátaxis quadrant: how-to. -->
+
+## How to run sy doctor
+
+### Goal
+
+Run the health probes and read the exit code so you know whether
+the install is healthy, drifted, or failed.
+
+### Prerequisites
+
+- `sy` is on `$PATH`.
+- For a full pass, `sy.target` should be running. Doctor still runs
+  if some units are down; those probes fail instead of hanging.
+
+### Steps
+
+1. Run the human-readable pass:
+
+   ```bash
+   sy doctor
+   echo $?
+   ```
+
+2. Run the machine-readable pass. The document is
+   `sy.doctor/v1` on stdout:
+
+   ```bash
+   sy doctor --json
+   ```
+
+3. If you are chasing one plane, restrict the check name prefix:
+
+   ```bash
+   sy doctor --only=ipc.
+   sy doctor --only=kernel.
+   ```
+
+### Result
+
+The command prints the probe list. `echo $?` is `0` when every
+check passed. If the exit code is not `0`, look up the code under
+[CLI: `sy doctor`](../reference/cli.md#sy-doctor) and then
+`journalctl --user -u sy.target` for the unit named in the
+warning or failure.
+
+### See also
+
+- [CLI: `sy doctor`](../reference/cli.md#sy-doctor)
+- [How to read power status](read-power-status.md)
+
+# docs/how-to/read-power-status.md
+
+<!-- Template source: Good Docs Project how-to template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/how-to. Diátaxis quadrant: how-to. -->
+
+## How to read power status
+
+### Goal
+
+Print the live power-governor document — current profile, source,
+and rationale — from the CLI or from an MCP session you already
+have.
+
+### Prerequisites
+
+- `sy-powerd` is running under your user manager:
+
+  ```bash
+  systemctl --user is-active sy-powerd.service
+  ```
+
+- If you want the MCP path, you already speak MCP to `sy` (see
+  [how to wire MCP into your agents](wire-mcp-into-agents.md)).
+
+### Steps
+
+1. Print the human-readable status:
+
+   ```bash
+   sy power status
+   ```
+
+2. Print the stable `sy.power.status/v1` document:
+
+   ```bash
+   sy power status --json
+   ```
+
+3. If you already have an MCP session, call the `power_status` tool
+   instead of shelling the CLI. A daemon-down dial surfaces as a
+   JSON-RPC error (`code -32000`), not a transport crash.
+
+4. Read the exit code before you retry. `0` means healthy. Any other
+   code is listed under [CLI: `sy power`](../reference/cli.md#sy-power).
+   A persistent `3` is a signal to inspect `sy power log` or
+   `journalctl --user -u sy-powerd`, not an error to hammer.
+
+### Result
+
+You know which profile is active, why the bandit picked it, and
+whether the daemon is reachable. For the offline PDF report over the
+decision journal, use `sy power show` (add `--json` for
+`sy.power.report/v1`).
+
+### See also
+
+- [CLI: `sy power`](../reference/cli.md#sy-power)
+- [How to run sy doctor](run-doctor.md)
+
+# docs/how-to/run-sy-file.md
+
+<!-- Template source: Good Docs Project how-to template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/how-to. Diátaxis quadrant: how-to. -->
+
+## How to run sy file from a shell
+
+### Goal
+
+Confirm the file-manager daemon is healthy, open a directory over
+IPC, and preview a markdown file — the same operations the window
+uses, without needing niri keybindings.
+
+If you have never opened the window, start with
+[browse files with sy file](../tutorials/browse-your-files.md).
+
+### Prerequisites
+
+- `sy` is installed and `sy.target` is active
+  (`systemctl --user is-active sy.target` prints `active`). If not,
+  see [the bring-up tutorial](../tutorials/getting-started.md).
+- `SY_FILE_SOCK`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`,
+  `XDG_DATA_HOME`, and `SY_PLUGIN_DIR` are unset (production
+  defaults) or point at writable directories.
+- You can read a markdown file under `$HOME`.
+
+### Steps
+
+1. Confirm the file plane is healthy. Doctor exits `0` and prints a
+   JSON envelope whose top-level `status` is `"ok"` when every probe
+   passes:
+
+   ```bash
+   sy file doctor --json
+   ```
+
+   The envelope is documented at
+   [sy file doctor](../reference/sy-file-doctor.md). If any probe is
+   `fail`, run the `fix_hint` it prints (`systemctl --user start
+   sy-file.socket` is the most common; for SELinux-gated plugin
+   spawn, `make install-system-sy-plugin-selinux`).
+
+2. Confirm the same envelope reports six checks (`file.daemon.reachable`,
+   `file.fonts.jetbrainsmono_nerd`, `file.niri.binds`,
+   `file.systemd.unit_installed`, `file.bookmarks.writable`, and
+   `file.plugins.registry`):
+
+   ```bash
+   sy file doctor --json | grep -o '"name":"[^"]*"'
+   ```
+
+3. Open a known-good directory through the daemon. On niri,
+   `Mod+E` does the same for `$HOME`. From a shell:
+
+   ```bash {.no-test}
+   sy file ipc open "$HOME"
+   ```
+
+4. Confirm the current pane points at your home directory:
+
+   ```bash {.no-test}
+   sy file ipc state
+   ```
+
+   The `cwd` field must equal `$HOME`. If it does not, the daemon
+   rejected the path (permission error on stderr) or another client
+   retargeted the pane between steps 3 and 4.
+
+5. Preview a markdown file. The built-in `sy-plugin-md` previewer
+   renders to PNG in-process (no Chrome, no keyring):
+
+   ```bash {.no-test}
+   sy file ipc preview "$HOME/README.md"
+   ```
+
+   Substitute any other markdown file you can read. A full preview
+   carries `mime = "image/png"`. Until the plugin resolves, you may
+   see the sniffed MIME without a PNG body — that is still a
+   successful call if the daemon did not crash.
+
+### Result
+
+`sy file doctor --json` returns `status=ok` and six probes by name.
+After step 3, `cwd` equals `$HOME`. Preview returns a PNG MIME or a
+safe MIME sniff.
+
+If a probe fails, see [How to troubleshoot sy file](troubleshoot-sy-file.md).
+
+### See also
+
+- [Tutorial: browse files with sy file](../tutorials/browse-your-files.md)
+- [How to troubleshoot sy file](troubleshoot-sy-file.md)
+- [sy file doctor](../reference/sy-file-doctor.md)
+- [sy file MCP](../reference/sy-file-mcp.md)
+- [CLI: `sy file`](../reference/cli.md#sy-file)
+
+# docs/how-to/troubleshoot-sy-file.md
+
+<!-- Template source: Good Docs Project how-to template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/how-to. Diátaxis quadrant: how-to. -->
+
+## How to troubleshoot sy file
+
+### Goal
+
+Repair the `sy file` failure modes that `sy file doctor` names so the
+first-session window opens, the daemon answers IPC, and markdown
+preview renders.
+
+### Prerequisites
+
+- You followed [How to run sy file](run-sy-file.md) at least once, or
+  `sy.target` is active and you expect the file plane to be up.
+- The `sy file doctor --json` envelope from the failing host.
+
+### Steps
+
+Run doctor first. It names the failing probe:
+
+```bash
+sy file doctor --json
+```
+
+Match the probe (or the IPC exit code) to one section below. If
+nothing matches, file an issue against
+[`sy`](https://github.com/dmytrogajewski/sy) with that envelope
+attached.
+
+#### Fix `file.daemon.reachable: fail`
+
+The user-level socket activation unit is not running.
+
+```bash
+systemctl --user start sy-file.socket
+sy file doctor --json
+```
+
+#### Fix `sy file ipc open` exit `4` (refused)
+
+The daemon rejected the path (permission, missing directory, or
+symlink loop). Pick a path you can `ls` and retry:
+
+```bash
+ls "$HOME"
+sy file ipc open "$HOME"
+sy file ipc state
+```
+
+#### Fix empty preview body for every file
+
+The markdown plugin is not installed. Install the in-tree canary and
+retry preview:
+
+```bash
+sy plugin install ./crates/sy-plugin-md
+sy file ipc preview "$HOME/README.md"
+```
+
+#### Fix `Mod+E` landing on `swaylock` (or any non-`sy file` target)
+
+`file.niri.binds: fail` names the conflicting binding. Re-apply the
+binds from the repo:
+
+```bash
+sy apply
+sy file doctor --json
+```
+
+#### Fix SELinux-gated plugin spawn
+
+Doctor's plugin probe fails with an SELinux denial. Install the
+in-tree file contexts:
+
+```bash
+make install-system-sy-plugin-selinux
+```
+
+### Result
+
+`sy file doctor --json` prints `status=ok` and six probes by name.
+`sy file ipc state` returns a `cwd` you can read. Markdown preview
+returns `mime = "image/png"` or a MIME sniff without crashing.
+
+### See also
+
+- [How to run sy file](run-sy-file.md)
+- [sy file doctor](../reference/sy-file-doctor.md)
+- [CLI: `sy file`](../reference/cli.md#sy-file)
+
+# docs/how-to/write-a-sy-plugin.md
+
+<!-- Template source: Good Docs Project how-to template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/how-to. Diátaxis quadrant: how-to. -->
+
+## How to write a sy file previewer plugin
+
+### Goal
+
+Ship a small previewer for `sy file` in Rust, Python, or Bash. A
+previewer reads a file path, returns a preview body, and exits. The
+host starts and stops the process, applies resource limits, and
+routes requests based on the MIME types in `plugin.toml`.
+
+### Prerequisites
+
+- `sy` is installed and `sy plugin doctor` exits `0`. See
+  [sy file doctor](../reference/sy-file-doctor.md) for the
+  `sy.plugin.doctor/v1` envelope.
+- Rust example: `cargo` and this repo cloned so
+  `crates/sy-plugin-pdk` is on disk.
+- Python example: Python 3.11+ on `$PATH`.
+- Bash example: a POSIX `sh` and `jq` on `$PATH`.
+
+The wire format is JSON-RPC on stdin/stdout (one JSON object per
+line, with an LSP-style length header). The Rust PDK hides that
+framing. Python and Bash speak it directly. The full contract lives
+in the [plugin SPEC](../../specs/research/sy-file-manager-plugins/SPEC.md)
+if you need every field.
+
+### Steps
+
+#### Rust — via the in-tree PDK
+
+The 20-line example is
+[`crates/sy-plugin-pdk/examples/echo_previewer.rs`](../../crates/sy-plugin-pdk/examples/echo_previewer.rs):
+
+```rust
+use sy_plugin_pdk::prelude::*;
+
+define_plugin! {
+    id: "sy-plugin-pdk-echo",
+    api: "1",
+    capabilities: [Previewer { mime: "text/plain" }],
+    handlers: {
+        "preview": |req: PreviewReq| -> Result<PreviewResp> {
+            Ok(PreviewResp::text(format!("echo {} (mime={})", req.path, req.mime)))
+        },
+    }
+}
+```
+
+`define_plugin!` registers `initialize` / `ping` / `shutdown` /
+`exit`, advertises a `text/plain` previewer, and dispatches
+`preview` to your closure. Pair the binary with this manifest:
+
+```toml
+api = "1"
+
+[plugin]
+id = "sy-plugin-pdk-echo"
+name = "Echo previewer (Rust)"
+version = "0.0.1"
+api_min = "1"
+api_max = "1"
+
+[plugin.binary]
+exec = "./echo_previewer"
+
+[[capability]]
+kind = "previewer"
+mime = "text/plain"
+
+[needs]
+fs_read = []
+fs_write = []
+preview = []
+knowledge = []
+network = []
+exec = []
+
+[limits]
+memory_mb = 64
+cpu_seconds = 10
+nofile = 64
+spawn_timeout_ms = 500
+shutdown_timeout_ms = 500
+```
+
+Build, install, then check doctor:
+
+```bash {.no-test}
+cargo build --release --example echo_previewer
+sy plugin install ./target/release/examples/
+sy plugin doctor --json
+```
+
+#### Python — speaking the wire format directly
+
+The minimum loop reads one JSON-RPC object per line, dispatches on
+`method`, and writes one object per line back:
+
+```python
+#!/usr/bin/env python3
+import json
+import sys
+
+
+def handle(req: dict) -> dict:
+    method = req.get("method", "")
+    if method == "initialize":
+        return {"capabilities": [{"kind": "previewer", "mime": "text/plain"}]}
+    if method == "ping":
+        return {"ok": True}
+    if method == "preview":
+        path = req.get("params", {}).get("path", "")
+        return {"mime": "text/plain", "body": f"echo {path}"}
+    if method in ("shutdown", "exit"):
+        return {"ok": True}
+    return {"error": {"code": -32601, "message": f"unknown method {method}"}}
+
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    resp = {"jsonrpc": "2.0", "id": req.get("id"), "result": handle(req)}
+    sys.stdout.write(json.dumps(resp) + "\n")
+    sys.stdout.flush()
+    if req.get("method") == "exit":
+        break
+```
+
+Save as `echo_previewer.py`, `chmod +x`, and use a manifest like the
+Rust one with `exec = "./echo_previewer.py"` and
+`id = "sy-plugin-pyecho"`. `sy plugin install` copies both files
+into the plugin directory.
+
+#### Bash — speaking the wire format directly
+
+```bash
+#!/usr/bin/env bash
+set -eu
+while IFS= read -r line; do
+    method=$(printf '%s' "$line" | jq -r '.method // empty')
+    id=$(printf '%s' "$line" | jq -r '.id // null')
+    case "$method" in
+        initialize) result='{"capabilities":[{"kind":"previewer","mime":"text/plain"}]}' ;;
+        ping)       result='{"ok":true}' ;;
+        preview)    path=$(printf '%s' "$line" | jq -r '.params.path // ""')
+                    result=$(jq -nc --arg p "$path" '{mime:"text/plain", body:("echo " + $p)}') ;;
+        shutdown|exit) result='{"ok":true}' ;;
+        *)          result='{}' ;;
+    esac
+    jq -nc --argjson id "$id" --argjson r "$result" '{jsonrpc:"2.0", id:$id, result:$r}'
+    [ "$method" = exit ] && break || true
+done
+```
+
+Save as `echo_previewer.sh`, `chmod +x`, pair with
+`exec = "./echo_previewer.sh"` and `id = "sy-plugin-bashecho"`, then
+`sy plugin install` the directory. The host treats the script like
+any other plugin binary: pipes, shutdown signals, resource limits.
+
+### Result
+
+After `sy plugin install` finishes, run:
+
+```bash {.no-test}
+sy plugin doctor --json
+```
+
+Each installed plugin contributes three rows: `manifest.valid`,
+`binary.reachable`, and `capability.routes`. All three must be
+`"ok": true` for your id. If `capability.routes` is false, another
+plugin already owns `text/plain` — pick a different MIME or raise
+`priority` on your `[[capability]]` row.
+
+If a row stays false, see
+[How to troubleshoot a sy file plugin](troubleshoot-sy-plugin.md).
+
+### See also
+
+- [How to troubleshoot a sy file plugin](troubleshoot-sy-plugin.md)
+- [How to run sy file](run-sy-file.md)
+- [CLI: `sy plugin`](../reference/cli.md#sy-plugin)
+- [sy file doctor](../reference/sy-file-doctor.md)
+
+# docs/how-to/troubleshoot-sy-plugin.md
+
+<!-- Template source: Good Docs Project how-to template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/how-to. Diátaxis quadrant: how-to. -->
+
+## How to troubleshoot a sy file plugin
+
+### Goal
+
+Repair a previewer plugin that `sy plugin doctor` reports as invalid,
+unreachable, shadowed, or crashing mid-preview.
+
+### Prerequisites
+
+- You followed [How to write a sy plugin](write-a-sy-plugin.md) and
+  ran `sy plugin install`.
+- The `sy plugin doctor --json` envelope from the failing host.
+
+### Steps
+
+Run doctor first. Each installed plugin contributes three rows:
+`manifest.valid`, `binary.reachable`, and `capability.routes`.
+
+```bash
+sy plugin doctor --json
+```
+
+Match the false row to one section below.
+
+#### Fix `manifest.valid: false`
+
+Re-read the manifest schema (required `api`, `[plugin]` table, known
+`kind` values). Common failures: missing `api`, missing `[plugin]`,
+or a `[[capability]]` row with an unknown `kind`. Fix the manifest
+next to the binary and reinstall:
+
+```bash
+sy plugin install ./
+sy plugin doctor --json
+```
+
+#### Fix `binary.reachable: false`
+
+The `exec` path in the manifest does not resolve relative to the
+manifest directory, or the binary lacks the execute bit:
+
+```bash
+chmod +x ./echo_previewer
+sy plugin install ./
+sy plugin doctor --json
+```
+
+#### Fix `capability.routes: false`
+
+Another plugin claims the same `(kind, mime)` tuple. List installed
+ids and either uninstall the conflict or differentiate your MIME
+(or raise `priority` on your `[[capability]]` row):
+
+```bash
+sy plugin list --json
+```
+
+#### Fix a plugin process that crashes mid-preview
+
+The host supervisor retries with exponential backoff (100 ms →
+200 ms → 400 ms) and then marks the plugin `Unhealthy`. Read the
+crash reason:
+
+```bash
+journalctl --user -t sy-file
+```
+
+### Result
+
+All three doctor rows for your plugin id are `"ok": true`. Preview
+requests for that MIME return a body instead of an empty envelope.
+
+### See also
+
+- [How to write a sy plugin](write-a-sy-plugin.md)
+- [sy file doctor](../reference/sy-file-doctor.md)
+- [plugin SPEC](../../specs/research/sy-file-manager-plugins/SPEC.md)
 
 # docs/how-to/troubleshoot-syauth.md
 
@@ -941,26 +2831,22 @@ untouched; only the user-space bookkeeping is stale.
 range, and a sudo cycle with the phone out of range falls through
 to FIDO or password authentication without blocking.
 
----
-
 # docs/reference/cli.md
 
 ## `sy` CLI reference
 
-Encyclopaedic reference for every `sy` subcommand: synopsis, options,
-exit codes, environment variables, examples. Generated from
-`src/main.rs` and the per-plane CLI modules; the source code is the
-source of truth.
+Flags, exit codes, environment variables, and examples for the `sy`
+planes and applets. The clap `--help` text in the binary is the
+source of truth if this page and the code disagree.
 
-For task-oriented walkthroughs, see [tutorials](../tutorials/) and
-[how-to guides](../how-to/). For the cross-cutting CLI contract
-(`--json` / `--dry-run` / exit codes / `NO_COLOR` / `SY_*` env vars),
-start with the [global conventions](#global-conventions) section
-below.
+For walkthroughs, see [tutorials](../tutorials/) and
+[how-to guides](../how-to/). For the cross-cutting contract
+(`--json` / `--dry-run` / exit codes / `NO_COLOR` / `SY_*`), start
+with [global conventions](#global-conventions) below.
 
 > Template: Good Docs Project reference. Source attribution and the
 > Diátaxis reference quadrant are described in
-> [`/home/dmitriy/sources/sy/.agents/skills/documenter/SKILL.md`](../../.agents/skills/documenter/SKILL.md).
+> [`.agents/skills/documenter/SKILL.md`](../../.agents/skills/documenter/SKILL.md).
 
 ### Global conventions
 
@@ -1011,6 +2897,14 @@ source):
 - **`sy agt`** — `list`, `diag`.
 - **`sy auto`** — `configure`, `list-detectors`.
 - **`sy stack`** — `push --json`, `list --json`.
+- **`sy spark`** — `install`, `status`, `doctor`, `operations`, `token`,
+  `recipes`, `download`, `serve`, `ps`, `logs`, `stop`, `ls`, `show`,
+  `rm`, `client-config`, `cert status`.
+- **`sy file`** — `doctor`. `sy file ipc <op>` prints the JSON
+  response envelope by default.
+- **`sy plugin`** — `list`, `doctor`.
+- **`sy mon`** — `snapshot`, `doctor`.
+- **`sy wwan`** — `status`.
 
 Subcommands not listed above do not currently accept `--json`. Adding
 the flag to them is a backwards-compatible extension.
@@ -1026,6 +2920,10 @@ diff without applying. Honoured by:
 - `sy knowledge mcp-enable` / `sy knowledge mcp-disable` (dry-run is
   the default; `--apply` opts in).
 - `sy stack push` (`--dry-run` prints the planned push).
+- `sy spark <host> install` (inspect without installing).
+- `sy spark <host> serve` / `download` / `stop` / `rm` / `token` /
+  `operations cancel` (admission or mutation preview; no Docker or
+  GPU side effects on serve dry-run).
 
 Knowledge `mcp-enable` / `mcp-disable` and `auto configure` invert the
 usual default: they refuse to mutate disk unless `--apply` is set, so
@@ -1044,9 +2942,9 @@ constants live in the source under each plane's `exit` module
 | `0`  | success                  | every plane                                                               |
 | `1`  | generic failure          | every plane                                                               |
 | `2`  | usage error              | clap (`ErrorKind::ValueValidation`), `policy`, `power`, `service`, `crash`|
-| `3`  | drift / warn-only / lint-fail | `doctor` (warn-only), `ipc` (degraded), `service` (status drift), `power` (ADWIN drift alarm), `policy lint` |
-| `4`  | not-ready / daemon-unreachable / not-found | `ipc` (starting/failed), `service` (not-ready), `power` (daemon-unreachable), `crash` (record not found), `agt` (daemon unavailable), `knowledge` (qdrant-unreachable) |
-| `5`  | embedding-failed / polkit-denied | `knowledge`, `power`                                                |
+| `3`  | drift / warn-only / lint-fail | `doctor` (warn-only), `ipc` (degraded), `service` (status drift), `power` (ADWIN drift alarm), `policy lint`, `spark` (remote policy/state rejection), `mon snapshot` (aggregator unreachable), `file ipc` (daemon unreachable) |
+| `4`  | not-ready / daemon-unreachable / not-found | `ipc` (starting/failed), `service` (not-ready), `power` (daemon-unreachable), `crash` (record not found), `agt` (daemon unavailable), `knowledge` (qdrant-unreachable), `spark` (OpenSSH/TLS/auth unreachable), `file ipc` (op refused) |
+| `5`  | embedding-failed / polkit-denied / plugin-error | `knowledge`, `power`, `file ipc` (plugin error)                |
 | `6`  | unsupported hardware     | `power`                                                                   |
 | `7`  | onboarding-not-complete  | `power` (`sy power show` with insufficient audit window)                  |
 
@@ -1075,6 +2973,14 @@ load-bearing globals are:
   `SY_AGT_REQUEST_ID` — `sy agt` sandbox + launcher overrides.
 - `SY_SYSFS_ROOT` — `sy power status` sysfs probe root override (test
   hermeticity).
+- `SY_SPARK_*` — Spark client flags (`JSON`, `DRY_RUN`, `YES`,
+  `CONFIG_DIR`, `PROBE`, `LISTEN_ADDRESS`, `LISTEN_PORT`,
+  `RELEASE_SIGNATURE`, `RELEASE_PUBLIC_KEY`, and per-command
+  `REVISION` / `ALIAS` / `RECIPE` / …). See [`sy spark`](#sy-spark).
+- `SY_FILE_SOCK` — override `$XDG_RUNTIME_DIR/sy-file.sock` for
+  `sy file ipc`.
+- `SY_MON_HISTORY_SIZE`, `SY_MON_TICK_MS`, `SY_MON_BIND`,
+  `SY_MON_HISTORY_PATH` — aggregator ring and socket for `sy mon collect`.
 - `NO_COLOR` and `TERM=dumb` — honoured by the tracing subscriber on
   stderr; agent stdout output is plain text regardless.
 
@@ -2040,6 +3946,266 @@ sy stack toggle
 
 ---
 
+### `sy spark`
+
+Inspect, install, and drive one configured DGX Spark appliance.
+`<HOST>` is passed to OpenSSH as a single argument; there is no
+arbitrary-command escape hatch. OpenSSH owns `known_hosts`, agents,
+hardware tokens, and password prompts. Credentials are never accepted
+as `sy` arguments and are never stored by `sy`.
+
+Source: `src/spark/cli.rs`. Hidden unit entrypoints (`run-agent`,
+`run-executor`, `activate`, `inspect`) are not part of the laptop
+CLI.
+
+#### Synopsis
+
+```text
+sy spark <HOST> <COMMAND>
+```
+
+#### Subcommands
+
+| Subcommand | Purpose |
+|------------|---------|
+| `install` | Inspect the appliance (`--dry-run`) or apply the signed ARM64 install (`--yes`). |
+| `status` | Compact authenticated agent/executor health over pinned HTTPS. |
+| `doctor` | Authenticated, read-only compatibility and security checks. |
+| `operations` | Inspect, `--follow`, or `cancel` durable operations. |
+| `token` | `create` / `list` / `revoke` scoped bearer tokens. Create returns the secret once on stdout. |
+| `recipes` | Explain signed engine recipes and preview selection. Read-only: never downloads, pulls, or starts. |
+| `download` | Acquire and verify one immutable Hugging Face model snapshot. |
+| `serve` | Start one recipe-selected instance after fail-closed admission. |
+| `ps` | Desired versus observed managed instances. Does not print the internal bridge address. |
+| `logs` | Bounded, redacted logs for one instance. |
+| `stop` | Persist stopped intent, drain, and remove one instance. Repeated `stop` succeeds. |
+| `ls` | List complete verified local model snapshots. |
+| `show` | Immutable identity, provenance, aliases, and references for one model. |
+| `rm` | Preview or remove only unreferenced native-cache model data. |
+| `client-config` | Render a user-level Codex or Claude Code projection. Names the token env var; does not read or write it. |
+| `cert status` | Authenticated leaf-certificate identity. |
+
+#### Options (`install`)
+
+| Name | Type | Default | Env | Description |
+|------|------|---------|-----|-------------|
+| `--dry-run` | bool | `false` | `SY_SPARK_DRY_RUN` | Upload a content-addressed probe, run `spark bootstrap inspect`, verify the hash, remove the probe. No install. |
+| `--yes` | bool | `false` | `SY_SPARK_YES` | Apply the reviewed manifest. Requires `--release-signature` and `--release-public-key`. |
+| `--json` | bool | `false` | `SY_SPARK_JSON` | Emit `sy.spark.install-manifest/v1`. |
+| `--probe` | path | `/usr/libexec/sy/spark-bootstrap-aarch64` | `SY_SPARK_PROBE` | ARM64 feature-minimal probe artefact. |
+| `--listen-address` | IP | none | `SY_SPARK_LISTEN_ADDRESS` | Explicit LAN address for the HTTPS listener. |
+| `--listen-port` | u16 | `9843` | `SY_SPARK_LISTEN_PORT` | HTTPS listener port. |
+| `--release-signature` | path | none | `SY_SPARK_RELEASE_SIGNATURE` | Minisign signature for the ARM64 release (required with `--yes`). |
+| `--release-public-key` | path | none | `SY_SPARK_RELEASE_PUBLIC_KEY` | Pinned minisign public key (required with `--yes`). |
+| `--config-dir` | path | Spark config root | `SY_SPARK_CONFIG_DIR` | Local Spark configuration root. |
+
+#### Token scopes (`token create --scope`)
+
+`models:read`, `models:write`, `instances:read`, `instances:write`,
+`inference`, `logs:read`, `operations:read`, `operations:cancel`,
+`benchmarks:read`, `benchmarks:write`. Repeat `--scope` for each.
+
+#### Exit codes
+
+- `0` — success.
+- `1` — unexpected failure.
+- `2` — usage or local configuration.
+- `3` — remote policy or state rejection (admission denied, recipe
+  refused, and similar).
+- `4` — OpenSSH/SFTP/agent unreachable, TLS identity mismatch, or
+  authentication failure.
+
+#### Examples
+
+```bash
+sy spark dgx-spark install --dry-run --json
+sy spark dgx-spark install --yes --release-signature sy-aarch64.minisig \
+  --release-public-key sy-release.pub
+sy spark dgx-spark status --json
+sy spark dgx-spark doctor --json
+sy spark dgx-spark serve ornith-1.5:9b --dry-run --json
+sy spark dgx-spark ps --json
+sy spark dgx-spark token create --name reader --scope models:read \
+  --scope operations:read --detach --json
+sy spark dgx-spark client-config ornith --client codex
+```
+
+#### See also
+
+- [How to install the Spark agent](../how-to/install-spark.md)
+- [How to serve a model on Spark](../how-to/serve-a-model-on-spark.md)
+- [Spark reference](spark.md)
+
+---
+
+### `sy file`
+
+Native niri-tiled file manager (iced). Bare `sy file [PATH]` opens
+the window (prints `scaffold` then enters the GUI when stdout is a
+TTY and `gui-iced` is on). Source: `src/file/cli.rs`.
+
+#### Synopsis
+
+```text
+sy file [PATH]
+sy file doctor [--json]
+sy file ipc <OP> …
+sy file mcp
+sy file waybar
+```
+
+#### Subcommands
+
+| Subcommand | Purpose |
+|------------|---------|
+| *(none)* | Open the manager on `PATH` (default: launch cwd / `$HOME` via niri binds). |
+| `doctor` | Six health probes. Emits `sy.file.doctor/v1` with `--json`. |
+| `ipc serve` | Run the daemon in-process on `$XDG_RUNTIME_DIR/sy-file.sock` (or `SY_FILE_SOCK` / `--sock`). |
+| `ipc open` / `cd` / `select` / `copy` / `move` / `trash` / `restore` / `search` / `preview` / `ops-list` / `op-cancel` / `state` | One-shot JSON ops against the running daemon. |
+| `mcp` | Stdio JSON-RPC MCP server for the `file_*` tools. |
+| `waybar` | One-shot waybar custom-module tile (running-op count). Exits 0 even if the daemon is down. |
+
+Doctor probes: `file.daemon.reachable`, `file.fonts.jetbrainsmono_nerd`,
+`file.niri.binds`, `file.systemd.unit_installed`,
+`file.bookmarks.writable`, `file.plugins.registry`.
+
+#### Exit codes (`ipc`)
+
+- `0` — success.
+- `1` — generic failure.
+- `2` — usage error.
+- `3` — daemon unreachable.
+- `4` — op cancelled or refused.
+- `5` — plugin error.
+
+`sy file doctor` exits `0` when every probe passed, `1` when any
+probe failed, and `2` when there are warnings only (not `3` — that
+code is top-level `sy doctor` warn-only).
+
+#### Examples
+
+```bash
+sy file ~
+sy file doctor --json
+sy file ipc state
+sy file mcp
+sy file waybar
+```
+
+#### See also
+
+- [How to run sy file](../how-to/run-sy-file.md)
+- [How to troubleshoot sy file](../how-to/troubleshoot-sy-file.md)
+- [sy file doctor](sy-file-doctor.md)
+- [sy file MCP](sy-file-mcp.md)
+
+---
+
+### `sy plugin`
+
+Discover, install, and inspect previewer plugins for `sy file`.
+Source: `src/plugin/cli.rs`.
+
+#### Synopsis
+
+```text
+sy plugin list [--json]
+sy plugin doctor [--json]
+sy plugin install <SOURCE> [--unsigned] [--rev <REF>]
+sy plugin uninstall <ID>
+sy plugin enable <ID>
+sy plugin disable <ID>
+sy plugin exec <ID> <METHOD> [--params <JSON>]
+sy plugin cat-manifest <ID>
+sy plugin validate <PATH>
+sy plugin reload
+```
+
+`<SOURCE>` for `install` is a directory that contains `plugin.toml`,
+or a git URL prefixed `git+`. Signature verification is on unless
+you pass `--unsigned` (local development only).
+
+#### Exit codes
+
+- `0` — success.
+- `1` — generic failure.
+- `2` — usage or validation (bad args, bad glob, malformed TOML).
+- `6` — manifest invalid at install.
+- `7` — signature mismatch at install.
+- `8` — plugin unreachable or unhealthy (`doctor` uses this when any
+  check fails).
+
+#### Examples
+
+```bash
+sy plugin list --json
+sy plugin doctor --json
+sy plugin install ./crates/sy-plugin-md
+sy plugin exec sy-plugin-md preview --params '{"path":"README.md"}'
+```
+
+#### See also
+
+- [How to write a sy plugin](../how-to/write-a-sy-plugin.md)
+- [sy file doctor](sy-file-doctor.md)
+
+---
+
+### `sy mon`
+
+On-demand Wayland layer-shell health dashboard plus a 1 Hz
+aggregator. Bare `sy mon` toggles the popup (`Mod+M` / `Super+m`).
+Without `gui-iced`, bare `sy mon` falls back to `snapshot --json`.
+Source: `src/mon/cli.rs`.
+
+#### Synopsis
+
+```text
+sy mon
+sy mon collect [--history-size N] [--tick-ms MS] [--bind PATH] [--history-path PATH]
+sy mon snapshot [--json]
+sy mon mcp
+sy mon open
+sy mon close
+sy mon doctor [--json]
+sy mon waybar
+```
+
+#### Subcommands
+
+| Subcommand | Purpose |
+|------------|---------|
+| *(none)* / `open` / `close` | Toggle, open, or close the iced layer-shell popup. `close` is idempotent. |
+| `collect` | Long-lived aggregator (`sy-mon-collect.service`). Ring default 600 s, tick 1000 ms. Socket `$XDG_RUNTIME_DIR/sy/mon.sock`. |
+| `snapshot` | Latest `SystemSnapshot`. `--json` is the machine document. |
+| `mcp` | Stdio JSON-RPC: `system.mon.snapshot` and `system.mon.history`. |
+| `doctor` | Plumbing checks (`mon.collect.running`, per-plane sockets, history writable). |
+| `waybar` | One-shot `ok` / `degraded` / `down` tile. Missing aggregator → `down`, not an error exit. |
+
+#### Exit codes (`snapshot`)
+
+- `0` — success.
+- `3` — aggregator unreachable after the connect-retry budget
+  (same code as doctor warn-only / power drift, so agents dispatch
+  identically).
+
+#### Examples
+
+```bash
+sy mon
+sy mon snapshot --json
+sy mon doctor --json
+sy mon mcp
+sy mon waybar
+```
+
+#### See also
+
+- [mon schema](../agents/mon-schema.md)
+- [mon remote scrape](../admin/mon-remote.md)
+
+---
+
 ### `sy syauth`
 
 Phone-as-key sudo applet. Wraps upstream `syauth`. Source:
@@ -2194,6 +4360,12 @@ Set the desktop wallpaper (`swaybg`).
 
 Fuzzel-based wifi picker via `nmcli`. No args.
 
+#### `sy wwan`
+
+Mobile broadband (USB 4G modem). Subcommands:
+`enable | disable | up | down | status | modeswitch`.
+`status` accepts `--json`. `modeswitch` requires `--yes`.
+
 #### `sy cal`
 
 Interactive terminal calendar (`h/l` prev/next month, `j/k` year,
@@ -2213,12 +4385,227 @@ Open the rendered Telegram palette in Telegram Desktop to apply it.
 ### See also
 
 - [`sy apply`](#sy-apply) — the bootstrap entry point.
+- [`sy spark`](#sy-spark), [`sy file`](#sy-file), [`sy plugin`](#sy-plugin), [`sy mon`](#sy-mon)
 - [tutorial: getting started](../tutorials/getting-started.md)
 - [how-to: add a knowledge source](../how-to/add-a-knowledge-source.md)
 - [`CLAUDE.md`](../../CLAUDE.md) — the CLIG + agent-friendly CLI contract.
 - [`AGENTS.md`](../../AGENTS.md) — coding-agent persona and non-negotiables.
 
----
+# docs/reference/config.md
+
+<!-- Template source: Good Docs Project reference template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/reference. Diátaxis quadrant: reference. -->
+
+## Configuration reference
+
+Where `sy` reads configuration, in what order, and which files
+`sy apply` writes.
+
+This page lists shapes the source toolchain does not extract.
+Per-flag env vars live with each subcommand in
+[the CLI reference](cli.md).
+
+### Synopsis
+
+```text
+flags  >  environment  >  config file  >  built-in defaults
+```
+
+Every flag that accepts an env var in clap is also settable via
+that variable. Names start with `SY_` unless they are standard
+XDG variables.
+
+### Files
+
+| Path | Role |
+|------|------|
+| `sy.toml` (repo root, copied into the target) | Active theme, registered knowledge sources, knowledge schedule, and other host knobs `sy` itself owns. |
+| `themes/<name>.toml` | Colour palette injected into every `configs/**` template at render time. |
+| `configs/` | Minijinja templates. Directory layout mirrors `~/.config/`. |
+| `configs/sy/power.toml` | Power-governor profiles, bandit arms, EPP / governor rules. |
+| `configs/sy/intent_whitelist.toml` | Agent-runner intent whitelist; also the `[call].who` substrings for "in a call" detection. |
+| `configs/systemd/user/` | User units grouped by `sy.target`. `sy apply` symlinks them into `~/.config/systemd/user/`. |
+| `configs/systemd/system/` | Rare system-level units (NPU, Spark agent/executor, syauth PAM helpers). |
+
+Override the repo root with `--root` or `SY_ROOT`. Override the
+write target with `--target` or `XDG_CONFIG_HOME`.
+
+### `sy apply` destinations
+
+`sy apply` renders `configs/` into:
+
+- `~/.config/` (or `$XDG_CONFIG_HOME`) for user session files
+- `~/.local/share/` where a template says so
+- `~/.config/systemd/user/` for unit symlinks, then
+  `systemctl --user daemon-reload`
+
+It does not hand-edit files that already exist as untracked
+snowflakes outside those templates. If a destination is a regular
+file that is not the rendered output, `--yes` is required to
+overwrite.
+
+### Environment variables
+
+Load-bearing globals (full per-command list is in
+[the CLI reference](cli.md)):
+
+| Name | Meaning |
+|------|---------|
+| `SY_ROOT` | Repo root for template rendering. Same as `--root`. |
+| `XDG_CONFIG_HOME` | Default `--target` for `sy apply`. |
+| `XDG_STATE_HOME` | Per-plane state (`crash`, `knowledge`, `power`). |
+| `XDG_RUNTIME_DIR` | Unix sockets (`agt`, `ipc`, `power`, `mon`, `file`). |
+| `NO_COLOR` | Disable ANSI when set (CLIG). |
+| `SY_POWER_REPORT_TIMESTAMP` | Pin the PDF report clock for byte-identical output. |
+| `SY_POWER_REPORT_MODEL_SHA` | Pin the PDF report model id for byte-identical output. |
+| `SY_KB_*` | Knowledge-search filters; flags override these. |
+
+### Knowledge sources in `sy.toml`
+
+`sy knowledge add <path>` records the path in `sy.toml` so it
+survives reboot. `--disabled` records the source but skips it
+until you enable it. `--discover` treats the path as a root of
+per-folder `qdr.toml` manifests instead of indexing the whole
+tree.
+
+Do not register sources by editing `~/.config/` copies. Edit the
+repo (or use the CLI) and apply.
+
+### Intent whitelist
+
+`~/.config/sy/intent_whitelist.toml` is materialised by the
+installer from `configs/sy/intent_whitelist.toml`. New "in a call"
+triggers go in `[call].who` (case-insensitive substring match on
+the logind inhibitor `Who` field). A missing or malformed file
+falls back to an empty whitelist: call detection goes quiet rather
+than crashing the daemon.
+
+### Examples
+
+```bash
+sy apply --dry-run
+sy apply --theme gruvbox-material
+sy render waybar/style.css          # one template to stdout
+export SY_ROOT=~/sources/sy
+sy knowledge add ~/Documents/notes
+```
+
+### See also
+
+- [How to apply a theme](../how-to/apply-a-theme.md)
+- [Why there are no snowflakes](../explanation/no-snowflakes.md)
+- [CLI: `sy apply`](cli.md#sy-apply)
+
+# docs/reference/spark.md
+
+<!-- Template source: Good Docs Project reference template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/reference. Diátaxis quadrant: reference. -->
+
+## Spark reference
+
+`sy spark <host>` drives a Spark appliance from your laptop. Use this
+page for admission numbers, gateway paths, and recipe rules. For
+install steps see [How to install the Spark agent](../how-to/install-spark.md).
+For serving a model see [How to serve a model on Spark](../how-to/serve-a-model-on-spark.md).
+
+The laptop CLI never holds Docker authority. Engines run on an
+internal managed bridge; `ps` reports desired versus observed
+state without printing that address.
+
+### Synopsis
+
+```text
+sy spark <host> install --dry-run --json
+sy spark <host> install --yes --release-signature <sig> --release-public-key <pub>
+sy spark <host> status --json
+sy spark <host> doctor --json
+sy spark <host> serve <model> [--recipe <id>] [--name <instance>] [--dry-run] [--json] [--allow-unverified]
+sy spark <host> ps [--json]
+sy spark <host> logs <instance> [--limit N]
+sy spark <host> stop <instance>
+sy spark <host> download <repo> --revision <sha> --alias <name>
+sy spark <host> client-config <name> --client <codex|claude-code>
+```
+
+### Description
+
+Before an engine lifecycle is authorised, the agent requires one
+fresh executor-owned snapshot and checks aggregate cold-start
+memory, live `MemAvailable`, full-memory PSI, swap-in activity,
+disk reserve, recipe compatibility, and the single high-memory
+transition lease.
+
+Capabilities come only from the selected signed recipe. The named
+fixture recipe is a signed, digest-pinned ARM64 HTTP engine used to
+verify the Docker lifecycle without loading weights or using the
+GPU. Omitting `--recipe` keeps verified vLLM as the default
+fallback.
+
+After health check and an exact model-identity completion probe,
+the agent publishes:
+
+- OpenAI-compatible routes at
+  `https://<spark>:9843/openai/<instance>/v1`
+- Anthropic Messages routes under
+  `/anthropic/<instance>/v1`
+
+The allowlist exposes authenticated models, completions,
+protocol-native chat completions, Responses, Messages, and token
+count with bounded SSE and client-side tool continuation. Health,
+metrics, tokenizer, debug, admin, and engine-native addresses stay
+private.
+
+Warming or recovering generations return protocol-native `503`
+with `Retry-After` and never inherit a stale route.
+
+### Admission reserves
+
+| Reserve | Value |
+|---------|-------|
+| System reserve | 8 GiB |
+| Emergency floor | 8 GiB |
+| Disk reserve | 100 GiB |
+
+Missing or stale telemetry fails closed. The root executor samples
+pressure independently and can suppress restart before an emergency
+victim is stopped; it never selects unlabeled work.
+
+### Recipes and modalities
+
+- Ornith accepts bounded inline JPEG, PNG, or WebP through OpenAI
+  Responses and Anthropic Messages. The adapters validate media
+  type, file magic, decoded bytes, image count, and dimensions
+  before contacting vLLM. Remote URLs, local paths, traversal,
+  unsupported media, and images sent to text-only instances are
+  rejected.
+- `Qwen/Qwen3-Embedding-0.6B` has an embedding-only recipe at
+  `POST /openai/<instance>/v1/embeddings` (1024-dim unit-normalised
+  float vectors). It does not expose generation routes. Input
+  order, dimensions, usage, and public model identity are checked
+  by the gateway.
+
+### `client-config`
+
+`--client codex` prints a projection for Codex
+`wire_api = "responses"`. `--client claude-code` prints a Claude
+Code 2.1.241 projection. Both name the protected token and CA
+environment variables without reading, printing, or persisting the
+token.
+
+### Examples
+
+```bash
+sy spark dgx-spark serve ornith-1.5:9b --dry-run --json
+sy spark dgx-spark serve ornith-1.5:9b --recipe spark-fixture-http-echo-1.0.0 --name fixture
+sy spark dgx-spark ps --json
+sy spark dgx-spark logs fixture --limit 100
+sy spark dgx-spark stop fixture
+```
+
+### See also
+
+- [How to install the Spark agent](../how-to/install-spark.md)
+- [How to serve a model on Spark](../how-to/serve-a-model-on-spark.md)
+- [CLI: `sy spark`](cli.md#sy-spark)
+- [Glossary: spark](glossary.md#spark)
 
 # docs/reference/glossary.md
 
@@ -2233,7 +4620,8 @@ alphabetised by the headword; case and punctuation in the headword
 are ignored for sort order.
 
 Use this page when a `sy` doc, log line, or `--help` blurb uses a
-word you have not seen before. For the user-facing mental model of
+word you have not seen before. For what `sy` is and what you can
+do with it, see [`What sy is`](../explanation/what-sy-is.md). For
 how the named things fit together, see
 [`How the planes fit together`](../explanation/architecture.md). For
 the wire-level contract, see
@@ -2264,6 +4652,20 @@ for half the bytes so the `multilingual-e5-base` graph fits under
 VitisAI EP's 2 GiB ModelProto cap. Referenced from
 [`README.md` — NPU one-time setup](../../README.md#npu-one-time-setup).
 
+#### doctor
+
+Cross-plane health probes: `sy doctor` walks a linear check list
+and exits `0` (all pass), `1` (any fail), `2` (usage), or `3`
+(warn-only drift). JSON document is `sy.doctor/v1`. See
+[how to run sy doctor](../how-to/run-doctor.md).
+
+#### file (plane)
+
+The in-tree iced file manager (`sy file`): window, plugin
+previewers, MCP mirror, and its own doctor schema.
+Opens from `Mod+E` on niri. See
+[browse files with sy file](../tutorials/browse-your-files.md).
+
 #### IPC v1
 
 The canonical JSON-over-Unix-socket envelope every plane speaks
@@ -2283,18 +4685,31 @@ its MCP server. See
 
 [Model Context Protocol](https://modelcontextprotocol.io) — the
 stdio JSON-RPC dialect agents (Claude, Cursor, Codex, Gemini) speak
-to discover and call tools; `sy` exposes `sy knowledge mcp` and
-`sy power mcp` servers and `sy auto` plumbs them into each agent's
-config.
+to discover and call tools. `sy` exposes `sy knowledge mcp`,
+`sy power mcp`, `sy mon mcp`, and `sy file mcp`. `sy auto` writes
+those servers into each agent's config.
+
+#### mon
+
+On-demand Wayland layer-shell health dashboard (`sy mon`), backed
+by a 1 Hz aggregator. `Super+m` toggles the popup;
+`sy mon snapshot --json` is the machine document. See
+[`docs/agents/mon-schema.md`](../agents/mon-schema.md).
 
 #### plane
 
 A long-running service hosted by the single `sy` binary, identified
 by its top-level subcommand (`sy aiplane`, `sy knowledge`,
-`sy power`, `sy agt`, `sy stack`); all planes share one CLIG +
-JSON-over-stdio surface so agents drive any plane the same way a
-human does. See
+`sy power`, `sy agt`, `sy stack`, `sy file`, `sy mon`, `sy spark`).
+All planes share one CLI + JSON surface so agents drive any plane
+the same way a human does. See
 [`How the planes fit together` — One binary, many planes](../explanation/architecture.md#one-binary-many-planes).
+
+#### plugin
+
+A small program `sy file` starts to preview a MIME type. Installed
+with `sy plugin install`, checked with `sy plugin doctor`. See
+[how to write a sy plugin](../how-to/write-a-sy-plugin.md).
 
 #### power (plane)
 
@@ -2324,9 +4739,9 @@ the binary would set `AT_SECURE` and the dynamic linker would drop
 
 The desktop look-and-feel produced by rendering
 [`configs/`](../../configs/) (niri, waybar, mako, fuzzel, foot,
-swaylock, yazi, …) through minijinja templates with the active
-palette from `themes/<name>.toml`; running `sy apply` is what
-materialises the rice into `~/.config/`. See
+swaylock, …) through minijinja templates with the active
+palette from `themes/<name>.toml`. Running `sy apply` is what
+writes that look into `~/.config/`. See
 [`README.md` — Rice](../../README.md#rice--niri--waybar--).
 
 #### session pool
@@ -2346,6 +4761,17 @@ bespoke env var. Snowflakes are prohibited; every environment
 change ships under [`configs/`](../../configs/) or inside the `sy`
 binary so `cargo build --release && sy apply` on a fresh machine
 reproduces the system. See [`CLAUDE.md` — Core rule: no snowflakes](../../CLAUDE.md#core-rule-no-snowflakes).
+
+#### spark
+
+Remote DGX Spark model-serving plane: `sy spark <host>` talks to an
+authenticated agent that owns HTTPS and desired state; a root
+executor owns Docker. Install with
+[How to install the Spark agent](../how-to/install-spark.md).
+Engines run on an internal bridge; the
+gateway publishes OpenAI- and Anthropic-compatible routes after
+health and identity probes. See
+[Spark reference](spark.md).
 
 #### stack-bar
 
@@ -2409,8 +4835,6 @@ companion repository as documented in
 - [`CLAUDE.md`](../../CLAUDE.md) for the no-snowflakes rule and the
   CLIG + agent-friendly CLI contract.
 
----
-
 # docs/reference/syauth-pam-module.md
 
 <!-- Template source: Good Docs Project reference template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/reference. Diátaxis quadrant: reference. -->
@@ -2448,9 +4872,8 @@ The module owns no state on disk. The pairing record lives at
 user runtime directory, and the audit log is written to the
 journal by `pam_syauth` and `syauth-presenced` independently.
 
-The `sy syauth install-pam` wrapper bakes in the reality-corrected
-defaults below. Passing `--control` or `--module-args` to the
-wrapper overrides them per invocation.
+The `sy syauth install-pam` wrapper sets the defaults below.
+`--control` or `--module-args` on the wrapper override them.
 
 ### Control flags
 
@@ -2535,8 +4958,6 @@ sy syauth uninstall-pam --service sudo --yes
 - [How to troubleshoot syauth](../how-to/troubleshoot-syauth.md)
 - [`pam.conf(5)`](https://man7.org/linux/man-pages/man5/pam.conf.5.html) for the upstream PAM control-flag and module-argument grammar.
 
----
-
 # docs/explanation/architecture.md
 
 <!-- Template source: Good Docs Project explanation template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/explanation. Diátaxis quadrant: explanation. -->
@@ -2544,11 +4965,13 @@ sy syauth uninstall-pam --service sudo --yes
 ## How the planes fit together
 
 This page is for readers who already know *what* `sy` does and want
-to understand *why* it is shaped the way it is. It does not teach
-you any new command. If you are looking for steps, start with
-[the getting-started tutorial](../tutorials/getting-started.md);
-if you are looking for flags and exit codes, start with
-[the CLI reference](../reference/cli.md).
+the mechanical why: one binary, sockets, NPU ownership, Spark’s two
+processes. If you do not have that picture yet, start with
+[What sy is](what-sy-is.md). For steps, use
+[the getting-started tutorial](../tutorials/getting-started.md).
+For flags, use [the CLI reference](../reference/cli.md).
+
+![One binary becomes many planes; JSON sockets sit between them](../img/sy-planes.svg)
 
 ### Why this exists
 
@@ -2556,7 +4979,8 @@ if you are looking for flags and exit codes, start with
 stock laptop behave like an agent-first workstation: one place
 that owns the NPU, one place that runs sandboxed agents, one place
 that indexes your files, one place that picks a power profile,
-one place that renders the desktop. The shape of `sy` follows from
+one place that opens a file manager, one place that serves models
+on a Spark, one place that renders the desktop. The shape of `sy` follows from
 two commitments the project refuses to walk back.
 
 The first commitment is **no snowflakes**. Every change to your
@@ -2575,8 +4999,9 @@ a single supervision surface.
 
 Both commitments push the project toward one binary and a small
 number of long-running services that all speak the same wire
-format. That is what `sy` is, and the rest of this page explains
-why that shape beats the obvious alternatives.
+format. The rest of this page explains why that shape beats the
+obvious alternatives. The product picture — a day using it, what
+is optional — stays on [What sy is](what-sy-is.md).
 
 ### How it works
 
@@ -2584,12 +5009,16 @@ why that shape beats the obvious alternatives.
 
 `sy` ships as a single Rust binary. Every capability — NPU
 inference, semantic search, agent sandboxing, power management,
-the layer-shell bar, phone-as-key sudo — is a subcommand of that
+the layer-shell bar, phone-as-key sudo, the file manager, the
+health popup, remote Spark serving — is a subcommand of that
 binary. A *plane* is the long-running service behind one of those
 capabilities. The `aiplane` is the NPU plane. The `knowledge`
 plane is the semantic-search plane. The `agt` plane is the agent
 runner. The `power` plane is the adaptive governor. The `stack`
-plane is the bar.
+plane is the bar. The `file` plane is the iced file manager. The
+`mon` plane is the health dashboard. Spark is the same binary
+running on a different machine: laptop CLI, unprivileged HTTPS
+agent, root Docker executor.
 
 A plane is not a separate program. It is a mode the single
 binary runs in when invoked with the right subcommand
@@ -2655,6 +5084,34 @@ times out work that overruns its deadline. The user-visible
 surface — `sy aiplane run --workload …` — hides all of that, but
 the reason it is fast on a warm path and graceful under pressure
 is that scheduler.
+
+![knowledge, the runner, and the CLI all embed through the aiplane](../img/sy-npu.svg)
+
+#### The Spark plane is a remote appliance
+
+Spark is not a user unit on the laptop. It is the same `sy` binary
+in three roles:
+
+- On the laptop, `sy spark <host> …` talks to OpenSSH for install
+  and to pinned HTTPS for everything after. The laptop process
+  never holds Docker authority.
+- On the Spark, `sy-spark-agent.service` runs as unprivileged
+  `User=sy-spark`. It owns the HTTPS listener (default port 9843),
+  desired state, admission, and the public OpenAI / Anthropic
+  gateways.
+- On the Spark, `sy-spark-executor.service` runs as root. It owns
+  Docker. Its address families are Unix sockets only, on a private
+  network. The agent reaches it over that socket; nothing on the
+  LAN does.
+
+The split is load-bearing. The process that accepts TLS from your
+laptop must not have a Docker socket. A compromised listener can
+then refuse or lie about desired state; it cannot start or stop
+engines. Install still goes through OpenSSH as a single host
+argument — there is no remote-command escape hatch, and credentials
+never appear on `sy`'s argv.
+
+![Laptop HTTPS to an unprivileged agent; Docker stays on the executor](../img/sy-spark.svg)
 
 #### The agent runner is a sandbox
 
@@ -2767,6 +5224,14 @@ have visible downsides.
   recovery is (cache invalidation, model reload, lost warm
   state), the stricter contract is worth the lost flexibility.
 
+- **Spark's two-process split trades one unit for a closed
+  blast radius.** Putting Docker on the HTTPS agent would be
+  fewer moving parts. The cost is that a compromised
+  network-facing process would own every engine. The
+  unprivileged agent plus a root executor on a private network
+  is the extra unit; the win is that TLS exposure and container
+  authority do not share a process.
+
 - **Policy-driven sandboxing trades convenience for blast
   radius.** Adding a new tool means writing or extending a
   profile. A tool that is not in any profile cannot run. The
@@ -2866,7 +5331,14 @@ the reason the rejection still holds.
 
 ### See also
 
+- [What sy is](what-sy-is.md)
+- [Start here](../intro.md)
 - [Tutorial: bring up sy on a fresh Fedora 43 laptop](../tutorials/getting-started.md)
+- [Tutorial: browse files with sy file](../tutorials/browse-your-files.md)
+- [How to install the Spark agent](../how-to/install-spark.md)
+- [Why there are no snowflakes](no-snowflakes.md)
+- [Why the CLI is agent-first](agent-first-cli.md)
+- [Why embeddings run on the NPU, not the GPU](why-npu-not-gpu.md)
 - [Reference: the sy CLI](../reference/cli.md)
 - The internal design document this page is grounded in lives at
   `specs/research/architecture-refactor/SPEC.md` in the
@@ -2875,7 +5347,216 @@ the reason the rejection still holds.
   protocol, and the migration plan. This page is for everyone
   else.
 
----
+# docs/explanation/no-snowflakes.md
+
+<!-- Template source: Good Docs Project explanation template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/explanation. Diátaxis quadrant: explanation. -->
+
+## Why there are no snowflakes
+
+### Why this exists
+
+A snowflake is a one-off change to the host that lives outside the
+repository: a hand-edited `~/.bashrc`, an ad-hoc `systemctl enable`,
+a colour tweaked in `~/.config/waybar/style.css` and never committed.
+Snowflakes are easy the hour you make them and expensive the month
+you reinstall.
+
+`sy` exists so a fresh Fedora 43 laptop plus
+`cargo build --release && sy apply` reproduces the machine. That
+promise is false the moment any load-bearing state lives only on
+disk.
+
+![sy apply renders this git repo onto the laptop](../img/sy-apply.svg)
+
+### How it works
+
+You change the system by changing the repo. Templates under
+`configs/` are rendered with the active theme from `themes/` and
+written to the paths they already mirror. Units under
+`configs/systemd/user/` are symlinked into the user manager. The
+binary itself hosts the planes. There is no third place.
+
+`sy apply --dry-run` shows the diff first. `sy diff` is the same
+idea: pending changes are visible, then you apply them. Destructive
+overwrites need `--yes`.
+
+The rule is not "never use the shell". It is "never leave the shell
+as the source of truth". If a package must be installed, it is
+listed in a how-to that is itself in the repo, or it is encoded in
+a unit, a COPR enable, or a script under `scripts/`. If a keybinding
+must change, it changes in `configs/niri/config.kdl` and you re-apply.
+
+### Trade-offs
+
+- **Slower first tweak, faster tenth reinstall.** Changing one
+  colour is an edit plus apply, not a one-line patch in `~/.config`.
+  Recreating the laptop is a clone plus build plus apply.
+- **The repo is the backup.** What is not in `configs/` or in `sy`
+  is not part of the system. That is strict on purpose.
+- **Fedora-shaped, not distro-neutral.** The no-snowflakes rule is
+  cheaper when the target OS is one version of one distribution.
+
+### Alternatives we considered
+
+- **A dotfile manager that copies files but does not own units,
+  PAM, or the NPU daemon.** It covers the desktop look and leaves the
+  privileged planes as snowflakes. Rejected: the planes *are* the
+  product.
+- **Document the manual steps and ask people to be careful.** That
+  is how snowflakes accumulate. Rejected: the rule has to be
+  mechanical (`sy apply`) or it is a wish.
+
+### See also
+
+- [What sy is](what-sy-is.md)
+- [Configuration reference](../reference/config.md)
+- [How to apply a theme](../how-to/apply-a-theme.md)
+- [How the planes fit together](architecture.md)
+
+# docs/explanation/agent-first-cli.md
+
+<!-- Template source: Good Docs Project explanation template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/explanation. Diátaxis quadrant: explanation. -->
+
+## Why the CLI is agent-first
+
+### Why this exists
+
+`sy` is meant to be driven by coding agents as a first-class
+consumer, not as an afterthought on a human CLI. An agent cannot
+tab-complete its way out of an ambiguous prompt, cannot see a
+spinner, and cannot guess an exit code that changes between
+releases. The CLI contract is therefore written down and kept
+stable: [CLIG](https://clig.dev/) plus a small set of agent rules
+in `CLAUDE.md`.
+
+Humans benefit from the same contract. `--help` is complete,
+`--json` is always there when a command prints a document, and
+`--dry-run` is there when a command would change the machine.
+
+![You type a search; an agent calls the same plane over MCP](../img/sy-surfaces.svg)
+
+### How it works
+
+The rules that show up on every plane:
+
+- Primary output on stdout; logs on stderr.
+- `--json` (or `--output json`) on commands that produce a
+  document. The schema is documented and does not include a spinner.
+- Non-interactive by default when stdin is not a TTY. No prompt
+  unless a terminal is attached. `--yes` bypasses prompts when you
+  mean it.
+- `--dry-run` on state changes. Some commands invert the default
+  (`sy auto configure`, `sy knowledge mcp-enable`) and require
+  `--apply` so an agent cannot rewrite a file by accident.
+- Stable exit codes: `0` success, `1` generic failure, `2` usage,
+  `3` drift / warn-only, `4` daemon unreachable / not ready, and
+  plane-specific codes above that. Power and doctor document theirs
+  in the how-tos.
+- Every flag also settable via `SY_*` (or the XDG variable the
+  flag aliases). Precedence is flag > env > config file > default.
+- `NO_COLOR` and `TERM=dumb` strip ANSI.
+
+MCP servers (`sy knowledge mcp`, `sy power mcp`, `sy mon mcp`,
+`sy file mcp`) speak line-delimited JSON-RPC on stdio. Prefer the
+tool when you already have a session; shelling `sy … --json` is the
+fallback, not the native path.
+
+### Trade-offs
+
+- **More flags, less theatre.** There is no progress bar on a
+  pipe. Humans on a TTY still get colour unless `NO_COLOR` is set.
+- **Dry-run as default on the dangerous commands.** You type
+  `--apply` once. An agent that copies a human snippet without
+  `--apply` does nothing, which is the safe failure.
+- **Exit code `3` is data, not a retry loop.** Drift prints the
+  document and asks you to inspect the journal. Retrying `sy power
+  status` will not clear ADWIN.
+
+### Alternatives we considered
+
+- **A separate `syctl` machine API.** That splits the user model
+  and guarantees the two surfaces drift. Rejected: one binary, one
+  `--help`.
+- **Interactive wizards for apply and MCP.** Fine on a TTY, hostile
+  to agents, and they hide the diff. Rejected: `--dry-run` then
+  `--apply`.
+
+### See also
+
+- [What sy is](what-sy-is.md)
+- [CLI reference](../reference/cli.md)
+- [Tutorial: drive sy from an agent](../tutorials/drive-sy-from-an-agent.md)
+- [How to wire MCP into your agents](../how-to/wire-mcp-into-agents.md)
+
+# docs/explanation/why-npu-not-gpu.md
+
+<!-- Template source: Good Docs Project explanation template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/explanation. Diátaxis quadrant: explanation. -->
+
+## Why embeddings run on the NPU, not the GPU
+
+### Why this exists
+
+`sy knowledge` turns local files into vectors. That work has to
+run somewhere: CPU, discrete GPU, or the AMD XDNA NPU on a Ryzen
+AI laptop. The project sends it to the NPU on purpose, even though
+an early version used CUDA via `fastembed`.
+
+The short reason: the GPU is for the models you actually want to
+chat with. The NPU is otherwise idle. Embeddings are a good fit
+for that idle silicon.
+
+### How it works
+
+The `aiplane` daemon is the only process that opens
+`/dev/accel/accel0`. Workloads declare an execution-provider
+preference of `Vitisai` or `Cpu`. CUDA is not in the chain. The
+session pool loads VitisAI when `/opt/AMD/ryzenai/venv` exists,
+otherwise CPU.
+
+![knowledge, the runner, and the CLI all embed through the aiplane](../img/sy-npu.svg)
+
+That is also why the embed model is `multilingual-e5-base`
+(768-dim), not `-large`. VitisAI EP 1.7.1 caps internal ModelProto
+serialisation at 2 GiB. `e5-large` overshoots that cap even after
+quantisation. The MTEB quality cost is roughly six points on the
+average score, which the project accepted to keep the GPU free
+and the NPU in the loop.
+
+A one-shot `sy knowledge search` from the CLI still goes through
+the daemon. Starting a second ORT session "just for this query"
+would race the device and pull CUDA context plus about a gigabyte
+of VRAM for a single string. The daemon is already warm under
+`sy.target`.
+
+### Trade-offs
+
+- **NPU quality versus GPU convenience.** `-base` is a weaker
+  embedder than `-large` on CUDA. The win is zero VRAM and a free
+  dGPU.
+- **Vendor-specific runtime.** The AMD venv pin is more
+  reproducible than a pip-resolved CUDA wheel, and it does not
+  run on NVIDIA-only boxes. Those boxes use CPU (or they are not
+  the target).
+- **Single owner.** Nothing else on the machine may open the
+  accelerator while `aiplane` holds it. Stability beat sharing.
+
+### Alternatives we considered
+
+- **CUDA as primary**, the original fastembed path. Rejected: a
+  search should not spin up a GPU driver context.
+- **VitisAI, then CUDA, then CPU.** Rejected: CUDA is the wrong
+  vendor for this laptop, and a three-way chain hides the case
+  where the NPU setup failed.
+- **CPU only.** Always available, too slow for bulk indexing.
+
+The decision record with drivers and options is
+[ADR 0003](../adr/0003-vitisai-ep-not-cuda-for-on-device-embedding.md).
+
+### See also
+
+- [How to set up the NPU](../how-to/set-up-npu.md)
+- [How the planes fit together](architecture.md)
+- [Glossary: VitisAI EP](../reference/glossary.md#vitisai-ep)
 
 # CHANGELOG.md
 
@@ -2902,6 +5583,35 @@ here.
 
 #### Added
 
+- User-facing documentation site (Docusaurus) under `website/`,
+  fed by the Diátaxis tree in `docs/`: start-here page, search and
+  agent tutorials, NPU / MCP / Spark / theme / doctor / power
+  how-tos, Spark and configuration reference, and explanations for
+  no-snowflakes, agent-first CLI, and NPU-not-GPU.
+- Spark host-install how-to (`sy spark <host> install --dry-run`
+  then `--yes` with minisign), plus CLI reference for `sy spark`,
+  `sy file`, `sy plugin`, and `sy mon`.
+- File-manager tutorial (open the window, hover markdown) split
+  from the shell IPC how-to, with troubleshooting on its own page.
+- Newcomer language pass across `docs/`, README community files,
+  and the docs site: less SPEC/roadmap jargon, NPU-optional
+  bring-up verification, `sy plugin` in the CLI reference.
+- Product story at the docs entrance: homepage prose and outcome
+  cards, start-here page that says what `sy` is before the
+  command map, and [What sy is](docs/explanation/what-sy-is.md)
+  for the longer why / a-day-with-it / optional-hardware picture.
+- Schematic figures in `docs/img/` on the homepage, start-here,
+  product story, architecture, and README: stack, apply, planes,
+  human-and-agent, NPU ownership, Spark split.
+- `sy mon` — on-demand Wayland layer-shell health dashboard backed by
+  a 1 Hz `sy-mon-collect.service` aggregator. `Super+m` toggles the
+  popup; `sy mon snapshot --json` returns a `SystemSnapshot` over an
+  `$XDG_RUNTIME_DIR/sy/mon.sock` IPC socket; `sy mon doctor` folds
+  into `sy doctor`; `sy mon mcp` advertises `system.mon.snapshot` and
+  `system.mon.history` to MCP-capable agents; `sy mon waybar` emits
+  a green/yellow/red waybar custom-module tile that opens the popup
+  on click. Wire shape documented in `docs/agents/mon-schema.md`;
+  remote-scrape recipe in `docs/admin/mon-remote.md`.
 - A `prep_npu_workload.py` helper under `scripts/` exports
   `intfloat/multilingual-e5-base` to ONNX, BF16-quantises it with AMD
   Quark, and runs a one-shot VitisAI compile so the NPU artifact under
@@ -2932,13 +5642,14 @@ here.
 
 [Unreleased]: https://github.com/dmytrogajewski/sy/compare/v0.1.0...HEAD
 
----
-
 # docs/adr/0001-use-adrs.md
 
 ## 0001 — Use Architecture Decision Records
 
 - Status: accepted
+
+Who this is for: contributors who need a short "why we picked this"
+page instead of re-reading a long SPEC.
 
 > Template: [MADR 4.0](https://adr.github.io/madr/).
 
@@ -3086,8 +5797,6 @@ ADR in the same change.
 - Lifted decisions: [ADR-0002](0002-virtual-workspace-with-sy-core-vocabulary.md),
   [ADR-0003](0003-vitisai-ep-not-cuda-for-on-device-embedding.md).
 
----
-
 # docs/adr/0002-virtual-workspace-with-sy-core-vocabulary.md
 
 ## 0002 — Virtual workspace with a `sy-core` vocabulary crate
@@ -3114,8 +5823,8 @@ highest-risk coupling between `aiplane` and `knowledge`.
 A workspace split is the obvious answer, but Rust workspaces have
 non-obvious failure modes: a "hub" crate that every other crate
 depends on becomes a rebuild bottleneck, and per-crate `publish`
-discipline is heavy ceremony for a single-maintainer rice that
-nobody installs from crates.io. The decision is the *shape* of
+discipline is heavy ceremony for a single-maintainer desktop layer
+that nobody installs from crates.io. The decision is the *shape* of
 the workspace: how many crates, who depends on whom, what is
 versioned how.
 
@@ -3254,7 +5963,7 @@ Discipline:
 
 - Good: each crate is independently versionable and
   publishable.
-- Bad: over-engineered for a single-maintainer rice that
+- Bad: over-engineered for a single-maintainer desktop layer that
   nobody installs from crates.io. Per-crate semver implies
   API stability guarantees `sy` has not committed to and does
   not need.
@@ -3276,13 +5985,14 @@ Discipline:
 - Audit row: `specs/docs-audit/AUDIT-full.md#r-adr-01--should`.
 - Roadmap item: `specs/docs-audit/PLAN-full.md` Item 16.
 
----
-
 # docs/adr/0003-vitisai-ep-not-cuda-for-on-device-embedding.md
 
 ## 0003 — VitisAI EP, not CUDA, for on-device embedding
 
 - Status: accepted
+
+Who this is for: readers asking why local search embeddings do not
+use the GPU.
 
 > Template: [MADR 4.0](https://adr.github.io/madr/).
 > Sources: `README.md` §aiplane + §NPU one-time setup + §Knowledge
@@ -3482,7 +6192,179 @@ free."
 - Audit row: `specs/docs-audit/AUDIT-full.md#r-adr-01--should`.
 - Roadmap item: `specs/docs-audit/PLAN-full.md` Item 16.
 
----
+# docs/adr/0004-publish-policy.md
+
+## 0004 — `publish = false` on the root `sy` package
+
+- Status: accepted
+
+Who this is for: people wondering why `sy` is not on crates.io.
+
+> Template: [MADR 4.0](https://adr.github.io/madr/).
+
+### Context and Problem Statement
+
+The root `sy` `[package]` block in `Cargo.toml` had no `publish`
+field, which made it nominally publishable to
+[crates.io](https://crates.io). The three workspace crates
+(`sy-core`, `sy-ipc`, `sy-testutils`) already carried
+`publish = false` explicitly, but the binary crate did not — only a
+comment in the `[workspace]` header mentioned that workspace
+members are "lockstep-versioned, `publish = false`". The audit
+caught the mismatch in `R-ECO-04` (see
+`specs/docs-audit/AUDIT-full.md`).
+
+`sy` is a Fedora-coupled Agentic OS layer, not a reusable library
+crate. The binary expects:
+
+- a working AMD Ryzen AI NPU at `/dev/accel/accel0`;
+- AMD's bundled `libonnxruntime.so` reachable via the re-exec dance
+  in `aiplane::reexec` (the dynamic linker drops `LD_LIBRARY_PATH`
+  when `AT_SECURE` is set, so the binary cannot `setcap` itself —
+  the caps live in the user systemd units);
+- a user-level systemd graph rooted at `sy.target` with `Type=notify`
+  units, journald, polkit, and SELinux file contexts shipped by
+  `sy apply`;
+- niri / waybar / `sy file` configs from `configs/` to render the
+  desktop.
+
+None of those preconditions can be satisfied by a `cargo install
+sy` from a generic Rust toolchain. Publishing the binary would
+ship a façade that misleads users into thinking they can install
+it like any other CLI crate. At the same time, the `R-ECO-05`
+audit row wants `readme = "README.md"` declared so `crates.io` /
+`docs.rs` / `cargo info` render the README if the publish policy
+ever flips.
+
+### Decision Drivers
+
+- **Truth in packaging**: `cargo publish` should fail loudly rather
+  than upload a binary the consumer cannot run.
+- **Audit closure**: `R-ECO-04` (`SUGGESTED`) flagged the missing
+  `publish` field; `R-ECO-05` (`SUGGESTED`) flagged the missing
+  `readme` field. Both can close in one pass.
+- **No surprise plumbing**: keep `cargo metadata` honest so any
+  future tool (release-please, cargo-deny, OpenSSF Scorecard) sees
+  the SPDX identifier and the publish posture without guessing.
+- **No clocks**: the decision needs to be recorded without a date
+  string (project convention; see ADR-0001 Decision Drivers).
+- **Reversibility**: if `sy` is ever split into a publishable
+  sub-crate (for example, the `aiplane` IPC client), that crate
+  flips its own `publish` flag; this ADR is scoped to the root
+  binary.
+
+### Considered Options
+
+- **Option 1: `publish = false` on the root `sy` package, plus
+  `readme = "README.md"` and `license = "MIT"`.** Add the same
+  `license = "MIT"` line to the three existing workspace crates so
+  every `[package]` block carries the SPDX identifier.
+- **Option 2: Make `sy` publishable.** Add
+  `[package.metadata.docs.rs] all-features = true` and
+  `readme = "README.md"`, keep the binary `cargo install`-able.
+- **Option 3: Status quo.** Leave the root `[package]` block as-is
+  (no `publish`, no `readme`, no `license` field on any crate), let
+  the workspace-header comment carry the intent.
+
+### Decision Outcome
+
+Chosen option: **Option 1**, because the binary cannot be installed
+outside the documented Fedora 43 path (re-exec dance, systemd
+units, polkit grants, SELinux contexts), and the audit's
+recommendation for `R-ECO-04` explicitly favours `publish = false`
+for OS-coupled binaries. Declaring `readme = "README.md"` alongside
+is cost-free and future-proof: if a follow-on ADR ever flips the
+publish flag, the README is already wired up. Adding
+`license = "MIT"` to every `[package]` block makes the SPDX
+identifier visible in `cargo metadata` (which is what tools like
+`cargo-deny`, OpenSSF Scorecard, and `cargo-license` consume) and
+matches the contents of `LICENSE` at the repo root.
+
+The four `[package]` blocks now read:
+
+| Crate | `publish` | `license` | `readme` |
+|---|---|---|---|
+| `sy` (root) | `false` | `"MIT"` | `"README.md"` |
+| `sy-core` | `false` | `"MIT"` | — |
+| `sy-ipc` | `false` | `"MIT"` | — |
+| `sy-testutils` | `false` | `"MIT"` | — |
+
+`readme` is only declared on the root package because that is the
+package that maps to the repo's `README.md`. The three workspace
+crates have no per-crate README and do not need one — their
+`description` field carries the one-line summary, and the
+canonical reference for each lives under `docs/reference/` and in
+the SPEC.
+
+### Consequences
+
+- **Good**: `cargo publish` on the root package now refuses
+  outright, preventing an accidental crates.io upload of a binary
+  that cannot run on a stock Rust toolchain.
+- **Good**: `cargo metadata --format-version 1 --no-deps` now
+  reports `license: "MIT"` for every workspace member, closing the
+  SPDX gap that `R-ECO-04` flagged and giving downstream tools
+  (`cargo-deny`, OpenSSF Scorecard, `cargo-license`) a single
+  source of truth.
+- **Good**: `readme = "README.md"` is in place, so if a future ADR
+  flips the publish flag (for example, to publish a thin
+  `aiplane`-client sub-crate), the README plumbing already works.
+- **Neutral**: no behavioural change to `cargo build`,
+  `cargo test`, or any of the runtime planes. Manifest-only edit.
+- **Bad**: contributors who add a new workspace member must
+  remember to set `publish = false` and `license = "MIT"` on its
+  `[package]` block. `CONTRIBUTING.md` already requires an ADR for
+  changes that "add or remove a plane", which covers the case where
+  someone wants to flip `publish = true` on a future crate.
+
+### Pros and Cons of the Options
+
+#### Option 1 — `publish = false` + `readme` + `license`
+
+- Good: closes both `R-ECO-04` and `R-ECO-05` in one pass.
+- Good: makes the workspace's intent explicit rather than relying
+  on the `[workspace]` header comment.
+- Good: zero runtime impact; the change is pure manifest metadata.
+- Neutral: requires a future ADR if `sy` ever becomes publishable.
+
+#### Option 2 — make `sy` publishable
+
+- Good: would let interested third parties `cargo install sy` and
+  inspect what they get.
+- Bad: every "install" would fail at runtime because the binary
+  needs the AMD venv re-exec dance, user systemd units, polkit
+  grants, and SELinux contexts. Shipping a binary that cannot
+  start is worse than not shipping at all.
+- Bad: opens the door to a security surface (a crate's name on
+  crates.io is itself a foothold for typosquatting); the project
+  has no release cadence that would justify the maintenance burden
+  of a published binary.
+
+#### Option 3 — status quo
+
+- Good: no manifest edits.
+- Bad: leaves the audit gap open (`R-ECO-04`, `R-ECO-05`); the
+  root package remains nominally publishable; `cargo metadata`
+  reports `license: null` for every crate, which trips
+  OpenSSF / `cargo-deny`.
+- Bad: the workspace-header comment claims `publish = false` is
+  the policy, but the root package does not enforce it — a future
+  contributor reading only the root `[package]` block could
+  publish by accident.
+
+### Links
+
+- Template: [MADR 4.0](https://adr.github.io/madr/).
+- Companion ADR: [0001 — Use Architecture Decision Records](0001-use-adrs.md).
+- Audit rows: `specs/docs-audit/AUDIT-full.md#r-eco-04--suggested`
+  and `specs/docs-audit/AUDIT-full.md#r-eco-05--suggested`.
+- Roadmap item: `specs/docs-audit/PLAN-full.md` Item 24.
+- Cargo manifest reference:
+  [`publish` field](https://doc.rust-lang.org/cargo/reference/manifest.html#the-publish-field),
+  [`readme` field](https://doc.rust-lang.org/cargo/reference/manifest.html#the-readme-field),
+  [`license` field](https://doc.rust-lang.org/cargo/reference/manifest.html#the-license-and-license-file-fields).
+- SPDX identifier: [`MIT`](https://spdx.org/licenses/MIT.html);
+  text at `LICENSE`.
 
 # specs/research/architecture-refactor/SPEC.md
 

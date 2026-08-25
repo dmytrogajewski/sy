@@ -1,0 +1,296 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&display=swap');
+
+:root {
+  --sy-bg: #0c0c0c;
+  --sy-bg-raised: #141414;
+  --sy-bg-overlay: #1a1a1a;
+  --sy-border: #2a2a2a;
+  --sy-fg: #e8e4d4;
+  --sy-fg-dim: #9a9584;
+  --sy-aqua: #89b482;
+  --sy-green: #a9b665;
+  --sy-yellow: #d8a657;
+  --sy-orange: #e78a4e;
+  --sy-red: #ea6962;
+  --sy-blue: #7daea3;
+  --sy-cursor: #89b482;
+
+  --ifm-color-primary: #89b482;
+  --ifm-color-primary-dark: #76a46e;
+  --ifm-color-primary-darker: #6b9a64;
+  --ifm-color-primary-darkest: #587f52;
+  --ifm-color-primary-light: #9cc496;
+  --ifm-color-primary-lighter: #a7cca2;
+  --ifm-color-primary-lightest: #c0dcbd;
+  --ifm-background-color: var(--sy-bg);
+  --ifm-background-surface-color: var(--sy-bg-raised);
+  --ifm-font-color-base: var(--sy-fg);
+  --ifm-heading-color: var(--sy-fg);
+  --ifm-font-family-base: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --ifm-font-family-monospace: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --ifm-heading-font-family: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, monospace;
+  --ifm-code-font-size: 95%;
+  --ifm-font-size-base: 15px;
+  --ifm-line-height-base: 1.7;
+  --ifm-global-radius: 0;
+  --ifm-button-border-radius: 0;
+  --ifm-navbar-background-color: #080808;
+  --ifm-navbar-shadow: inset 0 -1px 0 var(--sy-border);
+  --ifm-navbar-height: 3.25rem;
+  --ifm-footer-background-color: #080808;
+  --ifm-footer-color: var(--sy-fg-dim);
+  --ifm-footer-link-color: var(--sy-aqua);
+  --ifm-footer-title-color: var(--sy-fg);
+  --ifm-menu-color: var(--sy-fg-dim);
+  --ifm-menu-color-active: var(--sy-aqua);
+  --ifm-menu-color-background-active: transparent;
+  --ifm-menu-color-background-hover: rgba(137, 180, 130, 0.08);
+  --ifm-toc-border-color: var(--sy-border);
+  --ifm-hr-background-color: var(--sy-border);
+  --ifm-blockquote-border-color: var(--sy-aqua);
+  --ifm-table-border-color: var(--sy-border);
+  --ifm-table-stripe-background: rgba(255, 255, 255, 0.03);
+  --ifm-code-background: #1e1e1e;
+  --ifm-pre-background: #121212;
+  --ifm-link-color: var(--sy-aqua);
+  --ifm-link-hover-color: var(--sy-green);
+  --ifm-breadcrumb-separator-color: var(--sy-fg-dim);
+  --ifm-hover-overlay: rgba(137, 180, 130, 0.06);
+  --docusaurus-highlighted-code-line-bg: rgba(137, 180, 130, 0.12);
+  --ifm-color-emphasis-300: var(--sy-border);
+  --ifm-color-content-secondary: var(--sy-fg-dim);
+}
+
+html[data-theme='dark'] {
+  --ifm-background-color: var(--sy-bg);
+  --ifm-background-surface-color: var(--sy-bg-raised);
+  --ifm-navbar-background-color: #080808;
+  --ifm-footer-background-color: #080808;
+}
+
+html,
+body {
+  background: var(--sy-bg);
+  color: var(--sy-fg);
+  font-feature-settings: 'liga' 1, 'calt' 1;
+}
+
+/* Terminal titlebar navbar */
+.navbar {
+  border-bottom: 1px solid var(--sy-border);
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+}
+
+.navbar__title {
+  font-weight: 700;
+  color: var(--sy-aqua);
+}
+
+.navbar__title::before {
+  content: '$ ';
+  color: var(--sy-green);
+  font-weight: 500;
+}
+
+.navbar__logo {
+  margin-right: 0.4rem;
+}
+
+.navbar__link {
+  font-weight: 400;
+  color: var(--sy-fg-dim);
+}
+
+.navbar__link--active,
+.navbar__link:hover {
+  color: var(--sy-aqua);
+}
+
+/* Sidebar: directory listing */
+.theme-doc-sidebar-container {
+  border-right: 1px solid var(--sy-border) !important;
+  background: var(--sy-bg);
+}
+
+.menu__list-item-collapsible,
+.menu__link {
+  border-radius: 0;
+}
+
+.menu__link--active:not(.menu__link--sublist) {
+  color: var(--sy-aqua);
+  box-shadow: inset 2px 0 0 var(--sy-aqua);
+  background: rgba(137, 180, 130, 0.08);
+}
+
+.menu__caret:before,
+.menu__link--sublist-caret:after {
+  opacity: 0.5;
+}
+
+/* Docs markdown */
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  letter-spacing: -0.02em;
+}
+
+.markdown h1 {
+  font-size: 1.75rem;
+}
+
+.markdown h1::before {
+  content: '# ';
+  color: var(--sy-fg-dim);
+  font-weight: 400;
+}
+
+.markdown h2::before {
+  content: '## ';
+  color: var(--sy-fg-dim);
+  font-weight: 400;
+}
+
+.markdown code {
+  border: 1px solid var(--sy-border);
+  border-radius: 0;
+  background: #1a1a1a;
+  color: var(--sy-yellow);
+}
+
+.markdown a code {
+  color: var(--sy-aqua);
+}
+
+.markdown img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1.25rem 0 0.5rem;
+  border: 1px solid var(--sy-border);
+  background: #101010;
+}
+
+.theme-code-block,
+div[class*='codeBlockContainer'] {
+  border: 1px solid var(--sy-border);
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.prism-code {
+  font-size: 0.85rem;
+  background: #101010 !important;
+}
+
+table {
+  display: table;
+  width: 100%;
+}
+
+table thead {
+  background: var(--sy-bg-raised);
+}
+
+table th {
+  font-weight: 500;
+  color: var(--sy-aqua);
+}
+
+blockquote {
+  background: var(--sy-bg-raised);
+  border-left: 2px solid var(--sy-aqua);
+  color: var(--sy-fg-dim);
+}
+
+/* Pagination as shell hints */
+.pagination-nav__link {
+  border: 1px solid var(--sy-border);
+  border-radius: 0;
+  background: var(--sy-bg-raised);
+}
+
+.pagination-nav__link:hover {
+  border-color: var(--sy-aqua);
+}
+
+.pagination-nav__sublabel {
+  color: var(--sy-fg-dim);
+  font-size: 0.7rem;
+  text-transform: lowercase;
+}
+
+.pagination-nav__label {
+  font-size: 0.9rem;
+}
+
+/* TOC */
+.table-of-contents__link--active {
+  color: var(--sy-aqua);
+}
+
+/* Footer */
+.footer {
+  border-top: 1px solid var(--sy-border);
+  font-size: 0.8rem;
+}
+
+.footer__title {
+  font-size: 0.75rem;
+  text-transform: lowercase;
+  letter-spacing: 0.08em;
+  color: var(--sy-fg-dim);
+}
+
+/* Cards / admonitions if any */
+.alert {
+  border-radius: 0;
+  border: 1px solid var(--sy-border);
+  box-shadow: none;
+}
+
+.breadcrumbs__item--active .breadcrumbs__link {
+  color: var(--sy-aqua);
+  background: transparent;
+}
+
+.button {
+  border-radius: 0;
+  font-weight: 500;
+  text-transform: none;
+}
+
+.button--primary {
+  background: var(--sy-aqua);
+  border-color: var(--sy-aqua);
+  color: #0c0c0c;
+}
+
+.button--primary:hover {
+  background: var(--sy-green);
+  border-color: var(--sy-green);
+  color: #0c0c0c;
+}
+
+.button--secondary {
+  background: transparent;
+  border: 1px solid var(--sy-border);
+  color: var(--sy-fg);
+}
+
+.button--secondary:hover {
+  border-color: var(--sy-aqua);
+  color: var(--sy-aqua);
+}
+
+::selection {
+  background: rgba(137, 180, 130, 0.35);
+  color: var(--sy-fg);
+}
+
+/* Scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sy-border) var(--sy-bg);
+}

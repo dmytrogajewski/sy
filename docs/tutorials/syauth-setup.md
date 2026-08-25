@@ -18,11 +18,10 @@ phone is in BLE range with the screen unlocked, the audit log
 shows a `grantors=pam_syauth` line, and pulling the phone off the
 desk transparently falls through to FIDO or password authentication.
 
-The PAM `sufficient` semantic means syauth wins the stack when it
-returns success, but a denial never blocks the remaining
-authenticators. The `timeout=8000` module argument matches the
-real BiometricPrompt reaction window (2–3 s) measured on the
-reference Galaxy S25 Ultra hardware.
+PAM `sufficient` means syauth wins when it succeeds, and a denial
+never blocks the remaining authenticators (FIDO or password). The
+wrapper sets `timeout=8000` so the phone has time for a biometric
+prompt.
 
 ## Prerequisites
 
@@ -80,11 +79,10 @@ journalctl --user -u syauth-presenced -n 20
 
 ## Step 3 — Wire `pam_syauth.so` into the sudo PAM stack
 
-`sy syauth install-pam` is a thin reformatter over the upstream
-`syauth install-pam` that bakes in the reality-corrected defaults
-(`--control sufficient`, `--module-args timeout=8000`). It writes
-a `.bak` snapshot of `/etc/pam.d/sudo` before editing, so the
-change is reversible with `sy syauth uninstall-pam --service sudo --yes`:
+`sy syauth install-pam` wraps upstream `syauth install-pam` with
+`--control sufficient` and `timeout=8000`. It writes a `.bak` of
+`/etc/pam.d/sudo` first. Undo with
+`sy syauth uninstall-pam --service sudo --yes`:
 
 ```bash
 sy syauth install-pam --service sudo --yes

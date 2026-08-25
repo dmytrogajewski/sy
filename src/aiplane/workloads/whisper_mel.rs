@@ -26,7 +26,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use rustfft::{Fft, FftPlanner, num_complex::Complex32};
+use rustfft::{num_complex::Complex32, Fft, FftPlanner};
 
 /// Target sample rate. The knowledge side resamples to this before
 /// dispatch; `run()` rejects anything else.

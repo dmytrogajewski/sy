@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="280" viewBox="0 0 840 280" role="img" aria-labelledby="t d">
+  <title id="t">Every NPU call goes through the aiplane socket</title>
+  <desc id="d">knowledge, the agent runner, and the CLI send embed requests to the aiplane over a Unix socket. Only the aiplane opens /dev/accel/accel0.</desc>
+  <rect width="840" height="280" fill="#101010"/>
+  <g font-family="ui-monospace, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace" font-size="14">
+    <rect x="40" y="36" width="200" height="64" fill="#0c0c0c" stroke="#2a2a2a"/>
+    <text x="140" y="74" text-anchor="middle" fill="#e8e4d4">knowledge</text>
+    <rect x="320" y="36" width="200" height="64" fill="#0c0c0c" stroke="#2a2a2a"/>
+    <text x="420" y="74" text-anchor="middle" fill="#e8e4d4">agt / CLI</text>
+    <rect x="600" y="36" width="200" height="64" fill="#0c0c0c" stroke="#2a2a2a"/>
+    <text x="700" y="74" text-anchor="middle" fill="#e8e4d4">MCP tools</text>
+    <path d="M140 100 L140 132 L420 132" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <path d="M420 100 L420 132" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <path d="M700 100 L700 132 L420 132" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <path d="M420 132 L420 156" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <polygon points="420,162 415,152 425,152" fill="#89b482"/>
+    <rect x="220" y="164" width="400" height="48" fill="#0c0c0c" stroke="#89b482" stroke-width="1.5"/>
+    <text x="420" y="194" text-anchor="middle" fill="#e8e4d4">aiplane daemon / Unix socket</text>
+    <path d="M420 212 L420 228" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <polygon points="420,234 415,224 425,224" fill="#89b482"/>
+    <rect x="220" y="236" width="400" height="28" fill="#0c0c0c" stroke="#9a9584" stroke-dasharray="4 3"/>
+    <text x="420" y="255" text-anchor="middle" fill="#9a9584" font-size="12">/dev/accel/accel0</text>
+  </g>
+</svg>

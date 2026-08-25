@@ -156,7 +156,8 @@ mod tests {
     /// explicit dev override must beat the ambient checkout.
     #[test]
     fn resolve_power_config_path_prefers_sy_root() {
-        let got = resolve_power_config_path(Some("/repo"), true, PathBuf::from("/xdg/sy/power.toml"));
+        let got =
+            resolve_power_config_path(Some("/repo"), true, PathBuf::from("/xdg/sy/power.toml"));
         assert_eq!(got, PathBuf::from("/repo/configs/sy/power.toml"));
     }
 

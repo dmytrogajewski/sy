@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="220" viewBox="0 0 840 220" role="img" aria-labelledby="t d">
+  <title id="t">sy apply turns this git repo into the laptop</title>
+  <desc id="d">The git repo of configs and themes is rendered by sy apply onto the home directory and user systemd units, then sy.target starts the planes.</desc>
+  <rect width="840" height="220" fill="#101010"/>
+  <g font-family="ui-monospace, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace" font-size="14">
+    <rect x="24" y="48" width="200" height="124" fill="#0c0c0c" stroke="#2a2a2a" stroke-width="1.25"/>
+    <text x="124" y="88" text-anchor="middle" fill="#89b482">this repo</text>
+    <text x="124" y="114" text-anchor="middle" fill="#e8e4d4" font-size="12">configs/</text>
+    <text x="124" y="134" text-anchor="middle" fill="#e8e4d4" font-size="12">themes/</text>
+    <text x="124" y="154" text-anchor="middle" fill="#e8e4d4" font-size="12">units</text>
+    <path d="M224 110 L292 110" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <polygon points="298,110 288,105 288,115" fill="#89b482"/>
+    <rect x="304" y="64" width="200" height="92" fill="#0c0c0c" stroke="#89b482" stroke-width="1.5"/>
+    <text x="404" y="108" text-anchor="middle" fill="#e8e4d4">sy apply</text>
+    <text x="404" y="132" text-anchor="middle" fill="#9a9584" font-size="12">render / symlink / reload</text>
+    <path d="M504 110 L572 110" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <polygon points="578,110 568,105 568,115" fill="#89b482"/>
+    <rect x="584" y="36" width="232" height="148" fill="#0c0c0c" stroke="#2a2a2a" stroke-width="1.25"/>
+    <text x="700" y="76" text-anchor="middle" fill="#89b482">the laptop</text>
+    <text x="700" y="104" text-anchor="middle" fill="#e8e4d4" font-size="12">~/.config</text>
+    <text x="700" y="124" text-anchor="middle" fill="#e8e4d4" font-size="12">user units</text>
+    <text x="700" y="154" text-anchor="middle" fill="#e8e4d4" font-size="12">sy.target</text>
+  </g>
+</svg>

@@ -16,6 +16,8 @@ real privilege on the host. The current surface includes:
   polkit rule at [`configs/policy/10-sy-power.rules`](configs/policy/10-sy-power.rules).
 - Sole owner of `/dev/accel/accel0` from the `aiplane` daemon
   ("one process per NPU" — see [`AGENTS.md`](AGENTS.md)).
+- The Spark HTTPS agent and root Docker executor on a DGX Spark
+  (`sy spark`, `sy-spark-agent.service`, `sy-spark-executor.service`).
 
 Treat vulnerabilities in any of the above as in scope.
 

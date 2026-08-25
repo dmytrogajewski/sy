@@ -5,6 +5,9 @@
   "ignorePaths": [
     "target/**",
     "node_modules/**",
+    "website/node_modules/**",
+    "website/build/**",
+    "website/.docusaurus/**",
     "specs/runs/**",
     ".lycheecache",
     "**/*.lock",
@@ -96,6 +99,8 @@
     "nvidia",
     "nvram",
     "onnx",
+    "ornith",
+    "Ornith",
     "openssf",
     "ort",
     "passwordless",

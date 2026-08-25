@@ -1,0 +1,64 @@
+[Unit]
+Description=sy DGX Spark HTTPS agent
+After=network-online.target sy-spark-executor.service
+Wants=network-online.target sy-spark-executor.service
+PartOf=sy-spark.target
+StartLimitIntervalSec=120s
+StartLimitBurst=5
+
+[Service]
+Type=notify
+User=sy-spark
+Group=sy-spark
+ExecStart=/opt/sy-spark/current/sy spark agent run-agent --config /etc/sy/spark-agent.toml --certificate /var/lib/sy-spark/tls/server-chain.pem --key /var/lib/sy-spark/tls/server-key.pem --token %d/bootstrap-token --hf-token %d/hf-token
+LoadCredential=bootstrap-token:/etc/sy/spark-bootstrap-admin.credential
+LoadCredential=hf-token:/etc/sy/spark-hf-read.credential
+UnsetEnvironment=HF_TOKEN HF_TOKEN_PATH HF_HOME HF_HUB_CACHE HF_ENDPOINT HF_XET_HIGH_PERFORMANCE
+WorkingDirectory=/var/lib/sy-spark
+UMask=0027
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateIPC=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProtectSystem=strict
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+DevicePolicy=closed
+ReadWritePaths=/var/lib/sy-spark
+ReadOnlyPaths=/etc/sy/spark-agent.toml
+LimitNOFILE=4096
+TasksMax=128
+MemoryMax=256M
+OOMScoreAdjust=-100
+AppArmorProfile=sy-spark-agent
+NotifyAccess=main
+WatchdogSec=30s
+TimeoutStopSec=15s
+Restart=on-failure
+RestartSec=2s
+RestartSteps=5
+RestartMaxDelaySec=30s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=sy-spark.target

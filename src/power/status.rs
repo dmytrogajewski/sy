@@ -1150,7 +1150,9 @@ mod tests {
         let onb = OnboardingStatus {
             active: true,
             days_collected: 13,
-            ready_at: chrono::Utc::now() + chrono::Duration::hours(8) + chrono::Duration::minutes(30),
+            ready_at: chrono::Utc::now()
+                + chrono::Duration::hours(8)
+                + chrono::Duration::minutes(30),
         };
         let hint = onboarding_hint(&onb).expect("active hint");
         assert_eq!(
@@ -1168,7 +1170,9 @@ mod tests {
         let onb = OnboardingStatus {
             active: true,
             days_collected: 13,
-            ready_at: chrono::Utc::now() + chrono::Duration::hours(8) + chrono::Duration::minutes(30),
+            ready_at: chrono::Utc::now()
+                + chrono::Duration::hours(8)
+                + chrono::Duration::minutes(30),
         };
         let out = format_waybar(&resp, &cfg, ShieldState::CoolAc, &onb);
         let v: Value = serde_json::from_str(&out).expect("waybar JSON parses");

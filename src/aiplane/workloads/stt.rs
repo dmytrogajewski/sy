@@ -30,14 +30,14 @@ use anyhow::Result;
 use ort::{
     ep::Vitis,
     inputs,
-    session::{Session, builder::GraphOptimizationLevel},
+    session::{builder::GraphOptimizationLevel, Session},
     value::Tensor,
 };
 use tokenizers::Tokenizer;
 
 use super::super::reexec;
 use super::super::registry::{
-    Workload, WorkloadHealth, WorkloadInput, WorkloadKind, WorkloadOutput, cache_root,
+    cache_root, Workload, WorkloadHealth, WorkloadInput, WorkloadKind, WorkloadOutput,
 };
 use super::super::session::SessionPool;
 use super::npu_intra_threads;
@@ -294,7 +294,8 @@ fn transcribe(stt: &mut LoadedStt, pcm: &[i16]) -> Result<String> {
     let transcribe_id = stt.transcribe_id;
     let notimestamps_id = stt.notimestamps_id;
     let decoder = &mut stt.decoder;
-    let mut step = |ids: &[i64], pos: usize| run_decoder(decoder, ids, pos, &encoder_out, ids_first);
+    let mut step =
+        |ids: &[i64], pos: usize| run_decoder(decoder, ids, pos, &encoder_out, ids_first);
     // Auto-detect the language: the first token Whisper emits after SOT is
     // the language token. Then force the transcribe task + no-timestamps so
     // the model transcribes verbatim in that language (never translates).

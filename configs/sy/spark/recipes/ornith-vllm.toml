@@ -1,0 +1,211 @@
+schema = "sy.spark.recipe/v1"
+
+[identity]
+id = "ornith-1.5-9b-vllm-0.19.1"
+version = 1
+status = "local-verified"
+maintainer = "sy project"
+source_url = "https://github.com/vllm-project/vllm/tree/b1388b1fbf5aaef47937fabe98931211684666a6"
+source_commit = "b1388b1fbf5aaef47937fabe98931211684666a6"
+
+[provenance]
+model_license = "MIT"
+model_license_url = "https://huggingface.co/ornith-ai/Ornith-1.5-9B/blob/489cb97981b8654bcfcf30ce1f94ed1b62e07b53/README.md"
+engine_license = "Apache-2.0"
+engine_license_url = "https://github.com/vllm-project/vllm/blob/b1388b1fbf5aaef47937fabe98931211684666a6/LICENSE"
+image_license = "Apache-2.0"
+image_source_url = "https://hub.docker.com/r/vllm/vllm-openai"
+artifact_source_url = "https://huggingface.co/ornith-ai/Ornith-1.5-9B/tree/489cb97981b8654bcfcf30ce1f94ed1b62e07b53"
+redistribution = "model and engine licenses permit redistribution; preserve notices"
+acceptance_required = false
+
+[host]
+architecture = "aarch64"
+gpu_model = "NVIDIA GB10"
+compute_capability = "12.1"
+dgx_builds = ["7.5.0"]
+driver_min = "580.0.0"
+driver_max_exclusive = "581.0.0"
+toolkit_min = "1.19.0"
+toolkit_max_exclusive = "1.20.0"
+
+[model]
+repository = "ornith-ai/Ornith-1.5-9B"
+commits = ["489cb97981b8654bcfcf30ce1f94ed1b62e07b53"]
+format = "safetensors"
+precision = "bf16"
+tokenizer_sha256 = "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+parser = "vllm:qwen3_xml+qwen3"
+parser_sha256 = "9dd2fbd270feaa1fbef2d4f634d7887c9c506e3bde140f8e7351c8944e8fd235"
+
+[model.remote_code]
+allowed = false
+vendored_sha256 = []
+
+[[model.files]]
+path = "model-00001-of-00004.safetensors"
+sha256 = "7cf17ccbef5108b40d3b5f6418d4ef1a1c2f2a9c96791be893f4d510cfa966e4"
+
+[[model.files]]
+path = "model-00002-of-00004.safetensors"
+sha256 = "d78128c42a7de727b3becbe25d78b3374729abc0635bbb822f66f675107df3c2"
+
+[[model.files]]
+path = "model-00003-of-00004.safetensors"
+sha256 = "5503caeb27904e56c5f8e4d62a37282da79ed41d6dc2da0ae57b135460c8cdf2"
+
+[[model.files]]
+path = "model-00004-of-00004.safetensors"
+sha256 = "d3faa4ac32ae58dca23480832953edf26f0016b65ac7e0702feeb59a6c73eb2b"
+
+[[model.files]]
+path = "model.safetensors.index.json"
+sha256 = "d5c7fee99574e9a05f901282aee04fc4fc3dccf094a659df48c6b8e9f39109c3"
+
+[[model.files]]
+path = "config.json"
+sha256 = "1f1b3751c38f16a63340df90a55e870bef0f0b2968d833825a605b7cf930a313"
+
+[[model.files]]
+path = "tokenizer.json"
+sha256 = "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+
+[[model.files]]
+path = "chat_template.jinja"
+sha256 = "9dd2fbd270feaa1fbef2d4f634d7887c9c506e3bde140f8e7351c8944e8fd235"
+
+[[model.files]]
+path = "preprocessor_config.json"
+sha256 = "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516"
+
+[[model.files]]
+path = "processor_config.json"
+sha256 = "d89ef49ce9cd37fbf510158e13c1ef063d9286411c1ec9049932dbe0487143b1"
+
+[engine]
+name = "vllm"
+version = "0.19.1"
+accelerator = "nvidia"
+image_repository = "vllm/vllm-openai"
+image_digest = "sha256:f1e05bc81cb77343d1c3c2c19351697e50dd4dbb229eaa0e87e707b8cfda02e9"
+image_architecture = "arm64"
+entrypoint = ["vllm", "serve"]
+argv = ["{model_snapshot}", "--served-model-name", "Ornith-1.5-9B", "--host", "0.0.0.0", "--port", "{port}", "--max-model-len", "{max_model_len}", "--gpu-memory-utilization", "0.5", "--enable-prefix-caching", "--enable-auto-tool-choice", "--tool-call-parser", "qwen3_xml", "--reasoning-parser", "qwen3"]
+
+[[engine.substitutions]]
+name = "model_snapshot"
+values = ["executor_generated_beneath_hf_cache"]
+
+[[engine.substitutions]]
+name = "port"
+values = ["8000"]
+
+[[engine.substitutions]]
+name = "max_model_len"
+values = ["262144"]
+
+[isolation]
+network_policy = "sy-spark-internal-v1"
+writable_tmpfs = ["/tmp"]
+capabilities = []
+seccomp = "default"
+pid_limit = 512
+run_as_uid = 65534
+disabled_features = ["trust_remote_code", "remote_model_download", "invocations_route"]
+
+[[isolation.mounts]]
+host_root = "/var/lib/sy-spark/huggingface"
+container_path = "/models"
+read_only = true
+purpose = "model"
+
+[[isolation.mounts]]
+host_root = "/var/lib/sy-spark/compile-cache"
+container_path = "/compile-cache"
+read_only = false
+purpose = "compile_cache"
+
+[resources]
+download_bytes = 20700000000
+image_bytes = 18000000000
+startup_peak_bytes = 68719476736
+steady_peak_bytes = 68719476736
+kv_cache_policy = "bounded_by_admission_and_selected_context"
+context_ceiling = 262144
+concurrency_ceiling = 4
+compile_cache_bytes = 8589934592
+
+[health]
+startup_deadline_seconds = 900
+method = "GET"
+path = "/health"
+semantic_prompt = "Generate one completion token."
+semantic_max_tokens = 1
+served_model = "Ornith-1.5-9B"
+
+[gateway]
+port = 8000
+capabilities = ["text_generation", "tool_calling", "vision"]
+
+[gateway.vision]
+processor_sha256 = "d89ef49ce9cd37fbf510158e13c1ef063d9286411c1ec9049932dbe0487143b1"
+media_types = ["image/jpeg", "image/png", "image/webp"]
+max_bytes = 524288
+max_total_bytes = 786432
+max_count = 2
+max_width = 4096
+max_height = 4096
+health_media_type = "image/png"
+health_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+health_image_sha256 = "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460"
+health_prompt = "Name the single dominant color using one lowercase word."
+health_expected_text = "black"
+health_max_tokens = 64
+health_disable_thinking = true
+
+[[gateway.methods]]
+method = "GET"
+path = "/v1/models"
+
+[[gateway.methods]]
+method = "POST"
+path = "/v1/completions"
+
+[[gateway.methods]]
+method = "POST"
+path = "/v1/chat/completions"
+
+[[gateway.methods]]
+method = "POST"
+path = "/tokenize"
+
+[evidence]
+host_fingerprint = "sha256:7e42b88250e762400e91b902cfa1fcda6b4d1cc118eb6b91fd50716b41cf8510"
+image_run_as_uid = 65534
+upstream_recipe_commit = "1fb66f059ee427c5a3678b3117ef73aab042b458"
+corpus = "sy.spark.agent-corpus/v1"
+objective = "agent"
+quality = "real GB10 exact-identity semantic token proof, authenticated completion and SSE, functional stop and cached re-serve, isolation, and 8 GiB unified-memory floor passed"
+stability_seconds = 0
+measured_metrics = [
+  "model_commit=489cb97981b8654bcfcf30ce1f94ed1b62e07b53",
+  "image_digest=sha256:f1e05bc81cb77343d1c3c2c19351697e50dd4dbb229eaa0e87e707b8cfda02e9",
+  "precision=bf16",
+  "context_ceiling=262144",
+  "semantic_model_identity_and_one_token_usage=pass",
+  "generation_11_startup_ms=297452",
+  "generation_12_cached_re_serve_startup_ms=167217",
+  "authenticated_models_nonstream_sse=pass",
+  "unauthenticated_http_status=401",
+  "hidden_health_http_status=404",
+  "post_start_mem_available_bytes=54629040128",
+  "post_start_memory_full_psi_avg10_percent=0.0",
+  "post_start_swap_in_delta=0",
+  "memory_floor_bytes=8589934592",
+  "container_run_as_uid=65534",
+  "public_engine_ports=0",
+  "readonly_model_mount=true",
+  "exact_digest_and_nvidia_device_request=pass",
+]
+verified_at = "2026-08-24T16:45:32Z"
+expires_at = "2027-08-24T16:45:32Z"
