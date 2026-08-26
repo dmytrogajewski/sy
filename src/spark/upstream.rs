@@ -159,6 +159,9 @@ pub fn decode_embedding_response(
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GenerationEvent {
+    ReasoningDelta {
+        text: String,
+    },
     TextDelta {
         text: String,
     },
@@ -649,6 +652,15 @@ fn decode_sse_event(bytes: &[u8]) -> Option<Result<GenerationEvent, UpstreamErro
             return Some(Ok(GenerationEvent::TextDelta { text: text.into() }));
         }
     }
+    let delta = &value["choices"][0]["delta"];
+    if let Some(text) = delta["reasoning_content"]
+        .as_str()
+        .or_else(|| delta["reasoning"].as_str())
+    {
+        if !text.is_empty() {
+            return Some(Ok(GenerationEvent::ReasoningDelta { text: text.into() }));
+        }
+    }
     if let Some(reason) = value["choices"][0]["finish_reason"].as_str() {
         return Some(Ok(GenerationEvent::Finished {
             finish_reason: Some(reason.into()),
@@ -773,6 +785,22 @@ mod tests {
                 arguments: "{\"cmd\":".into()
             }
         );
+    }
+
+    #[test]
+    fn vllm_reasoning_chunks_decode_to_protocol_neutral_events() {
+        for field in ["reasoning_content", "reasoning"] {
+            let body = format!(
+                "data: {{\"choices\":[{{\"delta\":{{\"{field}\":\"inspect state\"}}}}]}}\n\n"
+            );
+            let event = decode_sse_event(body.as_bytes()).unwrap().unwrap();
+            assert_eq!(
+                event,
+                GenerationEvent::ReasoningDelta {
+                    text: "inspect state".into()
+                }
+            );
+        }
     }
 
     #[test]

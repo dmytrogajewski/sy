@@ -424,12 +424,7 @@ fn planned_assets(
             apply_remote(),
         ),
         ("/etc/sy", "root:sy-spark", "0750", apply_remote()),
-        (
-            "/etc/sy/spark-recipes.d",
-            "root:root",
-            "0755",
-            apply_remote(),
-        ),
+        ("/etc/sy/spark", "root:sy-spark", "0750", apply_remote()),
         (
             "/var/lib/sy-spark",
             "sy-spark:sy-spark",
@@ -539,6 +534,17 @@ fn planned_assets(
         ),
         asset(
             AssetKind::File,
+            "/etc/sy/spark/engine.toml",
+            "root:sy-spark",
+            "0640",
+            ContentIdentity::Sha256(format!(
+                "{:x}",
+                Sha256::digest(include_bytes!("../../configs/sy/spark/engine.toml"))
+            )),
+            apply_remote(),
+        ),
+        asset(
+            AssetKind::File,
             "/var/lib/sy-spark/state.sqlite3",
             "sy-spark:sy-spark",
             "0600",
@@ -611,29 +617,6 @@ fn planned_assets(
             "root:root",
             "atomic",
             ContentIdentity::SignedReleaseManifest,
-            apply_remote(),
-        ));
-    }
-    for (name, bytes) in [
-        (
-            "ornith-vllm.toml",
-            include_bytes!("../../configs/sy/spark/recipes/ornith-vllm.toml").as_slice(),
-        ),
-        (
-            "qwen3-embedding.toml",
-            include_bytes!("../../configs/sy/spark/recipes/qwen3-embedding.toml").as_slice(),
-        ),
-        (
-            "fixture-http-echo.toml",
-            include_bytes!("../../configs/sy/spark/recipes/fixture-http-echo.toml").as_slice(),
-        ),
-    ] {
-        assets.push(asset(
-            AssetKind::Recipe,
-            &format!("/etc/sy/spark-recipes.d/{name}"),
-            "root:root",
-            "0644",
-            ContentIdentity::Sha256(format!("{:x}", Sha256::digest(bytes))),
             apply_remote(),
         ));
     }
@@ -1081,8 +1064,15 @@ fn validate_rollback_state(
         )));
     }
     let catalog =
-        crate::spark::recipe::RecipeCatalog::load_signed(&root.join("etc/sy/spark-recipes.d"))
+        crate::spark::recipe::RecipeCatalog::load_legacy(&root.join("etc/sy/spark-recipes.d"))
             .map_err(configuration_error)?;
+    let engine_path = root.join("etc/sy/spark/engine.toml");
+    let engine_id = engine_path
+        .exists()
+        .then(|| crate::spark::engine::EnginePolicy::load(&engine_path))
+        .transpose()
+        .map_err(configuration_error)?
+        .map(|engine| engine.config().id.clone());
     let mut statement = connection
         .prepare("SELECT metadata_json FROM instances WHERE desired_state='running' ORDER BY name")
         .map_err(|error| configuration_error(format!("read active instances: {error}")))?;
@@ -1095,7 +1085,9 @@ fn validate_rollback_state(
             row.map_err(|error| configuration_error(format!("read active instance: {error}")))?;
         let instance: super::wire::InstanceDocument = serde_json::from_str(&metadata)
             .map_err(|error| configuration_error(format!("decode active instance: {error}")))?;
-        if catalog.recipe(&instance.recipe_id).is_none() {
+        if catalog.recipe(&instance.recipe_id).is_none()
+            && engine_id.as_deref() != Some(instance.recipe_id.as_str())
+        {
             return Err(configuration_error(format!(
                 "active instance {} requires unavailable recipe {}",
                 instance.name, instance.recipe_id
@@ -1478,14 +1470,12 @@ impl TransactionSnapshot {
         let file_paths = [
             "etc/sy/spark-agent.toml",
             "etc/sy/spark-executor.toml",
+            "etc/sy/spark/engine.toml",
             "etc/systemd/system/sy-spark-agent.service",
             "etc/systemd/system/sy-spark-executor.service",
             "etc/systemd/system/sy-spark.target",
             "etc/apparmor.d/sy-spark-agent",
             "etc/apparmor.d/sy-spark-executor",
-            "etc/sy/spark-recipes.d/ornith-vllm.toml",
-            "etc/sy/spark-recipes.d/qwen3-embedding.toml",
-            "etc/sy/spark-recipes.d/fixture-http-echo.toml",
             "var/lib/sy-spark/ca/ca-key.pem",
             "var/lib/sy-spark/ca/ca-cert.pem",
             "var/lib/sy-spark/tls/server-key.pem",
@@ -1658,6 +1648,20 @@ fn installed_service_uid(root: &Path) -> Result<u32, InstallError> {
 }
 
 #[cfg(feature = "spark-agent")]
+const EXECUTOR_BOUNDARY_CHOWN_ARGS: &[&str] = &[
+    "root:sy-spark",
+    "/etc/sy",
+    "/etc/sy/spark",
+    "/etc/sy/spark/engine.toml",
+    "/etc/sy/spark-agent.toml",
+    "/etc/sy/spark-executor.toml",
+    "/etc/sy/spark-hf-read.credential",
+    "/run/sy-spark",
+    "/var/lib/sy-spark/executor",
+    "/var/lib/sy-spark/compile-cache",
+];
+
+#[cfg(feature = "spark-agent")]
 fn apply_host_integration() -> Result<(), InstallError> {
     ensure_http_fallback()?;
     require_fixed_success(
@@ -1678,16 +1682,7 @@ fn apply_host_integration() -> Result<(), InstallError> {
     require_fixed_success(
         "set executor boundary ownership",
         "chown",
-        &[
-            "root:sy-spark",
-            "/etc/sy",
-            "/etc/sy/spark-agent.toml",
-            "/etc/sy/spark-executor.toml",
-            "/etc/sy/spark-hf-read.credential",
-            "/run/sy-spark",
-            "/var/lib/sy-spark/executor",
-            "/var/lib/sy-spark/compile-cache",
-        ],
+        EXECUTOR_BOUNDARY_CHOWN_ARGS,
     )?;
     require_fixed_success(
         "reload agent AppArmor profile",
@@ -2501,7 +2496,7 @@ fn directory_layout() -> [(&'static str, u32, bool); 14] {
         ("opt/sy-spark/releases", 0o755, true),
         ("opt/sy-spark/hf-http-fallback", 0o755, true),
         ("etc/sy", 0o750, true),
-        ("etc/sy/spark-recipes.d", 0o755, true),
+        ("etc/sy/spark", 0o750, true),
         ("etc/apparmor.d", 0o755, false),
         ("etc/systemd/system", 0o755, false),
         ("var/lib/sy-spark", 0o750, true),
@@ -2521,12 +2516,20 @@ fn write_policy_assets(
     service_uid: u32,
     report: &mut InstallReport,
 ) -> Result<(), InstallError> {
+    std::fs::create_dir_all(root.join("etc/sy/spark")).map_err(|error| {
+        configuration_error(format!("create Spark engine policy directory: {error}"))
+    })?;
     let config = include_str!("../../configs/sy/spark/agent.toml")
         .replace("10.1.30.143:9843", &format!("{listen_address}:9843"));
     let executor_config = include_str!("../../configs/sy/spark/executor.toml")
         .replace("agent_uid = 996", &format!("agent_uid = {service_uid}"));
     for (relative, bytes, mode) in [
         ("etc/sy/spark-agent.toml", config.as_bytes(), 0o640),
+        (
+            "etc/sy/spark/engine.toml",
+            include_bytes!("../../configs/sy/spark/engine.toml").as_slice(),
+            0o640,
+        ),
         (
             "etc/sy/spark-executor.toml",
             executor_config.as_bytes(),
@@ -2562,19 +2565,6 @@ fn write_policy_assets(
         let differs = !std::fs::read(&path).is_ok_and(|existing| existing == bytes);
         if differs {
             write_synced(&path, bytes, mode, &mut report.fsync_trace)?;
-        }
-        report
-            .actions
-            .push(InstallAction::EnsurePolicyAsset(relative.into()));
-    }
-    std::fs::create_dir_all(root.join("etc/sy/spark-recipes.d")).map_err(|error| {
-        configuration_error(format!("create signed recipe catalog directory: {error}"))
-    })?;
-    for (name, bytes) in crate::spark::recipe::RecipeCatalog::signed_assets() {
-        let relative = format!("etc/sy/spark-recipes.d/{name}");
-        let path = root.join(&relative);
-        if !std::fs::read(&path).is_ok_and(|existing| existing == *bytes) {
-            write_synced(&path, bytes, 0o644, &mut report.fsync_trace)?;
         }
         report
             .actions
@@ -3397,7 +3387,8 @@ mod tests {
         assert!(manifest
             .assets
             .iter()
-            .any(|asset| asset.kind == AssetKind::Recipe));
+            .all(|asset| asset.kind != AssetKind::Recipe));
+        assert!(paths.contains(&"/etc/sy/spark/engine.toml"));
         assert!(manifest
             .assets
             .iter()
@@ -3918,8 +3909,6 @@ mod tests {
             "etc/systemd/system/sy-spark-executor.service",
             "etc/apparmor.d/sy-spark-agent",
             "etc/apparmor.d/sy-spark-executor",
-            "etc/sy/spark-recipes.d/ornith-vllm.toml",
-            "etc/sy/spark-recipes.d/qwen3-embedding.toml",
             "etc/sy/spark-bootstrap-admin.credential",
             "var/lib/sy-spark/ca/ca-key.pem",
             "var/lib/sy-spark/tls/server-key.pem",
@@ -3965,14 +3954,6 @@ mod tests {
                 "etc/apparmor.d/sy-spark-executor",
                 b"prior-executor-policy".as_slice(),
             ),
-            (
-                "etc/sy/spark-recipes.d/ornith-vllm.toml",
-                b"prior-ornith-recipe".as_slice(),
-            ),
-            (
-                "etc/sy/spark-recipes.d/qwen3-embedding.toml",
-                b"prior-embedding-recipe".as_slice(),
-            ),
         ] {
             std::fs::write(root.path().join(relative), prior).unwrap();
         }
@@ -4009,14 +3990,6 @@ mod tests {
             (
                 "etc/apparmor.d/sy-spark-executor",
                 b"prior-executor-policy".as_slice(),
-            ),
-            (
-                "etc/sy/spark-recipes.d/ornith-vllm.toml",
-                b"prior-ornith-recipe".as_slice(),
-            ),
-            (
-                "etc/sy/spark-recipes.d/qwen3-embedding.toml",
-                b"prior-embedding-recipe".as_slice(),
             ),
         ] {
             assert_eq!(std::fs::read(root.path().join(relative)).unwrap(), prior);
@@ -4101,6 +4074,13 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "spark-agent")]
+    #[test]
+    fn host_integration_grants_agent_access_to_engine_policy() {
+        assert!(super::EXECUTOR_BOUNDARY_CHOWN_ARGS.contains(&"/etc/sy/spark"));
+        assert!(super::EXECUTOR_BOUNDARY_CHOWN_ARGS.contains(&"/etc/sy/spark/engine.toml"));
+    }
+
     #[test]
     fn spark_executor_unit_is_unix_only_group_reachable_and_hardened() {
         let unit = include_str!("../../configs/systemd/system/sy-spark-executor.service");
@@ -4125,7 +4105,7 @@ mod tests {
             "ProtectSystem=strict",
             "ProcSubset=all",
             "RestrictAddressFamilies=AF_UNIX",
-            "ReadOnlyPaths=/etc/sy/spark-executor.toml /etc/sy/spark-agent.toml /etc/sy/spark-recipes.d",
+            "ReadOnlyPaths=/etc/sy/spark-executor.toml /etc/sy/spark-agent.toml /etc/sy/spark/engine.toml /etc/sy/spark-recipes.d /var/lib/sy-spark/huggingface",
             "ReadWritePaths=/run/sy-spark /var/run/docker.sock /var/lib/sy-spark/executor /var/lib/sy-spark/compile-cache /sys/fs/cgroup/system.slice",
             "MemoryMax=64M",
             "WatchdogSec=30s",
@@ -4138,6 +4118,8 @@ mod tests {
         assert!(agent_unit.contains("Wants=network-online.target sy-spark-executor.service"));
         for permission in [
             "network unix stream,",
+            "/etc/sy/spark/engine.toml r,",
+            "/var/lib/sy-spark/huggingface/** r,",
             "/run/sy-spark/executor.sock rwk,",
             "/var/run/docker.sock rw,",
             "/sys/fs/cgroup/**/cpu.max r,",

@@ -202,6 +202,37 @@ fn claude_code_2_1_241_payload_is_an_exact_compatibility_fixture() {
 }
 
 #[test]
+fn claude_code_2_1_241_trailing_system_message_is_promoted() {
+    let request = gateway::rewrite_anthropic_request(
+        br#"{"model":"ornith","system":[{"type":"text","text":"root rules"}],"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]},{"role":"system","content":"runtime context"}],"max_tokens":32000,"stream":true}"#,
+        "Ornith-1.5-9B",
+    )
+    .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+    assert_eq!(body["messages"][0]["role"], "system");
+    assert_eq!(
+        body["messages"][0]["content"],
+        "root rules\n\nruntime context"
+    );
+    assert_eq!(body["messages"][1]["role"], "user");
+}
+
+#[test]
+fn claude_code_2_1_241_title_schema_becomes_vllm_response_format() {
+    let request = gateway::rewrite_anthropic_request(
+        br#"{"model":"ornith","messages":[{"role":"user","content":"title this"}],"max_tokens":64,"output_config":{"effort":"high","format":{"type":"json_schema","schema":{"type":"object","properties":{"title":{"type":"string"}},"required":["title"]}}}}"#,
+        "Ornith-1.5-9B",
+    )
+    .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+    assert_eq!(body["response_format"]["type"], "json_schema");
+    assert_eq!(
+        body["response_format"]["json_schema"]["schema"]["required"][0],
+        "title"
+    );
+}
+
+#[test]
 fn malformed_pairing_oversize_image_and_unknown_content_fail_before_upstream() {
     for body in [
         br#"{"model":"ornith","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"orphan","content":"x"}]}],"max_tokens":8}"#.as_slice(),

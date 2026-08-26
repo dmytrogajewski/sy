@@ -4,7 +4,7 @@
 
 ## Goal
 
-Ask a Spark host to run a signed recipe, wait until the instance is
+Ask a Spark host to run a verified model with its configured engine, wait until the instance is
 healthy, and confirm the OpenAI-compatible gateway path answers.
 
 ## Prerequisites
@@ -14,7 +14,7 @@ healthy, and confirm the OpenAI-compatible gateway path answers.
   [How to install the Spark agent](install-spark.md) first.
 - `sy` on your laptop with Spark client credentials configured for
   that host. Substitute `dgx-spark` below for the host name you use.
-- Enough free memory and disk on the Spark for the recipe. Missing
+- Enough free memory and disk on the Spark for the configured engine envelope. Missing
   or stale telemetry fails closed; the agent will refuse the serve
   rather than overcommit.
 
@@ -29,18 +29,15 @@ healthy, and confirm the OpenAI-compatible gateway path answers.
    ```
 
    If the dry-run is denied, free memory or disk on the Spark and
-   retry. Do not pass `--allow-unverified` to skip a denial you do
-   not understand. Missing telemetry fails closed: the agent refuses
+   retry. Missing telemetry fails closed: the agent refuses
    rather than guessing.
 
-2. Serve a signed fixture first if you want to prove the Docker
-   lifecycle without loading weights or using the GPU. The fixture
-   recipe is digest-pinned ARM64 HTTP:
+2. Start the verified model. The agent selects the single engine configured at
+   `/etc/sy/spark/engine.toml`; there is no image, recipe, argv, or unsafe-override
+   flag on the request:
 
    ```bash
-   sy spark dgx-spark serve ornith-1.5:9b \
-     --recipe spark-fixture-http-echo-1.0.0 \
-     --name fixture
+   sy spark dgx-spark serve ornith-1.5:9b --name ornith
    ```
 
 3. Watch desired versus observed state. `ps` does not print the
@@ -50,29 +47,17 @@ healthy, and confirm the OpenAI-compatible gateway path answers.
    sy spark dgx-spark ps --json
    ```
 
-4. Optionally select from installed locally verified engines. This does not
-   measure speed, download, pull, convert, or start an engine:
+4. To add another model, download an immutable revision and serve its alias:
 
    ```bash
-   sy spark dgx-spark tune ornith-1.5:9b --objective agent --json
+   sy spark dgx-spark download owner/model --revision <commit> --alias model:tag
+   sy spark dgx-spark serve model:tag --name model
    ```
 
-   When you are ready for a real engine, omit `--recipe` to use the exact tuned
-   winner or the visible verified vLLM fallback, or pass a named recipe. Example
-   embedding recipe:
-
-   ```bash
-   sy spark dgx-spark download Qwen/Qwen3-Embedding-0.6B \
-     --revision 97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3 \
-     --alias qwen3-embedding:0.6b
-   sy spark dgx-spark serve qwen3-embedding:0.6b \
-     --recipe qwen3-embedding-0.6b-vllm-0.19.1 \
-     --name embeddings \
-     --allow-unverified
-   ```
-
-   `--allow-unverified` is for recipes that are not yet in the
-   signed set. Prefer a signed recipe when one exists.
+   Models supported by the installed vLLM version need no code change. If a
+   model requires a finite parser or capability, add a `model_type` profile to
+   the root-owned engine configuration and restart the two sy services. Never
+   place image names, model IDs, or launch arguments in Rust.
 
 5. Print a client config for Codex or Claude Code. The output names
    the token and CA environment variables; it does not print or
@@ -83,10 +68,26 @@ healthy, and confirm the OpenAI-compatible gateway path answers.
    sy spark dgx-spark client-config ornith --client claude-code
    ```
 
-6. Stop when you are done. An already-absent instance is an idempotent success:
+6. Launch a local coding agent against the healthy model. Arguments after `--`
+   go directly to that client as exact argv tokens:
 
    ```bash
-   sy spark dgx-spark stop fixture
+   sy spark dgx-spark launch codex --model ornith-1.5:9b
+   sy spark dgx-spark launch claude --model ornith-1.5:9b -- --permission-mode plan
+   sy spark dgx-spark launch opencode --model ornith-1.5:9b
+   ```
+
+   Use `--dry-run --json` to inspect model/instance selection without changing
+   local or remote state, or `--config --json` to provision configuration and
+   the inference-only token without starting the agent. A missing model is not
+   downloaded implicitly; follow the printed immutable `download --revision`
+   remediation. `launch` does not edit the primary Claude/OpenCode config or
+   the main Codex config.
+
+7. Stop when you are done. An already-absent instance is an idempotent success:
+
+   ```bash
+   sy spark dgx-spark stop ornith
    ```
 
 ## Result
@@ -96,6 +97,13 @@ model-identity probe pass, OpenAI-compatible routes are at
 `https://<spark>:9843/openai/<instance>/v1` and Anthropic Messages
 routes are under `/anthropic/<instance>/v1`. Warming or recovering
 generations return protocol-native `503` with `Retry-After`.
+
+For Ornith, reasoning streams independently from final answer text as OpenAI
+`reasoning_content`, Responses reasoning-summary events, or Anthropic thinking
+blocks. `sy spark ... launch codex` advertises that capability in its private
+model catalog, so Codex renders the Responses reasoning stream. Requests that
+omit sampling settings receive Ornith's precise-coding defaults; explicit
+client settings remain unchanged.
 
 ## See also
 

@@ -40,6 +40,7 @@ use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
 use super::{
+    engine::EnginePolicy,
     gateway::GatewayProfile,
     recipe::{Accelerator, RecipeCatalog, RecipeHost},
     wire::RecipeCatalogDocument,
@@ -54,18 +55,17 @@ use super::{
 pub const EXECUTOR_SOCKET: &str = "/run/sy-spark/executor.sock";
 const RECIPE_CATALOG_DIR: &str = "/etc/sy/spark-recipes.d";
 const RESOURCE_POLICY_PATH: &str = "/etc/sy/spark-agent.toml";
+const ENGINE_POLICY_PATH: &str = "/etc/sy/spark/engine.toml";
+#[cfg(test)]
 const COMPILE_CACHE_IDENTITY_SCHEMA: &str = "sy.spark.compile-cache-identity/v1";
 const EXECUTOR_METHOD: &str = "spark.executor.execute";
 const MAX_REQUEST_FRAME: usize = 16 * 1024;
 const MAX_DEADLINE_MS: u64 = super::recipe::MAX_STARTUP_DEADLINE_SECONDS * 1_000;
 const DOCKER_TIMEOUT_SECONDS: u64 = 3;
 const HEARTBEAT_STALE_SECONDS: u64 = 5;
-const MANAGED_NETWORK: &str = "sy-spark-internal";
 const MAX_ENGINE_LOG_LINES: usize = 256;
 const MAX_MANAGED_CONTAINERS: usize = 256;
 const MAX_MANAGED_EVENTS_PER_WINDOW: usize = 1024;
-const MODEL_CACHE_ROOT: &str = "/var/lib/sy-spark/huggingface";
-const COMPILE_CACHE_ROOT: &str = "/var/lib/sy-spark/compile-cache";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,6 +73,7 @@ pub struct StartInstanceInput {
     pub instance_id: String,
     pub generation: u64,
     pub model_commit: String,
+    pub model_repository: String,
     pub recipe_id: String,
     pub operation_id: String,
 }
@@ -122,6 +123,8 @@ struct ContainerSpec {
     semantic_max_tokens: u32,
     startup_deadline_seconds: u64,
     mounts: Vec<ContainerMount>,
+    model_cache_root: String,
+    compile_cache_root: String,
     tmpfs: Vec<String>,
     run_as_uid: u32,
     pid_limit: u32,
@@ -177,6 +180,7 @@ pub struct ManagedContainerObservation {
     pub generation: Option<u64>,
     pub role: Option<String>,
     pub model_commit: Option<String>,
+    pub model_repository: Option<String>,
     pub recipe_id: Option<String>,
     pub image: Option<String>,
     pub networks: Vec<String>,
@@ -189,6 +193,7 @@ pub struct ReconcileExpectation {
     pub instance_id: String,
     pub generation: u64,
     pub model_commit: String,
+    pub model_repository: String,
     pub recipe_id: String,
 }
 
@@ -209,9 +214,11 @@ pub struct ReconcileScan {
     pub quarantined: Vec<QuarantinedContainer>,
 }
 
+#[cfg(test)]
 fn build_container_spec(
     recipe: &super::recipe::Recipe,
     input: &StartInstanceInput,
+    network: &str,
 ) -> Result<ContainerSpec, ()> {
     if input.instance_id.len() != 34
         || !input.instance_id.starts_with("i_")
@@ -269,6 +276,20 @@ fn build_container_spec(
     .into_iter()
     .map(|(key, value)| (key.into(), value))
     .collect();
+    let model_cache_root = recipe
+        .isolation
+        .mounts
+        .iter()
+        .find(|mount| mount.purpose == super::recipe::MountPurpose::Model)
+        .map(|mount| mount.host_root.clone())
+        .ok_or(())?;
+    let compile_cache_root = recipe
+        .isolation
+        .mounts
+        .iter()
+        .find(|mount| mount.purpose == super::recipe::MountPurpose::CompileCache)
+        .map(|mount| mount.host_root.clone())
+        .ok_or(())?;
     Ok(ContainerSpec {
         name: format!("sy-spark-{}-g{}", input.instance_id, input.generation),
         image: format!(
@@ -287,20 +308,9 @@ fn build_container_spec(
             .iter()
             .map(|value| substitute(value))
             .collect(),
-        environment: vec![
-            "HOME=/tmp".into(),
-            "HF_HUB_OFFLINE=1".into(),
-            "TRANSFORMERS_OFFLINE=1".into(),
-            "HF_DATASETS_OFFLINE=1".into(),
-            "VLLM_CACHE_ROOT=/compile-cache/vllm".into(),
-            "TORCHINDUCTOR_CACHE_DIR=/compile-cache/torchinductor".into(),
-            "TRITON_CACHE_DIR=/compile-cache/triton".into(),
-            "CUDA_CACHE_PATH=/compile-cache/cuda".into(),
-            "XDG_CACHE_HOME=/compile-cache/xdg".into(),
-            "UMASK=0027".into(),
-        ],
+        environment: Vec::new(),
         labels,
-        network: MANAGED_NETWORK.into(),
+        network: network.into(),
         port: recipe.gateway.port,
         health_method: recipe.health.method.clone(),
         health_path: recipe.health.path.clone(),
@@ -321,6 +331,8 @@ fn build_container_spec(
         semantic_max_tokens: recipe.health.semantic_max_tokens,
         startup_deadline_seconds: recipe.health.startup_deadline_seconds,
         mounts,
+        model_cache_root,
+        compile_cache_root,
         tmpfs: recipe.isolation.writable_tmpfs.clone(),
         run_as_uid: recipe.isolation.run_as_uid,
         pid_limit: recipe.isolation.pid_limit,
@@ -335,6 +347,167 @@ fn build_container_spec(
     })
 }
 
+fn build_generic_container_spec(
+    policy: &EnginePolicy,
+    input: &StartInstanceInput,
+) -> Result<ContainerSpec, ()> {
+    let config = policy.config();
+    let repository = valid_model_repository(&input.model_repository)?;
+    if input.instance_id.len() != 34
+        || !input.instance_id.starts_with("i_")
+        || input.generation == 0
+        || !valid_commit(&input.model_commit)
+        || input.recipe_id != config.id
+        || input.operation_id.len() != 26
+    {
+        return Err(());
+    }
+    let repository_cache = format!("models--{}", input.model_repository.replace('/', "--"));
+    let model_snapshot = format!("/models/snapshots/{}", input.model_commit);
+    let served_model = repository.1;
+    let model_type = read_model_type(config, &input.model_repository, &input.model_commit)
+        .ok()
+        .flatten();
+    let profile = policy.profile(model_type.as_deref());
+    let substitute = |value: &str| match value {
+        "{model_snapshot}" => model_snapshot.clone(),
+        "{served_model}" => served_model.to_owned(),
+        "{port}" => config.port.to_string(),
+        _ => value.to_owned(),
+    };
+    let compile_identity = format!(
+        "{}\0{}\0{}\0{}",
+        policy.fingerprint(),
+        input.model_repository,
+        input.model_commit,
+        profile.id
+    );
+    let compile_cache_key = format!("sha256-{:x}", Sha256::digest(compile_identity));
+    let labels = [
+        ("io.sy.spark.managed", "true".into()),
+        ("io.sy.spark.instance", input.instance_id.clone()),
+        ("io.sy.spark.generation", input.generation.to_string()),
+        ("io.sy.spark.role", "engine".into()),
+        ("io.sy.spark.model_commit", input.model_commit.clone()),
+        (
+            "io.sy.spark.model_repository",
+            input.model_repository.clone(),
+        ),
+        ("io.sy.spark.recipe", input.recipe_id.clone()),
+        ("io.sy.spark.operation", input.operation_id.clone()),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.into(), value))
+    .collect();
+    Ok(ContainerSpec {
+        name: format!("sy-spark-{}-g{}", input.instance_id, input.generation),
+        image: policy.image(),
+        entrypoint: config
+            .entrypoint
+            .iter()
+            .map(|value| substitute(value))
+            .collect(),
+        argv: config
+            .arguments
+            .iter()
+            .chain(&profile.arguments)
+            .map(|value| substitute(value))
+            .collect(),
+        environment: config.environment.clone(),
+        labels,
+        network: config.network.clone(),
+        port: config.port,
+        health_method: config.health_method.clone(),
+        health_path: config.health_path.clone(),
+        allowed_routes: std::iter::once((config.health_method.clone(), config.health_path.clone()))
+            .chain(
+                config
+                    .routes
+                    .iter()
+                    .map(|route| (route.method.clone(), route.path.clone())),
+            )
+            .collect(),
+        gateway_profile: policy.gateway_profile(model_type.as_deref()),
+        served_model: served_model.to_owned(),
+        semantic_prompt: config.semantic_prompt.clone(),
+        semantic_max_tokens: config.semantic_max_tokens,
+        startup_deadline_seconds: config.startup_deadline_seconds,
+        mounts: vec![
+            ContainerMount {
+                source: format!("{}/{}", config.model_cache_root, repository_cache),
+                target: "/models".into(),
+                read_only: true,
+            },
+            ContainerMount {
+                source: format!(
+                    "{}/{}/{}",
+                    config.compile_cache_root, compile_cache_key, input.instance_id
+                ),
+                target: "/compile-cache".into(),
+                read_only: false,
+            },
+        ],
+        model_cache_root: config.model_cache_root.clone(),
+        compile_cache_root: config.compile_cache_root.clone(),
+        tmpfs: config.tmpfs.clone(),
+        run_as_uid: config.run_as_uid,
+        pid_limit: config.pid_limit,
+        memory_bytes: config.resources.startup_peak_bytes,
+        read_only_rootfs: true,
+        cap_drop: vec!["ALL".into()],
+        seccomp: config.seccomp.clone(),
+        no_new_privileges: true,
+        published_ports: Vec::new(),
+        restart: "no".into(),
+        accelerator: Accelerator::Nvidia,
+    })
+}
+
+fn valid_model_repository(repository: &str) -> Result<(&str, &str), ()> {
+    let (owner, model) = repository.split_once('/').ok_or(())?;
+    let valid = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 96
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+            && value != "."
+            && value != ".."
+    };
+    (valid(owner) && valid(model) && !model.contains('/'))
+        .then_some((owner, model))
+        .ok_or(())
+}
+
+fn valid_commit(commit: &str) -> bool {
+    commit.len() == 40
+        && commit
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn read_model_type(
+    config: &super::engine::EngineConfig,
+    repository: &str,
+    commit: &str,
+) -> Result<Option<String>, ()> {
+    #[derive(Deserialize)]
+    struct ModelConfig {
+        model_type: Option<String>,
+    }
+    let repository_cache = format!("models--{}", repository.replace('/', "--"));
+    let path = Path::new(&config.model_cache_root)
+        .join(repository_cache)
+        .join("snapshots")
+        .join(commit)
+        .join("config.json");
+    let text = std::fs::read_to_string(path).map_err(|_| ())?;
+    serde_json::from_str::<ModelConfig>(&text)
+        .map(|model| model.model_type)
+        .map_err(|_| ())
+}
+
+#[cfg(test)]
 #[derive(Serialize)]
 struct CompileCacheIdentity<'a> {
     schema: &'static str,
@@ -348,6 +521,7 @@ struct CompileCacheIdentity<'a> {
     isolation_run_as_uid: u32,
 }
 
+#[cfg(test)]
 #[derive(Serialize)]
 struct CompileCacheEngineIdentity<'a> {
     name: &'a str,
@@ -360,6 +534,7 @@ struct CompileCacheEngineIdentity<'a> {
     substitutions: &'a [super::recipe::Substitution],
 }
 
+#[cfg(test)]
 #[derive(Serialize)]
 struct CompileCacheModelIdentity<'a> {
     repository: &'a str,
@@ -372,6 +547,7 @@ struct CompileCacheModelIdentity<'a> {
     files: &'a [super::recipe::RequiredFile],
 }
 
+#[cfg(test)]
 fn recipe_compile_cache_key(
     recipe: &super::recipe::Recipe,
     model_commit: &str,
@@ -416,6 +592,7 @@ pub struct ExecutorConfig {
     pub socket: PathBuf,
     pub agent_uid: u32,
     pub recipes_dir: PathBuf,
+    pub engine_policy: PathBuf,
     pub resources_policy: PathBuf,
     pub host: RecipeHost,
 }
@@ -525,7 +702,7 @@ trait DockerInspector: Send + Sync + 'static {
 type RuntimeFuture<T> = Pin<Box<dyn Future<Output = Result<T, ()>> + Send>>;
 
 trait ContainerRuntime: Send + Sync + 'static {
-    fn ensure_network(&self) -> RuntimeFuture<String>;
+    fn ensure_network(&self, name: String) -> RuntimeFuture<String>;
     fn ensure_image(&self, image: String, architecture: String) -> RuntimeFuture<()>;
     fn start(&self, spec: ContainerSpec) -> RuntimeFuture<ObservedEngine>;
     fn promote_restart(&self, input: StopInstanceInput) -> RuntimeFuture<ObservedEngine>;
@@ -676,10 +853,10 @@ impl BollardContainerRuntime {
 }
 
 impl ContainerRuntime for BollardContainerRuntime {
-    fn ensure_network(&self) -> RuntimeFuture<String> {
+    fn ensure_network(&self, name: String) -> RuntimeFuture<String> {
         Box::pin(async move {
             let docker = Self::docker().await?;
-            if let Ok(network) = docker.inspect_network(MANAGED_NETWORK, None).await {
+            if let Ok(network) = docker.inspect_network(&name, None).await {
                 let labels = network.labels.unwrap_or_default();
                 if network.internal != Some(true)
                     || network.driver.as_deref() != Some("bridge")
@@ -695,7 +872,7 @@ impl ContainerRuntime for BollardContainerRuntime {
             ]);
             docker
                 .create_network(NetworkCreateRequest {
-                    name: MANAGED_NETWORK.into(),
+                    name,
                     driver: Some("bridge".into()),
                     internal: Some(true),
                     attachable: Some(false),
@@ -898,12 +1075,12 @@ impl ContainerRuntime for BollardContainerRuntime {
                 return Err(());
             }
             let docker = Self::docker().await?;
-            let Some(observed) = inspect_input(&docker, &input).await? else {
+            let Some((container_id, running)) = inspect_stop_target(&docker, &input).await? else {
                 return Ok(());
             };
             docker
                 .update_container(
-                    &observed.container_id,
+                    &container_id,
                     ContainerUpdateBody {
                         restart_policy: Some(restart_policy(RestartPolicyNameEnum::NO)),
                         ..Default::default()
@@ -911,20 +1088,22 @@ impl ContainerRuntime for BollardContainerRuntime {
                 )
                 .await
                 .map_err(|_| ())?;
-            docker
-                .stop_container(
-                    &observed.container_id,
-                    Some(
-                        StopContainerOptionsBuilder::default()
-                            .t(input.grace_seconds as i32)
-                            .build(),
-                    ),
-                )
-                .await
-                .map_err(|_| ())?;
+            if running {
+                docker
+                    .stop_container(
+                        &container_id,
+                        Some(
+                            StopContainerOptionsBuilder::default()
+                                .t(input.grace_seconds as i32)
+                                .build(),
+                        ),
+                    )
+                    .await
+                    .map_err(|_| ())?;
+            }
             docker
                 .remove_container(
-                    &observed.container_id,
+                    &container_id,
                     Some(
                         RemoveContainerOptionsBuilder::default()
                             .force(false)
@@ -1092,6 +1271,7 @@ fn managed_observation(
             .and_then(|value| value.parse().ok()),
         role: labels.get("io.sy.spark.role").cloned(),
         model_commit: labels.get("io.sy.spark.model_commit").cloned(),
+        model_repository: labels.get("io.sy.spark.model_repository").cloned(),
         recipe_id: labels.get("io.sy.spark.recipe").cloned(),
         image: inspect.config.and_then(|config| config.image),
         networks,
@@ -1152,8 +1332,8 @@ fn mount_io(error: std::io::Error) -> MountValidationError {
 fn validate_mount_sources(spec: &ContainerSpec) -> Result<Vec<String>, MountValidationError> {
     validate_mount_sources_at(
         spec,
-        Path::new(MODEL_CACHE_ROOT),
-        Path::new(COMPILE_CACHE_ROOT),
+        Path::new(&spec.model_cache_root),
+        Path::new(&spec.compile_cache_root),
         0,
     )
 }
@@ -1244,16 +1424,53 @@ async fn inspect_input(
         .as_ref()
         .and_then(|config| config.labels.as_ref())
         .ok_or(())?;
-    if labels.get("io.sy.spark.managed").map(String::as_str) != Some("true")
-        || labels.get("io.sy.spark.role").map(String::as_str) != Some("engine")
-        || labels.get("io.sy.spark.instance").map(String::as_str)
-            != Some(input.instance_id.as_str())
-        || labels.get("io.sy.spark.generation").map(String::as_str)
-            != Some(input.generation.to_string().as_str())
-    {
+    if !exact_managed_identity(labels, input) {
         return Err(());
     }
     observed_from_inspect(inspect, 0).map(Some)
+}
+
+async fn inspect_stop_target(
+    docker: &Docker,
+    input: &StopInstanceInput,
+) -> Result<Option<(String, bool)>, ()> {
+    if input.instance_id.len() != 34 || input.generation == 0 {
+        return Err(());
+    }
+    let name = format!("sy-spark-{}-g{}", input.instance_id, input.generation);
+    let inspect = match docker.inspect_container(&name, None).await {
+        Ok(inspect) => inspect,
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404, ..
+        }) => return Ok(None),
+        Err(_) => return Err(()),
+    };
+    let labels = inspect
+        .config
+        .as_ref()
+        .and_then(|config| config.labels.as_ref())
+        .ok_or(())?;
+    if !exact_managed_identity(labels, input) {
+        return Err(());
+    }
+    let running = inspect
+        .state
+        .as_ref()
+        .and_then(|state| state.running)
+        .unwrap_or(false);
+    Ok(Some((inspect.id.ok_or(())?, running)))
+}
+
+fn exact_managed_identity(
+    labels: &std::collections::HashMap<String, String>,
+    input: &StopInstanceInput,
+) -> bool {
+    labels.get("io.sy.spark.managed").map(String::as_str) == Some("true")
+        && labels.get("io.sy.spark.role").map(String::as_str) == Some("engine")
+        && labels.get("io.sy.spark.instance").map(String::as_str)
+            == Some(input.instance_id.as_str())
+        && labels.get("io.sy.spark.generation").map(String::as_str)
+            == Some(input.generation.to_string().as_str())
 }
 
 async fn inspect_exact(
@@ -1311,7 +1528,7 @@ fn observed_from_inspect(
     if networks.len() != 1 {
         return Err(());
     }
-    let endpoint = networks.get(MANAGED_NETWORK).ok_or(())?;
+    let endpoint = networks.values().next().ok_or(())?;
     let address = endpoint
         .ip_address
         .clone()
@@ -1732,6 +1949,7 @@ struct ExecutorHandler {
     kernel_release: String,
     machine_id_path: PathBuf,
     catalog: Arc<RecipeCatalog>,
+    engine_policy: Arc<EnginePolicy>,
     recipe_host: RecipeHost,
     resources: Option<Arc<ResourceMonitor>>,
 }
@@ -1743,7 +1961,8 @@ impl ExecutorHandler {
         resources: Arc<ResourceMonitor>,
         runtime: Arc<dyn ContainerRuntime>,
     ) -> Result<Self, String> {
-        let catalog = RecipeCatalog::load_signed(&config.recipes_dir)?;
+        let catalog = RecipeCatalog::load_legacy(&config.recipes_dir)?;
+        let engine_policy = EnginePolicy::load(&config.engine_policy)?;
         Ok(Self {
             agent_uid: config.agent_uid,
             cancellation: Arc::new(CancelRegistry::new()),
@@ -1757,6 +1976,7 @@ impl ExecutorHandler {
                 .into_owned(),
             machine_id_path: "/etc/machine-id".into(),
             catalog: Arc::new(catalog),
+            engine_policy: Arc::new(engine_policy),
             recipe_host: config.host.clone(),
             resources: Some(resources),
         })
@@ -1813,32 +2033,32 @@ impl ExecutorHandler {
                 ),
             }),
             ExecutorActionKind::PrepareInstance(input) => {
-                let recipe = self
-                    .catalog
-                    .recipe(&input.recipe_id)
-                    .ok_or(ErrorCode::BadRequest)?;
-                let spec =
-                    build_container_spec(recipe, &input).map_err(|()| ErrorCode::BadRequest)?;
+                if input.recipe_id != self.engine_policy.config().id {
+                    return Err(ErrorCode::BadRequest);
+                }
+                let spec = build_generic_container_spec(&self.engine_policy, &input)
+                    .map_err(|()| ErrorCode::BadRequest)?;
+                let architecture = self.engine_policy.config().image_architecture.clone();
+                let startup_deadline_seconds = self.engine_policy.config().startup_deadline_seconds;
                 self.runtime
-                    .ensure_network()
+                    .ensure_network(self.engine_policy.config().network.clone())
                     .await
                     .map(|_| ())
                     .map_err(|()| ErrorCode::NotReady)?;
                 self.runtime
-                    .ensure_image(spec.image.clone(), recipe.engine.image_architecture.clone())
+                    .ensure_image(spec.image.clone(), architecture)
                     .await
                     .map_err(|()| ErrorCode::NotReady)?;
                 Ok(ExecutorResult::PrepareInstance {
-                    startup_deadline_seconds: recipe.health.startup_deadline_seconds,
+                    startup_deadline_seconds,
                 })
             }
             ExecutorActionKind::StartInstance(input) => {
-                let recipe = self
-                    .catalog
-                    .recipe(&input.recipe_id)
-                    .ok_or(ErrorCode::BadRequest)?;
-                let spec =
-                    build_container_spec(recipe, &input).map_err(|()| ErrorCode::BadRequest)?;
+                if input.recipe_id != self.engine_policy.config().id {
+                    return Err(ErrorCode::BadRequest);
+                }
+                let spec = build_generic_container_spec(&self.engine_policy, &input)
+                    .map_err(|()| ErrorCode::BadRequest)?;
                 let observed = self
                     .runtime
                     .start(spec)
@@ -1905,9 +2125,16 @@ impl ExecutorHandler {
         }
         let mut catalogued = BTreeMap::new();
         for item in expected {
-            let recipe = self.catalog.recipe(&item.recipe_id).ok_or(())?;
+            let identity_valid = if item.recipe_id == self.engine_policy.config().id {
+                valid_model_repository(&item.model_repository).is_ok()
+                    && valid_commit(&item.model_commit)
+            } else {
+                self.catalog
+                    .recipe(&item.recipe_id)
+                    .is_some_and(|recipe| recipe.model.commits.contains(&item.model_commit))
+            };
             if !valid_reconcile_expectation(&item)
-                || !recipe.model.commits.contains(&item.model_commit)
+                || !identity_valid
                 || catalogued
                     .insert((item.instance_id.clone(), item.generation), item)
                     .is_some()
@@ -1925,11 +2152,15 @@ impl ExecutorHandler {
                 .as_ref()
                 .and_then(|identity| catalogued.get(identity))
                 .is_some_and(|expected| {
-                    self.catalog
-                        .recipe(&expected.recipe_id)
-                        .is_some_and(|recipe| {
-                            observation_matches_expected(&observation, expected, recipe)
-                        })
+                    if expected.recipe_id == self.engine_policy.config().id {
+                        observation_matches_engine(&observation, expected, &self.engine_policy)
+                    } else {
+                        self.catalog
+                            .recipe(&expected.recipe_id)
+                            .is_some_and(|recipe| {
+                                observation_matches_expected(&observation, expected, recipe)
+                            })
+                    }
                 });
             if valid {
                 if let Some(identity) = identity {
@@ -1972,8 +2203,17 @@ impl ExecutorHandler {
             match self.runtime.inspect(input).await? {
                 Some(mut observed) if observed.container_id == container.container_id => {
                     let expected = catalogued.get(&identity).ok_or(())?;
-                    let recipe = self.catalog.recipe(&expected.recipe_id).ok_or(())?;
-                    enrich_observed_from_recipe(&mut observed, recipe);
+                    if expected.recipe_id == self.engine_policy.config().id {
+                        enrich_observed_from_engine(
+                            &mut observed,
+                            &self.engine_policy,
+                            &expected.model_repository,
+                            &expected.model_commit,
+                        );
+                    } else {
+                        let recipe = self.catalog.recipe(&expected.recipe_id).ok_or(())?;
+                        enrich_observed_from_recipe(&mut observed, recipe);
+                    }
                     matched.push(observed)
                 }
                 _ => {
@@ -2120,6 +2360,33 @@ fn enrich_observed_from_recipe(observed: &mut ObservedEngine, recipe: &super::re
     observed.startup_deadline_seconds = recipe.health.startup_deadline_seconds;
 }
 
+fn enrich_observed_from_engine(
+    observed: &mut ObservedEngine,
+    policy: &EnginePolicy,
+    repository: &str,
+    commit: &str,
+) {
+    let config = policy.config();
+    let model_type = read_model_type(config, repository, commit).ok().flatten();
+    observed.port = config.port;
+    observed.health_method = config.health_method.clone();
+    observed.health_path = config.health_path.clone();
+    observed.allowed_routes =
+        std::iter::once((config.health_method.clone(), config.health_path.clone()))
+            .chain(
+                config
+                    .routes
+                    .iter()
+                    .map(|route| (route.method.clone(), route.path.clone())),
+            )
+            .collect();
+    observed.gateway_profile = policy.gateway_profile(model_type.as_deref());
+    observed.served_model = repository.rsplit('/').next().unwrap_or(repository).into();
+    observed.semantic_prompt = config.semantic_prompt.clone();
+    observed.semantic_max_tokens = config.semantic_max_tokens;
+    observed.startup_deadline_seconds = config.startup_deadline_seconds;
+}
+
 fn valid_reconcile_expectation(expected: &ReconcileExpectation) -> bool {
     expected.instance_id.len() == 34
         && expected.instance_id.starts_with("i_")
@@ -2155,7 +2422,29 @@ fn observation_matches_expected(
                 )
                 .as_str(),
             )
-        && observed.networks == [MANAGED_NETWORK]
+        && observed.networks.len() == 1
+        && observed.restart_policy.len() <= 32
+}
+
+fn observation_matches_engine(
+    observed: &ManagedContainerObservation,
+    expected: &ReconcileExpectation,
+    policy: &EnginePolicy,
+) -> bool {
+    observed.container_id.len() == 64
+        && observed
+            .container_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        && observed.name == format!("sy-spark-{}-g{}", expected.instance_id, expected.generation)
+        && observed.instance_id.as_deref() == Some(expected.instance_id.as_str())
+        && observed.generation == Some(expected.generation)
+        && observed.role.as_deref() == Some("engine")
+        && observed.model_commit.as_deref() == Some(expected.model_commit.as_str())
+        && observed.model_repository.as_deref() == Some(expected.model_repository.as_str())
+        && observed.recipe_id.as_deref() == Some(expected.recipe_id.as_str())
+        && observed.image.as_deref() == Some(policy.image().as_str())
+        && observed.networks == [policy.config().network.as_str()]
         && observed.restart_policy.len() <= 32
 }
 
@@ -2277,27 +2566,6 @@ impl ExecutorClient {
             .await?
         {
             ExecutorResult::Health { health } => Ok(health),
-            _ => Err(protocol_error()),
-        }
-    }
-
-    pub async fn recipes(
-        &self,
-        model_repository: Option<String>,
-        model_commit: Option<String>,
-        objective: String,
-    ) -> Result<RecipeCatalogDocument, ExecutorClientError> {
-        match self
-            .call(ExecutorAction {
-                action: ExecutorActionKind::InspectRecipes(RecipeQuery {
-                    model_repository,
-                    model_commit,
-                    objective,
-                }),
-            })
-            .await?
-        {
-            ExecutorResult::InspectRecipes { catalog } => Ok(catalog),
             _ => Err(protocol_error()),
         }
     }
@@ -2535,6 +2803,10 @@ pub async fn serve(config_path: &Path) -> anyhow::Result<()> {
     anyhow::ensure!(
         config.resources_policy == Path::new(RESOURCE_POLICY_PATH),
         "resource policy must use the fixed root-owned path"
+    );
+    anyhow::ensure!(
+        config.engine_policy == Path::new(ENGINE_POLICY_PATH),
+        "engine policy must use the fixed root-owned path"
     );
     let resource_policy =
         load_resource_policy(&config.resources_policy).map_err(anyhow::Error::msg)?;
@@ -2788,7 +3060,7 @@ mod tests {
     }
 
     impl ContainerRuntime for FakeRuntime {
-        fn ensure_network(&self) -> RuntimeFuture<String> {
+        fn ensure_network(&self, _: String) -> RuntimeFuture<String> {
             self.record("network");
             Box::pin(async { Ok("network-id".into()) })
         }
@@ -3034,6 +3306,22 @@ mod tests {
         Arc::new(RecipeCatalog::signed_for_test())
     }
 
+    fn engine_policy() -> Arc<EnginePolicy> {
+        Arc::new(EnginePolicy::parse(include_str!("../../configs/sy/spark/engine.toml")).unwrap())
+    }
+
+    fn generic_input(marker: char) -> StartInstanceInput {
+        let policy = engine_policy();
+        StartInstanceInput {
+            instance_id: format!("i_{}", marker.to_string().repeat(32)),
+            generation: 1,
+            model_commit: marker.to_string().repeat(40),
+            model_repository: "unlisted-owner/compatible-model".into(),
+            recipe_id: policy.config().id.clone(),
+            operation_id: "01K00000000000000000000000".into(),
+        }
+    }
+
     #[test]
     fn production_guard_fsyncs_exact_victim_and_faults_closed_without_telemetry() {
         let root = tempfile::tempdir().unwrap();
@@ -3117,6 +3405,7 @@ mod tests {
         let config: ExecutorConfig =
             toml::from_str(include_str!("../../configs/sy/spark/executor.toml")).unwrap();
         assert_eq!(config.recipes_dir, Path::new(RECIPE_CATALOG_DIR));
+        assert_eq!(config.engine_policy, Path::new(ENGINE_POLICY_PATH));
         assert_eq!(config.resources_policy, Path::new(RESOURCE_POLICY_PATH));
         assert_eq!(config.host.gpu_model, "NVIDIA GB10");
         assert_eq!(config.host.compute_capability, "12.1");
@@ -3138,6 +3427,7 @@ mod tests {
             kernel_release: "6.17-test".into(),
             machine_id_path: root.path().join("machine-id"),
             catalog: catalog(),
+            engine_policy: engine_policy(),
             recipe_host: recipe_host(),
             resources: None,
         };
@@ -3198,6 +3488,7 @@ mod tests {
             kernel_release: "6.17-test".into(),
             machine_id_path: root.path().join("machine-id"),
             catalog: catalog(),
+            engine_policy: engine_policy(),
             recipe_host: recipe_host(),
             resources: None,
         });
@@ -3236,6 +3527,7 @@ mod tests {
             kernel_release: "6.17-test".into(),
             machine_id_path: "/etc/machine-id".into(),
             catalog: catalog(),
+            engine_policy: engine_policy(),
             recipe_host: recipe_host(),
             resources: None,
         };
@@ -3272,6 +3564,7 @@ mod tests {
             kernel_release: "6.17-test".into(),
             machine_id_path: "/etc/machine-id".into(),
             catalog: catalog(),
+            engine_policy: engine_policy(),
             recipe_host: recipe_host(),
             resources: None,
         };
@@ -3310,6 +3603,7 @@ mod tests {
             kernel_release: "6.17-test".into(),
             machine_id_path: "/etc/machine-id".into(),
             catalog: catalog(),
+            engine_policy: engine_policy(),
             recipe_host: recipe_host(),
             resources: None,
         };
@@ -3340,7 +3634,7 @@ mod tests {
     }
 
     #[test]
-    fn container_spec_is_fully_recipe_derived_and_locked_down() {
+    fn legacy_spec_fixture_remains_locked_down_for_migration_checks() {
         let catalog = RecipeCatalog::signed_for_test();
         let recipe = catalog.recipe("ornith-1.5-9b-vllm-0.19.1").unwrap();
         let spec = build_container_spec(
@@ -3349,9 +3643,11 @@ mod tests {
                 instance_id: format!("i_{}", "1".repeat(32)),
                 generation: 3,
                 model_commit: recipe.model.commits[0].clone(),
+                model_repository: recipe.model.repository.clone(),
                 recipe_id: recipe.identity.id.clone(),
                 operation_id: "01K00000000000000000000000".into(),
             },
+            "test-internal-network",
         )
         .unwrap();
         let value = serde_json::to_value(spec).unwrap();
@@ -3363,7 +3659,7 @@ mod tests {
                 recipe.engine.image_repository, recipe.engine.image_digest
             )
         );
-        assert_eq!(value["network"], MANAGED_NETWORK);
+        assert_eq!(value["network"], "test-internal-network");
         assert_eq!(value["restart"], "no");
         assert_eq!(value["read_only_rootfs"], true);
         assert_eq!(value["cap_drop"], serde_json::json!(["ALL"]));
@@ -3373,18 +3669,7 @@ mod tests {
             value["gateway_profile"],
             serde_json::to_value(recipe.gateway.profile()).unwrap()
         );
-        assert!(value["environment"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|entry| entry.as_str() == Some("HOME=/tmp")));
-        assert!(value["environment"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|entry| {
-                entry.as_str() == Some("TORCHINDUCTOR_CACHE_DIR=/compile-cache/torchinductor")
-            }));
+        assert_eq!(value["environment"], serde_json::json!([]));
         assert!(value["mounts"].as_array().unwrap().iter().any(|mount| {
             mount["source"]
                 .as_str()
@@ -3401,6 +3686,45 @@ mod tests {
         assert!(!serde_json::to_string(&value)
             .unwrap()
             .contains("docker.sock"));
+    }
+
+    #[test]
+    fn generic_spec_accepts_unlisted_repository_and_owns_security_fields() {
+        let policy = engine_policy();
+        let input = StartInstanceInput {
+            instance_id: format!("i_{}", "2".repeat(32)),
+            generation: 1,
+            model_commit: "3".repeat(40),
+            model_repository: "new-owner/model-never-listed-in-sy".into(),
+            recipe_id: policy.config().id.clone(),
+            operation_id: "01K00000000000000000000000".into(),
+        };
+        let spec = build_generic_container_spec(&policy, &input).unwrap();
+
+        assert_eq!(spec.image, policy.image());
+        assert_eq!(spec.entrypoint, policy.config().entrypoint);
+        assert_eq!(spec.network, policy.config().network);
+        assert_eq!(spec.run_as_uid, policy.config().run_as_uid);
+        assert_eq!(spec.cap_drop, ["ALL"]);
+        assert!(spec.published_ports.is_empty());
+        assert!(spec.mounts[0]
+            .source
+            .ends_with("models--new-owner--model-never-listed-in-sy"));
+        assert_eq!(spec.mounts[0].target, "/models");
+        assert!(
+            serde_json::from_value::<StartInstanceInput>(serde_json::json!({
+                "instance_id": input.instance_id,
+                "generation": input.generation,
+                "model_commit": input.model_commit,
+                "model_repository": input.model_repository,
+                "recipe_id": input.recipe_id,
+                "operation_id": input.operation_id,
+                "image": "attacker/image",
+                "argv": ["sh", "-c", "id"],
+                "mounts": ["/:/host"]
+            }))
+            .is_err()
+        );
     }
 
     #[test]
@@ -3481,19 +3805,7 @@ mod tests {
 
     #[test]
     fn docker_default_seccomp_is_selected_by_omitting_a_profile_override() {
-        let catalog = RecipeCatalog::signed_for_test();
-        let recipe = catalog.recipe("spark-fixture-http-echo-1.0.0").unwrap();
-        let spec = build_container_spec(
-            recipe,
-            &StartInstanceInput {
-                instance_id: format!("i_{}", "1".repeat(32)),
-                generation: 1,
-                model_commit: recipe.model.commits[0].clone(),
-                recipe_id: recipe.identity.id.clone(),
-                operation_id: "01K00000000000000000000000".into(),
-            },
-        )
-        .unwrap();
+        let spec = build_generic_container_spec(&engine_policy(), &generic_input('1')).unwrap();
         assert_eq!(security_options(&spec), ["no-new-privileges=true"]);
     }
 
@@ -3517,9 +3829,11 @@ mod tests {
                 instance_id: format!("i_{}", "1".repeat(32)),
                 generation: 3,
                 model_commit: recipe.model.commits[0].clone(),
+                model_repository: recipe.model.repository.clone(),
                 recipe_id: recipe.identity.id.clone(),
                 operation_id: "01K00000000000000000000000".into(),
             },
+            "test-internal-network",
         )
         .unwrap();
         for mount in &mut spec.mounts {
@@ -3619,20 +3933,11 @@ mod tests {
             kernel_release: "6.17-test".into(),
             machine_id_path: "/etc/machine-id".into(),
             catalog: catalog(),
+            engine_policy: engine_policy(),
             recipe_host: recipe_host(),
             resources: None,
         };
-        let recipe = RecipeCatalog::signed_for_test()
-            .recipe("ornith-1.5-9b-vllm-0.19.1")
-            .unwrap()
-            .clone();
-        let input = StartInstanceInput {
-            instance_id: format!("i_{}", "1".repeat(32)),
-            generation: 1,
-            model_commit: recipe.model.commits[0].clone(),
-            recipe_id: recipe.identity.id,
-            operation_id: "01K00000000000000000000000".into(),
-        };
+        let input = generic_input('1');
         let prepared = handler
             .execute(
                 ExecutorAction {
@@ -3684,6 +3989,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn legacy_recipe_identity_cannot_start_a_new_generation() {
+        let runtime = FakeRuntime::new();
+        let calls = runtime.calls.clone();
+        let handler = ExecutorHandler {
+            agent_uid: 996,
+            cancellation: Arc::new(CancelRegistry::new()),
+            docker: Arc::new(BollardDockerInspector),
+            runtime: Arc::new(runtime),
+            heartbeats: Arc::new(Heartbeats::default()),
+            hostname_path: "/etc/hostname".into(),
+            kernel_release: "6.17-test".into(),
+            machine_id_path: "/etc/machine-id".into(),
+            catalog: catalog(),
+            engine_policy: engine_policy(),
+            recipe_host: recipe_host(),
+            resources: None,
+        };
+        let recipe = RecipeCatalog::signed_for_test()
+            .recipe("spark-fixture-http-echo-1.0.0")
+            .unwrap()
+            .clone();
+        let input = StartInstanceInput {
+            instance_id: format!("i_{}", "1".repeat(32)),
+            generation: 1,
+            model_commit: recipe.model.commits[0].clone(),
+            model_repository: recipe.model.repository,
+            recipe_id: recipe.identity.id,
+            operation_id: "01K00000000000000000000000".into(),
+        };
+        for action in [
+            ExecutorActionKind::PrepareInstance(input.clone()),
+            ExecutorActionKind::StartInstance(input.clone()),
+        ] {
+            assert!(matches!(
+                handler
+                    .execute(ExecutorAction { action }, CancellationToken::new())
+                    .await,
+                Err(ErrorCode::BadRequest)
+            ));
+        }
+        assert!(calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn full_scan_matches_only_exact_catalogued_generation_and_quarantines_name_adoption() {
         let recipes = RecipeCatalog::signed_for_test();
         let recipe = recipes.recipe("spark-fixture-http-echo-1.0.0").unwrap();
@@ -3692,6 +4041,7 @@ mod tests {
             instance_id: instance_id.clone(),
             generation: 1,
             model_commit: recipe.model.commits[0].clone(),
+            model_repository: recipe.model.repository.clone(),
             recipe_id: recipe.identity.id.clone(),
         };
         let runtime = FakeRuntime::new();
@@ -3703,12 +4053,13 @@ mod tests {
             generation: Some(1),
             role: Some("engine".into()),
             model_commit: Some(expected.model_commit.clone()),
+            model_repository: Some(expected.model_repository.clone()),
             recipe_id: Some(expected.recipe_id.clone()),
             image: Some(format!(
                 "{}@{}",
                 recipe.engine.image_repository, recipe.engine.image_digest
             )),
-            networks: vec![MANAGED_NETWORK.into()],
+            networks: vec!["legacy-internal-network".into()],
             restart_policy: "unless-stopped".into(),
         });
         let handler = ExecutorHandler {
@@ -3721,6 +4072,7 @@ mod tests {
             kernel_release: "6.17-test".into(),
             machine_id_path: "/etc/machine-id".into(),
             catalog: catalog(),
+            engine_policy: engine_policy(),
             recipe_host: recipe_host(),
             resources: None,
         };
@@ -3783,18 +4135,11 @@ mod tests {
             kernel_release: "6.17-test".into(),
             machine_id_path: "/etc/machine-id".into(),
             catalog: catalog(),
+            engine_policy: engine_policy(),
             recipe_host: recipe_host(),
             resources: Some(monitor.clone()),
         };
-        let recipes = RecipeCatalog::signed_for_test();
-        let recipe = recipes.recipe("spark-fixture-http-echo-1.0.0").unwrap();
-        let input = StartInstanceInput {
-            instance_id: format!("i_{}", "1".repeat(32)),
-            generation: 1,
-            model_commit: recipe.model.commits[0].clone(),
-            recipe_id: recipe.identity.id.clone(),
-            operation_id: "01K00000000000000000000000".into(),
-        };
+        let input = generic_input('1');
         handler
             .execute(
                 ExecutorAction {
@@ -3868,6 +4213,25 @@ mod tests {
                 .unwrap();
         assert!(cursor > 1_000_000_000);
         assert_eq!(line, "[REDACTED]");
+    }
+
+    #[test]
+    fn stop_target_requires_exact_managed_identity() {
+        let input = StopInstanceInput {
+            instance_id: format!("i_{}", "1".repeat(32)),
+            generation: 7,
+            grace_seconds: 5,
+        };
+        let mut labels = std::collections::HashMap::from([
+            ("io.sy.spark.managed".into(), "true".into()),
+            ("io.sy.spark.role".into(), "engine".into()),
+            ("io.sy.spark.instance".into(), input.instance_id.clone()),
+            ("io.sy.spark.generation".into(), "7".into()),
+        ]);
+
+        assert!(exact_managed_identity(&labels, &input));
+        labels.insert("io.sy.spark.generation".into(), "6".into());
+        assert!(!exact_managed_identity(&labels, &input));
     }
 
     #[test]

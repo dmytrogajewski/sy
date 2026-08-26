@@ -8,11 +8,10 @@ use serde::Serialize;
 use super::{
     client::{self, SparkClient},
     wire::{
-        BenchRequest, CertificateStatusDocument, CompatibilityEvaluationDocument, DoctorDocument,
-        DownloadRequest, ModelDocument, ModelListDocument, OperationDocument,
-        OperationListDocument, RecipeCatalogDocument, RemoveModelRequest, ServeAdmissionRequest,
-        ServeRequest, StatusDocument, StopRequest, TokenCreateRequest, TokenCreatedDocument,
-        TokenListDocument, TuneRequest,
+        CertificateStatusDocument, DoctorDocument, DownloadRequest, ModelDocument,
+        ModelListDocument, OperationDocument, OperationListDocument, RemoveModelRequest,
+        ServeAdmissionRequest, ServeRequest, StatusDocument, StopRequest, TokenCreateRequest,
+        TokenCreatedDocument, TokenListDocument,
     },
     EXIT_USAGE,
 };
@@ -73,31 +72,21 @@ pub enum SparkCommand {
         after_help = "Examples:\n  sy spark dgx-spark token create --name reader --scope models:read --scope operations:read --detach --json\n  sy spark dgx-spark token list --json\n  sy spark dgx-spark token revoke 01K... --yes --json\n\nSecrets are returned once by create and are never written by sy outside stdout.\n\nEnvironment:\n  SY_SPARK_JSON, SY_SPARK_CONFIG_DIR, SY_SPARK_IDEMPOTENCY_KEY, SY_SPARK_DRY_RUN, SY_SPARK_YES"
     )]
     Token(TokenArgs),
-    /// Explain every signed engine recipe and preview deterministic selection.
-    #[command(
-        after_help = "Examples:\n  sy spark dgx-spark recipes --json\n  sy spark dgx-spark recipes ornith-ai/Ornith-1.5-9B --json\n\nThis command is read-only: it never downloads a model, pulls an image, or starts an engine."
-    )]
-    Recipes(RecipesArgs),
-    /// Evaluate one exact installed recipe against bounded functional gates.
-    #[command(
-        after_help = "Example:\n  sy spark dgx-spark bench ornith-1.5:9b --json\n\nBench does not measure speed, download software, pull images, or start an engine. It evaluates exact compatibility, capability, correctness evidence, safety, isolation, and durability."
-    )]
-    Bench(BenchArgs),
-    /// Select from installed locally verified recipes using functional evidence.
-    #[command(
-        after_help = "Example:\n  sy spark dgx-spark tune ornith-1.5:9b --objective agent --json\n\nTune persists a deterministic compatible winner. Unsupported engine families remain explicit and are never downloaded implicitly; verified vLLM remains the visible fallback."
-    )]
-    Tune(TuneArgs),
     /// Acquire and verify one immutable Hugging Face model snapshot.
     #[command(
         after_help = "Example:\n  sy spark dgx-spark download ornith-ai/Ornith-1.5-9B --alias ornith-1.5:9b --detach --json\n\nEnvironment:\n  SY_SPARK_REVISION, SY_SPARK_ALIAS, SY_SPARK_UPDATE_ALIAS, SY_SPARK_DETACH, SY_SPARK_DRY_RUN, SY_SPARK_JSON, SY_SPARK_CONFIG_DIR"
     )]
     Download(DownloadArgs),
-    /// Start one recipe-selected managed model instance after resource admission.
+    /// Start one managed model with the configured inference engine.
     #[command(
-        after_help = "Examples:\n  sy spark dgx-spark serve ornith-1.5:9b\n  sy spark dgx-spark serve ornith-1.5:9b --dry-run --json\n\nServe starts a digest-pinned, isolated engine after fail-closed admission. The dry-run performs selection and admission without Docker or GPU side effects.\n\nExit codes:\n  0 success; 1 unexpected failure; 2 usage/local configuration; 3 remote policy/state rejection; 4 unreachable, TLS pin mismatch, or authentication failure."
+        after_help = "Examples:\n  sy spark dgx-spark serve ornith-1.5:9b\n  sy spark dgx-spark serve ornith-1.5:9b --dry-run --json\n\nServe starts the root-configured digest-pinned engine for any verified compatible model. The dry-run performs admission without Docker or GPU side effects.\n\nExit codes:\n  0 success; 1 unexpected failure; 2 usage/local configuration; 3 remote policy/state rejection; 4 unreachable, TLS pin mismatch, or authentication failure."
     )]
     Serve(ServeArgs),
+    /// Configure and launch a local coding agent against a managed Spark model.
+    #[command(
+        after_help = "Examples:\n  sy spark dgx-spark launch codex --model ornith-1.5:9b\n  sy spark dgx-spark launch claude --model ornith-1.5:9b -- --permission-mode plan\n  sy spark dgx-spark launch opencode --config --model ornith-1.5:9b\n  sy spark dgx-spark launch codex --restore\n\nArguments after `--` are passed directly to the selected local agent without a shell. The Spark administrator credential is never given to the child process.\n\nEnvironment:\n  SY_SPARK_LAUNCH_MODEL, SY_SPARK_LAUNCH_CONFIG, SY_SPARK_LAUNCH_RESTORE, SY_SPARK_YES, SY_SPARK_DRY_RUN, SY_SPARK_JSON, SY_SPARK_CONFIG_DIR"
+    )]
+    Launch(LaunchArgs),
     /// List desired and observed managed model instances.
     Ps(ReadArgs),
     /// Read bounded redacted logs for one managed instance.
@@ -295,51 +284,6 @@ pub enum ClientKind {
 }
 
 #[derive(Debug, Args)]
-pub struct RecipesArgs {
-    /// Exact model repository whose compatibility should be explained.
-    pub model: Option<String>,
-    /// Emit the stable sy.spark.recipe-catalog/v1 document.
-    #[arg(long, env = "SY_SPARK_JSON")]
-    pub json: bool,
-    #[arg(long, env = "SY_SPARK_CONFIG_DIR")]
-    pub config_dir: Option<PathBuf>,
-}
-
-#[derive(Debug, Args)]
-pub struct BenchArgs {
-    pub model: String,
-    #[arg(long, env = "SY_SPARK_RECIPE")]
-    pub recipe: Option<String>,
-    #[arg(long, default_value = "agent", env = "SY_SPARK_OBJECTIVE")]
-    pub objective: String,
-    #[arg(long, env = "SY_SPARK_DRY_RUN")]
-    pub dry_run: bool,
-    #[arg(long, env = "SY_SPARK_JSON")]
-    pub json: bool,
-    #[arg(long, env = "SY_SPARK_IDEMPOTENCY_KEY")]
-    pub idempotency_key: Option<String>,
-    #[arg(long, env = "SY_SPARK_CONFIG_DIR")]
-    pub config_dir: Option<PathBuf>,
-}
-
-#[derive(Debug, Args)]
-pub struct TuneArgs {
-    pub model: String,
-    #[arg(long, default_value = "agent", env = "SY_SPARK_OBJECTIVE")]
-    pub objective: String,
-    #[arg(long, env = "SY_SPARK_DETACH")]
-    pub detach: bool,
-    #[arg(long, env = "SY_SPARK_DRY_RUN")]
-    pub dry_run: bool,
-    #[arg(long, env = "SY_SPARK_JSON")]
-    pub json: bool,
-    #[arg(long, env = "SY_SPARK_IDEMPOTENCY_KEY")]
-    pub idempotency_key: Option<String>,
-    #[arg(long, env = "SY_SPARK_CONFIG_DIR")]
-    pub config_dir: Option<PathBuf>,
-}
-
-#[derive(Debug, Args)]
 pub struct DownloadArgs {
     pub repository: String,
     #[arg(long, default_value = "main", env = "SY_SPARK_REVISION")]
@@ -365,12 +309,6 @@ pub struct ServeArgs {
     pub model: String,
     #[arg(long, env = "SY_SPARK_INSTANCE_NAME")]
     pub name: Option<String>,
-    #[arg(long, env = "SY_SPARK_RECIPE")]
-    pub recipe: Option<String>,
-    #[arg(long, default_value = "agent", env = "SY_SPARK_OBJECTIVE")]
-    pub objective: String,
-    #[arg(long, env = "SY_SPARK_ALLOW_UNVERIFIED")]
-    pub allow_unverified: bool,
     #[arg(long, env = "SY_SPARK_DETACH")]
     pub detach: bool,
     #[arg(long, env = "SY_SPARK_DRY_RUN")]
@@ -381,6 +319,45 @@ pub struct ServeArgs {
     pub idempotency_key: Option<String>,
     #[arg(long, env = "SY_SPARK_CONFIG_DIR")]
     pub config_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum LaunchIntegration {
+    Codex,
+    Claude,
+    Opencode,
+}
+
+impl LaunchIntegration {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+            Self::Opencode => "opencode",
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct LaunchArgs {
+    #[arg(value_enum)]
+    pub integration: LaunchIntegration,
+    #[arg(long, env = "SY_SPARK_LAUNCH_MODEL")]
+    pub model: Option<String>,
+    #[arg(long = "config", env = "SY_SPARK_LAUNCH_CONFIG")]
+    pub configure: bool,
+    #[arg(long, env = "SY_SPARK_LAUNCH_RESTORE")]
+    pub restore: bool,
+    #[arg(long, short = 'y', env = "SY_SPARK_YES")]
+    pub yes: bool,
+    #[arg(long, env = "SY_SPARK_DRY_RUN")]
+    pub dry_run: bool,
+    #[arg(long, env = "SY_SPARK_JSON")]
+    pub json: bool,
+    #[arg(long, env = "SY_SPARK_CONFIG_DIR")]
+    pub config_dir: Option<PathBuf>,
+    #[arg(last = true)]
+    pub extra_args: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -655,11 +632,9 @@ pub fn dispatch(cli: SparkCli) -> anyhow::Result<()> {
         ),
         SparkCommand::Operations(args) => dispatch_operations(&cli.host, args),
         SparkCommand::Token(args) => dispatch_tokens(&cli.host, args),
-        SparkCommand::Recipes(args) => dispatch_recipes(&cli.host, args),
-        SparkCommand::Bench(args) => dispatch_bench(&cli.host, args),
-        SparkCommand::Tune(args) => dispatch_tune(&cli.host, args),
         SparkCommand::Download(args) => dispatch_download(&cli.host, args),
         SparkCommand::Serve(args) => dispatch_serve(&cli.host, args),
+        SparkCommand::Launch(args) => dispatch_launch(&cli.host, args),
         SparkCommand::Ps(args) => dispatch_instances(&cli.host, args),
         SparkCommand::Logs(args) => dispatch_logs(&cli.host, args),
         SparkCommand::Stop(args) => dispatch_stop(&cli.host, args),
@@ -689,111 +664,9 @@ pub fn dispatch(cli: SparkCli) -> anyhow::Result<()> {
     .map_err(Into::into)
 }
 
-fn dispatch_recipes(host: &str, args: RecipesArgs) -> Result<(), SparkError> {
-    let client = load_client(host, args.config_dir)?;
-    let document = client
-        .recipes(args.model.as_deref())
-        .map_err(SparkError::from_client)?;
-    if args.json {
-        print!("{}", render_json(&document)?);
-    } else {
-        print!("{}", render_recipes_human(&document));
-    }
-    Ok(())
-}
-
-fn dispatch_bench(host: &str, args: BenchArgs) -> Result<(), SparkError> {
-    validate_selection_objective(&args.objective)?;
-    let request = BenchRequest {
-        model: args.model,
-        recipe: args.recipe,
-        objective: args.objective,
-        dry_run: args.dry_run,
-    };
-    let client = load_client(host, args.config_dir)?;
-    let key = idempotency_key(args.idempotency_key);
-    if args.dry_run {
-        return render_evaluation(
-            &client
-                .bench_plan(&key, &request)
-                .map_err(SparkError::from_client)?,
-            args.json,
-        );
-    }
-    let operation = client
-        .bench(&key, &request)
-        .map_err(SparkError::from_client)?;
-    let operation = client
-        .follow_operation(&operation.id, 0)
-        .map_err(SparkError::from_client)?;
-    render_operation(&operation, args.json)
-}
-
-fn dispatch_tune(host: &str, args: TuneArgs) -> Result<(), SparkError> {
-    validate_selection_objective(&args.objective)?;
-    let request = TuneRequest {
-        model: args.model,
-        objective: args.objective,
-        dry_run: args.dry_run,
-    };
-    let client = load_client(host, args.config_dir)?;
-    let key = idempotency_key(args.idempotency_key);
-    if args.dry_run {
-        return render_evaluation(
-            &client
-                .tune_plan(&key, &request)
-                .map_err(SparkError::from_client)?,
-            args.json,
-        );
-    }
-    let operation = client
-        .tune(&key, &request)
-        .map_err(SparkError::from_client)?;
-    let operation = if args.detach {
-        operation
-    } else {
-        client
-            .follow_operation(&operation.id, 0)
-            .map_err(SparkError::from_client)?
-    };
-    render_operation(&operation, args.json)
-}
-
-fn validate_selection_objective(objective: &str) -> Result<(), SparkError> {
-    matches!(
-        objective,
-        "agent" | "interactive" | "long-context" | "retrieval"
-    )
-    .then_some(())
-    .ok_or_else(|| {
-        SparkError::usage("objective must be agent, interactive, long-context, or retrieval")
-    })
-}
-
-fn render_evaluation(
-    document: &CompatibilityEvaluationDocument,
-    json: bool,
-) -> Result<(), SparkError> {
-    if json {
-        print!("{}", render_json(document)?);
-    } else {
-        println!("functional compatibility {}", document.id);
-        println!(
-            "selected: {}",
-            document.selected_recipe_id.as_deref().unwrap_or("none")
-        );
-        println!(
-            "vLLM fallback: {}",
-            document.fallback_recipe_id.as_deref().unwrap_or("none")
-        );
-        for candidate in &document.candidates {
-            println!(
-                "{}  {:?}  {}",
-                candidate.engine_family, candidate.status, candidate.reason
-            );
-        }
-    }
-    Ok(())
+fn dispatch_launch(host: &str, mut args: LaunchArgs) -> Result<(), SparkError> {
+    let config_dir = args.config_dir.take().unwrap_or_else(default_config_dir);
+    super::launch::run(host, &config_dir, args).map_err(SparkError::from_client)
 }
 
 fn dispatch_download(host: &str, args: DownloadArgs) -> Result<(), SparkError> {
@@ -826,7 +699,6 @@ fn dispatch_download(host: &str, args: DownloadArgs) -> Result<(), SparkError> {
 }
 
 fn dispatch_serve(host: &str, args: ServeArgs) -> Result<(), SparkError> {
-    validate_selection_objective(&args.objective)?;
     let client = load_client(host, args.config_dir)?;
     let key = idempotency_key(args.idempotency_key);
     if args.dry_run {
@@ -836,7 +708,6 @@ fn dispatch_serve(host: &str, args: ServeArgs) -> Result<(), SparkError> {
                 &ServeAdmissionRequest {
                     model: args.model,
                     name: args.name,
-                    recipe: args.recipe,
                     dry_run: true,
                 },
             )
@@ -857,9 +728,6 @@ fn dispatch_serve(host: &str, args: ServeArgs) -> Result<(), SparkError> {
             &ServeRequest {
                 model: args.model,
                 name: args.name,
-                recipe: args.recipe,
-                objective: args.objective,
-                allow_unverified: args.allow_unverified,
                 dry_run: false,
             },
         )
@@ -1038,40 +906,6 @@ fn render_model(model: &ModelDocument) {
     }
 }
 
-fn render_recipes_human(document: &RecipeCatalogDocument) -> String {
-    let mut output = format!("Recipe catalog {}\n", document.catalog_sha256);
-    if let Some(selection) = &document.selection {
-        output.push_str(&format!(
-            "selected {} ({:?})\n",
-            selection.recipe_id, selection.reason
-        ));
-    } else if document.model_repository.is_some() {
-        output.push_str("selected none\n");
-    }
-    for recipe in &document.recipes {
-        output.push_str(&format!(
-            "{}  {:?}  {}\n",
-            recipe.id,
-            recipe.status,
-            if recipe.compatible {
-                "compatible"
-            } else {
-                "unsupported"
-            }
-        ));
-        for mismatch in &recipe.mismatches {
-            output.push_str(&format!(
-                "  mismatch {}: observed {}; requires {}\n",
-                mismatch.field, mismatch.actual, mismatch.expected
-            ));
-        }
-        for remediation in &recipe.remediation {
-            output.push_str(&format!("  remediation: {remediation}\n"));
-        }
-    }
-    output
-}
-
 fn render_admission_human(report: &super::resources::AdmissionReport) -> String {
     let mut output = format!(
         "Spark admission: {} (aggregate {} bytes; reserve {} bytes)\n",
@@ -1085,7 +919,7 @@ fn render_admission_human(report: &super::resources::AdmissionReport) -> String 
     );
     if let Some(selection) = &report.selection {
         output.push_str(&format!(
-            "  selection: {}\n  recipe: {}\n  engine: {}\n  image: {}\n  fingerprint: {}\n",
+            "  policy: {}\n  engine id: {}\n  engine: {}\n  image: {}\n  fingerprint: {}\n",
             selection.selection_kind,
             selection.recipe_id,
             selection.engine,
@@ -1736,36 +1570,33 @@ mod tests {
     }
 
     #[test]
-    fn bench_and_tune_expose_bounded_functional_options() {
+    fn serve_rejects_recipe_and_unverified_selection_options() {
         #[derive(clap::Parser)]
         struct TestCli {
             #[command(flatten)]
             spark: super::SparkCli,
         }
-        let bench = TestCli::try_parse_from([
+        let serve = TestCli::try_parse_from([
             "sy",
             "dgx-spark",
-            "bench",
+            "serve",
             "ornith-1.5:9b",
-            "--recipe",
-            "ornith-vllm",
             "--dry-run",
             "--json",
         ])
         .unwrap();
-        assert!(matches!(bench.spark.command, super::SparkCommand::Bench(_)));
-        let tune = TestCli::try_parse_from([
-            "sy",
-            "dgx-spark",
-            "tune",
-            "ornith-1.5:9b",
-            "--objective",
-            "agent",
-            "--detach",
-            "--json",
-        ])
-        .unwrap();
-        assert!(matches!(tune.spark.command, super::SparkCommand::Tune(_)));
+        assert!(matches!(serve.spark.command, super::SparkCommand::Serve(_)));
+        for flag in ["--recipe", "--allow-unverified"] {
+            assert!(TestCli::try_parse_from([
+                "sy",
+                "dgx-spark",
+                "serve",
+                "ornith-1.5:9b",
+                flag,
+                "value",
+            ])
+            .is_err());
+        }
     }
 
     #[test]
@@ -1963,85 +1794,6 @@ mod tests {
     }
 
     #[test]
-    fn recipes_explains_all_mismatches_without_mutation() {
-        use crate::spark::wire::{
-            RecipeCatalogDocument, RecipeCompatibilityDocument, RecipeEvidenceDocument,
-            RecipeMismatchDocument, RecipeStatus,
-        };
-        #[derive(clap::Parser)]
-        struct TestCli {
-            #[command(flatten)]
-            spark: super::SparkCli,
-        }
-        let parsed = TestCli::try_parse_from([
-            "sy",
-            "dgx-spark",
-            "recipes",
-            "ornith-ai/Ornith-1.5-9B",
-            "--json",
-        ])
-        .unwrap();
-        assert!(matches!(
-            parsed.spark.command,
-            super::SparkCommand::Recipes(super::RecipesArgs {
-                model: Some(_),
-                json: true,
-                ..
-            })
-        ));
-        let document = RecipeCatalogDocument {
-            schema: "sy.spark.recipe-catalog/v1".into(),
-            catalog_sha256: format!("sha256:{}", "a".repeat(64)),
-            model_repository: Some("ornith-ai/Ornith-1.5-9B".into()),
-            model_commit: Some("4".repeat(40)),
-            objective: "agent".into(),
-            selection: None,
-            recipes: vec![RecipeCompatibilityDocument {
-                id: "ornith-vllm".into(),
-                version: 1,
-                status: RecipeStatus::UpstreamVerified,
-                model_repository: "ornith-ai/Ornith-1.5-9B".into(),
-                model_commits: vec!["4".repeat(40)],
-                engine: "vllm".into(),
-                engine_version: "0.19.1".into(),
-                image: format!("vllm/vllm-openai@sha256:{}", "f".repeat(64)),
-                compatible: false,
-                mismatches: vec![RecipeMismatchDocument {
-                    field: "host.driver".into(),
-                    actual: "579".into(),
-                    expected: "580".into(),
-                }],
-                capabilities: vec!["text_generation".into()],
-                resources: crate::spark::wire::RecipeResourceEnvelopeDocument {
-                    image_bytes: 1,
-                    startup_peak_bytes: 2,
-                    steady_peak_bytes: 1,
-                    compile_cache_bytes: 1,
-                },
-                evidence: RecipeEvidenceDocument {
-                    source_url: "https://github.com/vllm-project/vllm".into(),
-                    source_commit: "b".repeat(40),
-                    upstream_recipe_commit: "c".repeat(40),
-                    host_fingerprint: format!("sha256:{}", "d".repeat(64)),
-                    quality: "upstream".into(),
-                    stability_seconds: 0,
-                    verified_at: "2026-08-24T00:00:00Z".into(),
-                    expires_at: None,
-                },
-                remediation: vec!["install a compatible signed recipe".into()],
-                fingerprint: format!("sha256:{}", "e".repeat(64)),
-                specialized_toggles: 0,
-            }],
-        };
-        let json = super::render_json(&document).unwrap();
-        let human = super::render_recipes_human(&document);
-        for evidence in ["ornith-vllm", "host.driver", "579", "580"] {
-            assert!(json.contains(evidence) && human.contains(evidence));
-        }
-        assert!(!human.contains("download") && !human.contains("start engine"));
-    }
-
-    #[test]
     fn admission_human_output_exposes_the_complete_selected_fallback() {
         use crate::spark::resources::{
             AdmissionReport, AdmissionSelection, HostResourceSnapshot, ResourcePolicy,
@@ -2076,8 +1828,8 @@ mod tests {
                 disk_available_bytes: Some(4),
             },
             selection: Some(AdmissionSelection {
-                recipe_id: "ornith-1.5-9b-vllm-0.19.1".into(),
-                selection_kind: "verified_vllm_fallback".into(),
+                recipe_id: "vllm-arm64".into(),
+                selection_kind: "configured_engine".into(),
                 engine: "vllm".into(),
                 image: IMAGE.into(),
                 fingerprint: FINGERPRINT.into(),
@@ -2087,7 +1839,7 @@ mod tests {
         assert_eq!(
             super::render_admission_human(&report),
             format!(
-                "Spark admission: admitted (aggregate 42 bytes; reserve 8 bytes)\n  selection: verified_vllm_fallback\n  recipe: ornith-1.5-9b-vllm-0.19.1\n  engine: vllm\n  image: {IMAGE}\n  fingerprint: {FINGERPRINT}\n"
+                "Spark admission: admitted (aggregate 42 bytes; reserve 8 bytes)\n  policy: configured_engine\n  engine id: vllm-arm64\n  engine: vllm\n  image: {IMAGE}\n  fingerprint: {FINGERPRINT}\n"
             )
         );
     }
@@ -2148,6 +1900,31 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn launch_parses_model_and_exact_agent_arguments() {
+        #[derive(clap::Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            spark: super::SparkCli,
+        }
+        let parsed = TestCli::try_parse_from([
+            "sy",
+            "dgx-spark",
+            "launch",
+            "codex",
+            "--model",
+            "ornith-1.5:9b",
+            "--",
+            "--sandbox",
+            "workspace-write",
+        ])
+        .unwrap();
+        let super::SparkCommand::Launch(args) = parsed.spark.command else {
+            panic!("launch command should parse");
+        };
+        assert_eq!(args.extra_args, ["--sandbox", "workspace-write"]);
     }
 
     #[test]

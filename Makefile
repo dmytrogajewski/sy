@@ -96,7 +96,8 @@ docs-lint:
 	fi; \
 	if command -v lychee >/dev/null 2>&1; then \
 		echo "==> lychee"; \
-		lychee --config lychee.toml './**/*.md'; \
+		lychee --config lychee.toml --exclude-path target \
+			--exclude-path website/node_modules './**/*.md'; \
 	else \
 		echo "skip: lychee not installed (cargo install lychee)"; \
 	fi; \

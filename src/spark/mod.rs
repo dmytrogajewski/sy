@@ -2,14 +2,17 @@
 
 pub mod cli;
 pub mod client;
+#[cfg(feature = "spark-agent")]
+pub mod engine;
 pub mod install;
+pub mod launch;
 #[cfg(feature = "spark-agent")]
 pub mod reconcile;
 pub mod wire;
 
 #[cfg(feature = "spark-agent")]
 pub mod agent;
-#[cfg(feature = "spark-agent")]
+#[cfg(all(feature = "spark-agent", test))]
 pub mod bench;
 #[cfg(feature = "spark-agent")]
 pub mod executor;

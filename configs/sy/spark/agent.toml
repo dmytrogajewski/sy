@@ -1,4 +1,5 @@
 schema = "sy.spark.agent/v1"
+engine_policy = "/etc/sy/spark/engine.toml"
 listen = "10.1.30.143:9843"
 allowed_client_cidrs = ["10.1.30.0/24"]
 plain_http_loopback_only = true
@@ -22,7 +23,9 @@ disk_reserve_gib = 100
 startup_guard_interval_ms = 500
 steady_guard_interval_ms = 2000
 emergency_consecutive_samples = 3
-memory_full_psi_avg10_percent = 2.0
+# Model loading can briefly exceed 5% full PSI on GB10 while more than 60 GiB
+# remains available. The emergency floor remains the hard low-memory backstop.
+memory_full_psi_avg10_percent = 10.0
 
 [retention]
 operation_days = 90

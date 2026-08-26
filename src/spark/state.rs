@@ -20,11 +20,13 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::reconcile::{RESTART_FAILURE_LIMIT, RESTART_WINDOW_SECONDS};
 use super::resources::{DeclaredEnvelope, EmergencyRecord};
+#[cfg(test)]
+use super::wire::CompatibilityEvaluationDocument;
 use super::wire::{
-    CompatibilityEvaluationDocument, InstanceDesiredState, InstanceDocument, InstanceObservedState,
-    ModelDocument, OperationDocument, OperationEvent, OperationProgress, OperationState,
-    ProblemDocument, TokenCreateRequest, TokenDocument, INSTANCE_SCHEMA, OPERATION_EVENT_SCHEMA,
-    OPERATION_SCHEMA, PROBLEM_SCHEMA, TOKEN_SCHEMA,
+    InstanceDesiredState, InstanceDocument, InstanceObservedState, ModelDocument,
+    OperationDocument, OperationEvent, OperationProgress, OperationState, ProblemDocument,
+    TokenCreateRequest, TokenDocument, INSTANCE_SCHEMA, OPERATION_EVENT_SCHEMA, OPERATION_SCHEMA,
+    PROBLEM_SCHEMA, TOKEN_SCHEMA,
 };
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -279,10 +281,12 @@ enum Command {
         record: EmergencyRecord,
         reply: oneshot::Sender<Result<bool, StateError>>,
     },
+    #[cfg(test)]
     StoreEvaluation {
         evaluation: CompatibilityEvaluationDocument,
         reply: oneshot::Sender<Result<CompatibilityEvaluationDocument, StateError>>,
     },
+    #[cfg(test)]
     SelectedEvaluation {
         model_id: String,
         objective: String,
@@ -615,6 +619,7 @@ impl DbActor {
         self.submit(Command::Snapshot).await
     }
 
+    #[cfg(test)]
     pub async fn store_evaluation(
         &self,
         evaluation: CompatibilityEvaluationDocument,
@@ -623,6 +628,7 @@ impl DbActor {
             .await
     }
 
+    #[cfg(test)]
     pub async fn selected_evaluation(
         &self,
         model_id: &str,
@@ -920,9 +926,11 @@ fn actor_loop(
             Command::ImportEmergency { record, reply } => {
                 let _ = reply.send(import_emergency(&mut connection, &record));
             }
+            #[cfg(test)]
             Command::StoreEvaluation { evaluation, reply } => {
                 let _ = reply.send(store_evaluation(&mut connection, evaluation));
             }
+            #[cfg(test)]
             Command::SelectedEvaluation {
                 model_id,
                 objective,
@@ -939,6 +947,7 @@ fn actor_loop(
     }
 }
 
+#[cfg(test)]
 fn store_evaluation(
     connection: &mut Connection,
     evaluation: CompatibilityEvaluationDocument,
@@ -950,6 +959,7 @@ fn store_evaluation(
     Ok(evaluation)
 }
 
+#[cfg(test)]
 fn selected_evaluation(
     connection: &Connection,
     model_id: &str,
@@ -1856,7 +1866,7 @@ fn validate_instance(instance: &InstanceDocument) -> Result<(), StateError> {
         || !valid_recipe_fingerprint
         || !matches!(
             instance.objective.as_str(),
-            "agent" | "interactive" | "throughput" | "long-context"
+            "agent" | "inference" | "interactive" | "throughput" | "long-context"
         )
     {
         return Err(StateError::Invalid("instance intent is invalid".into()));
@@ -2561,6 +2571,21 @@ mod tests {
 
         assert_eq!((first.generation, duplicate.generation), (1, 1));
         assert!(matches!(conflict, Err(StateError::Conflict(_))));
+        actor.shutdown().unwrap();
+    }
+
+    #[tokio::test]
+    async fn generic_inference_intent_is_durable() {
+        let root = tempfile::tempdir().unwrap();
+        let actor = actor(root.path());
+        let model = model_document("m_0123456789abcdef0123456789abcdef", "ornith-1.5:9b");
+        actor.promote_model(model.clone(), false).await.unwrap();
+        let mut instance = instance_document(&model, "ornith", "vllm-arm64");
+        instance.objective = "inference".into();
+
+        let accepted = actor.begin_serve(instance).await.unwrap().instance;
+
+        assert_eq!(accepted.objective, "inference");
         actor.shutdown().unwrap();
     }
 

@@ -19,6 +19,12 @@ pub const RETRY_AFTER_SECONDS: &str = "1";
 pub const MAX_OUTPUT_TOKENS: u64 = 32_768;
 const MAX_INSTANCE_CONCURRENCY: usize = 4;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SamplingPolicy {
+    pub defaults: BTreeMap<String, serde_json::Number>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VisionPolicy {
@@ -54,6 +60,8 @@ pub struct GatewayProfile {
     pub capabilities: BTreeSet<String>,
     pub vision: Option<VisionPolicy>,
     pub embeddings: Option<EmbeddingPolicy>,
+    #[serde(default)]
+    pub sampling: SamplingPolicy,
 }
 
 impl GatewayProfile {
@@ -62,6 +70,7 @@ impl GatewayProfile {
             capabilities: ["text_generation".into(), "tool_calling".into()].into(),
             vision: None,
             embeddings: None,
+            sampling: SamplingPolicy::default(),
         }
     }
 
@@ -83,6 +92,7 @@ impl GatewayProfile {
                 normalized,
                 normalization_tolerance_ppm,
             }),
+            sampling: SamplingPolicy::default(),
         }
     }
 
@@ -102,6 +112,7 @@ pub struct GenerationRequest {
     pub body: Vec<u8>,
     pub stream: bool,
     pub custom_tools: BTreeSet<String>,
+    pub omit_reasoning: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -208,6 +219,12 @@ enum AnthropicContentBlock {
     Image {
         source: AnthropicImageSource,
     },
+    Thinking {
+        thinking: String,
+        signature: String,
+        #[serde(default)]
+        cache_control: Option<AnthropicCacheControl>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -305,7 +322,18 @@ struct AnthropicContextEdit {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AnthropicOutputConfig {
-    effort: String,
+    #[serde(default)]
+    effort: Option<String>,
+    #[serde(default)]
+    format: Option<AnthropicOutputFormat>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnthropicOutputFormat {
+    #[serde(rename = "type")]
+    kind: String,
+    schema: Value,
 }
 
 #[derive(Debug, Default)]
@@ -314,6 +342,7 @@ struct ToolCall {
     name: String,
     arguments: String,
     announced: bool,
+    output_index: Option<u32>,
 }
 
 #[derive(Debug, Default)]
@@ -327,6 +356,9 @@ struct AnthropicToolCall {
 pub struct AnthropicEncoder {
     id: String,
     model: String,
+    reasoning: String,
+    reasoning_index: Option<u32>,
+    omit_reasoning: bool,
     text: String,
     text_index: Option<u32>,
     tools: BTreeMap<u32, AnthropicToolCall>,
@@ -339,10 +371,21 @@ pub struct AnthropicEncoder {
 
 impl AnthropicEncoder {
     pub fn new(model: String) -> Self {
+        Self::create(model, false)
+    }
+
+    pub fn with_omitted_reasoning(model: String) -> Self {
+        Self::create(model, true)
+    }
+
+    fn create(model: String, omit_reasoning: bool) -> Self {
         let id = format!("msg_{}", ulid::Ulid::new().to_string().to_ascii_lowercase());
         let mut encoder = Self {
             id,
             model,
+            reasoning: String::new(),
+            reasoning_index: None,
+            omit_reasoning,
             text: String::new(),
             text_index: None,
             tools: BTreeMap::new(),
@@ -368,6 +411,11 @@ impl AnthropicEncoder {
 
     pub fn final_document(&self) -> Value {
         let mut content = Vec::new();
+        if self.reasoning_index.is_some() {
+            content.push(serde_json::json!({"type":"thinking",
+                "thinking":if self.omit_reasoning { "" } else { &self.reasoning },
+                "signature":local_reasoning_signature(&self.reasoning)}));
+        }
         if self.text_index.is_some() {
             content.push(serde_json::json!({"type":"text","text":self.text}));
         }
@@ -382,6 +430,7 @@ impl AnthropicEncoder {
 
     pub fn accept(&mut self, event: GenerationEvent) -> Result<(), AnthropicError> {
         match event {
+            GenerationEvent::ReasoningDelta { text } => self.reasoning_delta(text),
             GenerationEvent::TextDelta { text } => self.text_delta(text),
             GenerationEvent::ToolCallDelta {
                 index,
@@ -447,6 +496,37 @@ impl AnthropicEncoder {
             serde_json::json!({"index":index,
             "delta":{"type":"text_delta","text":text}}),
         );
+        Ok(())
+    }
+
+    fn reasoning_delta(&mut self, text: String) -> Result<(), AnthropicError> {
+        if self.output_bytes.saturating_add(text.len()) > MAX_COMPLETION_BODY_BYTES {
+            return Err(anthropic_invalid(
+                "response exceeds the bounded output buffer",
+            ));
+        }
+        let index = match self.reasoning_index {
+            Some(index) => index,
+            None => {
+                let index = self.allocate_index();
+                self.reasoning_index = Some(index);
+                self.event(
+                    "content_block_start",
+                    serde_json::json!({"index":index,
+                    "content_block":{"type":"thinking","thinking":"","signature":""}}),
+                );
+                index
+            }
+        };
+        self.output_bytes = self.output_bytes.saturating_add(text.len());
+        self.reasoning.push_str(&text);
+        if !self.omit_reasoning {
+            self.event(
+                "content_block_delta",
+                serde_json::json!({"index":index,
+                "delta":{"type":"thinking_delta","thinking":text}}),
+            );
+        }
         Ok(())
     }
 
@@ -518,12 +598,20 @@ impl AnthropicEncoder {
             }
         }
         let mut indices = self
-            .text_index
+            .reasoning_index
             .into_iter()
+            .chain(self.text_index)
             .chain(self.tools.values().filter_map(|tool| tool.block_index))
             .collect::<Vec<_>>();
         indices.sort_unstable();
         for index in indices {
+            if self.reasoning_index == Some(index) {
+                self.event(
+                    "content_block_delta",
+                    serde_json::json!({"index":index,"delta":{"type":"signature_delta",
+                        "signature":local_reasoning_signature(&self.reasoning)}}),
+                );
+            }
             self.event("content_block_stop", serde_json::json!({"index":index}));
         }
         self.event("message_delta", serde_json::json!({"delta":{
@@ -532,6 +620,21 @@ impl AnthropicEncoder {
         self.event("message_stop", serde_json::json!({}));
         Ok(())
     }
+}
+
+fn local_reasoning_signature(reasoning: &str) -> String {
+    format!("sy-local-v1:{:x}", Sha256::digest(reasoning.as_bytes()))
+}
+
+fn valid_local_reasoning_signature(reasoning: &str, signature: &str) -> bool {
+    if !reasoning.is_empty() {
+        return signature == local_reasoning_signature(reasoning);
+    }
+    signature
+        .strip_prefix("sy-local-v1:")
+        .is_some_and(|digest| {
+            digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
 }
 
 fn anthropic_stop_reason(reason: Option<&str>) -> &'static str {
@@ -547,12 +650,16 @@ pub struct ResponsesEncoder {
     id: String,
     model: String,
     custom_tools: BTreeSet<String>,
+    reasoning: String,
+    reasoning_index: Option<u32>,
     text: String,
-    text_announced: bool,
+    text_index: Option<u32>,
     tools: BTreeMap<u32, ToolCall>,
     usage: (u64, u64),
+    output_bytes: usize,
     finish_reason: Option<String>,
     sequence: u64,
+    next_index: u32,
     pending: VecDeque<OpenAiStreamEvent>,
 }
 
@@ -560,6 +667,26 @@ fn invalid_request(message: &'static str) -> OpenAiError {
     OpenAiError {
         code: "invalid_request_error",
         message,
+    }
+}
+
+fn apply_sampling_defaults(object: &mut serde_json::Map<String, Value>, policy: &SamplingPolicy) {
+    for (key, value) in &policy.defaults {
+        if object.get(key).is_none_or(Value::is_null) {
+            object.insert(key.clone(), Value::Number(value.clone()));
+        }
+    }
+}
+
+fn omit_empty_tool_controls(object: &mut serde_json::Map<String, Value>) {
+    if object
+        .get("tools")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        object.remove("tools");
+        object.remove("tool_choice");
+        object.remove("parallel_tool_calls");
     }
 }
 
@@ -588,7 +715,7 @@ fn decode_image(
     policy: Option<&VisionPolicy>,
     budget: &mut ImageBudget,
 ) -> Result<ImagePart, OpenAiError> {
-    let policy = policy.ok_or_else(|| invalid_request("image input requires a vision recipe"))?;
+    let policy = policy.ok_or_else(|| invalid_request("image input requires a vision profile"))?;
     if !policy.media_types.contains(media_type)
         || encoded.len() > policy.max_bytes.saturating_add(2) / 3 * 4 + 4
     {
@@ -624,7 +751,7 @@ fn decode_image(
         .into_dimensions()
         .map_err(|_| invalid_request("image header is invalid"))?;
     if width == 0 || height == 0 || width > policy.max_width || height > policy.max_height {
-        return Err(invalid_request("image dimensions exceed the recipe limit"));
+        return Err(invalid_request("image dimensions exceed the profile limit"));
     }
     budget.count += 1;
     budget.bytes += bytes.len();
@@ -683,12 +810,16 @@ impl ResponsesEncoder {
             id,
             model,
             custom_tools,
+            reasoning: String::new(),
+            reasoning_index: None,
             text: String::new(),
-            text_announced: false,
+            text_index: None,
             tools: BTreeMap::new(),
             usage: (0, 0),
+            output_bytes: 0,
             finish_reason: None,
             sequence: 0,
+            next_index: 0,
             pending: VecDeque::new(),
         };
         encoder.push("response.created", "in_progress");
@@ -719,6 +850,7 @@ impl ResponsesEncoder {
 
     pub fn accept(&mut self, event: GenerationEvent) -> Result<(), OpenAiError> {
         match event {
+            GenerationEvent::ReasoningDelta { text } => self.reasoning_delta(text),
             GenerationEvent::TextDelta { text } => self.text_delta(text),
             GenerationEvent::ToolCallDelta {
                 index,
@@ -775,40 +907,97 @@ impl ResponsesEncoder {
 
     fn output_items(&self) -> Vec<Value> {
         let mut output = Vec::new();
-        if self.text_announced {
-            output.push(serde_json::json!({"id":format!("msg_{}", &self.id[5..]),
-            "type":"message","status":"completed","role":"assistant","content":[{
-                "type":"output_text","text":self.text,"annotations":[]}]}));
+        if let Some(index) = self.reasoning_index {
+            output.push((
+                index,
+                serde_json::json!({"id":format!("rs_{}", &self.id[5..]),
+                "type":"reasoning","status":"completed","summary":[{
+                    "type":"summary_text","text":self.reasoning}]}),
+            ));
         }
-        output.extend(self.tools.values().map(|tool| {
+        if let Some(index) = self.text_index {
+            output.push((
+                index,
+                serde_json::json!({"id":format!("msg_{}", &self.id[5..]),
+            "type":"message","status":"completed","role":"assistant","content":[{
+                "type":"output_text","text":self.text,"annotations":[]}]}),
+            ));
+        }
+        output.extend(self.tools.values().filter_map(|tool| tool.output_index.map(|index| (index, {
             if self.custom_tools.contains(&tool.name) {
                 serde_json::json!({"id":format!("ctc_{}",tool.call_id),"type":"custom_tool_call","status":"completed","call_id":tool.call_id,"name":tool.name,"input":Self::custom_input(&tool.arguments)})
             } else {
                 serde_json::json!({"id":format!("fc_{}",tool.call_id),"type":"function_call","status":"completed","call_id":tool.call_id,"name":tool.name,"arguments":tool.arguments})
             }
-        }));
-        output
+        }))));
+        output.sort_by_key(|(index, _)| *index);
+        output.into_iter().map(|(_, item)| item).collect()
     }
 
-    fn text_delta(&mut self, text: String) -> Result<(), OpenAiError> {
-        if self.text.len().saturating_add(text.len()) > MAX_COMPLETION_BODY_BYTES {
+    fn allocate_index(&mut self) -> u32 {
+        let index = self.next_index;
+        self.next_index = self.next_index.saturating_add(1);
+        index
+    }
+
+    fn reserve_output(&mut self, bytes: usize) -> Result<(), OpenAiError> {
+        if self.output_bytes.saturating_add(bytes) > MAX_COMPLETION_BODY_BYTES {
             return Err(invalid_request(
                 "response exceeds the bounded output buffer",
             ));
         }
-        if !self.text_announced {
+        self.output_bytes = self.output_bytes.saturating_add(bytes);
+        Ok(())
+    }
+
+    fn reasoning_delta(&mut self, text: String) -> Result<(), OpenAiError> {
+        self.reserve_output(text.len())?;
+        let index = match self.reasoning_index {
+            Some(index) => index,
+            None => {
+                let index = self.allocate_index();
+                self.reasoning_index = Some(index);
+                let item = serde_json::json!({"id":format!("rs_{}", &self.id[5..]),
+                    "type":"reasoning","status":"in_progress","summary":[]});
+                self.event(
+                    "response.output_item.added",
+                    serde_json::json!({"output_index":index,"item":item}),
+                );
+                self.event(
+                    "response.reasoning_summary_part.added",
+                    serde_json::json!({
+                    "item_id":format!("rs_{}", &self.id[5..]),"output_index":index,
+                    "summary_index":0,"part":{"type":"summary_text","text":""}}),
+                );
+                index
+            }
+        };
+        self.reasoning.push_str(&text);
+        self.event(
+            "response.reasoning_summary_text.delta",
+            serde_json::json!({
+            "item_id":format!("rs_{}", &self.id[5..]),"output_index":index,
+            "summary_index":0,"delta":text}),
+        );
+        Ok(())
+    }
+
+    fn text_delta(&mut self, text: String) -> Result<(), OpenAiError> {
+        self.reserve_output(text.len())?;
+        if self.text_index.is_none() {
+            let index = self.allocate_index();
+            self.text_index = Some(index);
             let item = serde_json::json!({"id":format!("msg_{}", &self.id[5..]),"type":"message",
                 "status":"in_progress","role":"assistant","content":[]});
             self.event(
                 "response.output_item.added",
-                serde_json::json!({"output_index":0,"item":item}),
+                serde_json::json!({"output_index":index,"item":item}),
             );
             self.event("response.content_part.added", serde_json::json!({"item_id":format!("msg_{}", &self.id[5..]),
-                "output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}));
-            self.text_announced = true;
+                "output_index":index,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}));
         }
         self.text.push_str(&text);
-        self.event("response.output_text.delta", serde_json::json!({"item_id":format!("msg_{}", &self.id[5..]),"output_index":0,"content_index":0,"delta":text}));
+        self.event("response.output_text.delta", serde_json::json!({"item_id":format!("msg_{}", &self.id[5..]),"output_index":self.text_index,"content_index":0,"delta":text}));
         Ok(())
     }
 
@@ -819,26 +1008,27 @@ impl ResponsesEncoder {
         name: Option<String>,
         arguments: String,
     ) -> Result<(), OpenAiError> {
+        self.reserve_output(arguments.len())?;
+        let output_index = match self.tools.get(&index).and_then(|tool| tool.output_index) {
+            Some(output_index) => output_index,
+            None => self.allocate_index(),
+        };
         let tool = self.tools.entry(index).or_default();
+        tool.output_index = Some(output_index);
         if let Some(call_id) = call_id {
             tool.call_id = call_id;
         }
         if let Some(name) = name {
             tool.name = name;
         }
-        if tool.arguments.len().saturating_add(arguments.len()) > MAX_COMPLETION_BODY_BYTES {
-            return Err(invalid_request(
-                "tool arguments exceed the bounded output buffer",
-            ));
-        }
         tool.arguments.push_str(&arguments);
         let (announce, call_id, name) = (!tool.announced, tool.call_id.clone(), tool.name.clone());
         tool.announced = true;
         if announce {
-            self.announce_tool(index, &call_id, &name);
+            self.announce_tool(output_index, &call_id, &name);
         }
         if !self.custom_tools.contains(&name) && !arguments.is_empty() {
-            self.event("response.function_call_arguments.delta", serde_json::json!({"item_id":format!("fc_{call_id}"),"output_index":index,"delta":arguments}));
+            self.event("response.function_call_arguments.delta", serde_json::json!({"item_id":format!("fc_{call_id}"),"output_index":output_index,"delta":arguments}));
         }
         Ok(())
     }
@@ -859,31 +1049,56 @@ impl ResponsesEncoder {
     }
 
     fn finish_text(&mut self) {
-        if !self.text_announced {
+        let Some(index) = self.text_index else {
             return;
-        }
+        };
         let item_id = format!("msg_{}", &self.id[5..]);
         let part = serde_json::json!({"type":"output_text","text":self.text,"annotations":[]});
-        self.event("response.output_text.done", serde_json::json!({"item_id":item_id,"output_index":0,"content_index":0,"text":self.text}));
-        self.event("response.content_part.done", serde_json::json!({"item_id":item_id,"output_index":0,"content_index":0,"part":part.clone()}));
+        self.event("response.output_text.done", serde_json::json!({"item_id":item_id,"output_index":index,"content_index":0,"text":self.text}));
+        self.event("response.content_part.done", serde_json::json!({"item_id":item_id,"output_index":index,"content_index":0,"part":part.clone()}));
         let item = serde_json::json!({"id":item_id,"type":"message","status":"completed","role":"assistant","content":[part]});
         self.event(
             "response.output_item.done",
-            serde_json::json!({"output_index":0,"item":item}),
+            serde_json::json!({"output_index":index,"item":item}),
+        );
+    }
+
+    fn finish_reasoning(&mut self) {
+        let Some(index) = self.reasoning_index else {
+            return;
+        };
+        let item_id = format!("rs_{}", &self.id[5..]);
+        let part = serde_json::json!({"type":"summary_text","text":self.reasoning});
+        self.event(
+            "response.reasoning_summary_text.done",
+            serde_json::json!({
+            "item_id":item_id,"output_index":index,"summary_index":0,"text":self.reasoning}),
+        );
+        self.event(
+            "response.reasoning_summary_part.done",
+            serde_json::json!({
+            "item_id":item_id,"output_index":index,"summary_index":0,"part":part.clone()}),
+        );
+        let item = serde_json::json!({"id":item_id,"type":"reasoning","status":"completed",
+            "summary":[part]});
+        self.event(
+            "response.output_item.done",
+            serde_json::json!({"output_index":index,"item":item}),
         );
     }
 
     fn finish_tools(&mut self) {
         let tools = self
             .tools
-            .iter()
-            .map(|(index, tool)| {
-                (
-                    *index,
+            .values()
+            .filter_map(|tool| {
+                let index = tool.output_index?;
+                Some((
+                    index,
                     tool.call_id.clone(),
                     tool.name.clone(),
                     tool.arguments.clone(),
-                )
+                ))
             })
             .collect::<Vec<_>>();
         for (index, call_id, name, arguments) in tools {
@@ -916,6 +1131,7 @@ impl ResponsesEncoder {
     }
 
     fn done(&mut self) -> Result<(), OpenAiError> {
+        self.finish_reasoning();
         self.finish_text();
         self.finish_tools();
         let incomplete = self.finish_reason.as_deref() == Some("length");
@@ -1225,9 +1441,18 @@ pub fn rewrite_completion_response(bytes: &[u8], public_model: &str) -> Result<V
     Ok(value)
 }
 
+#[cfg(test)]
 pub fn rewrite_chat_request(
     bytes: &[u8],
     served_model: &str,
+) -> Result<GenerationRequest, OpenAiError> {
+    rewrite_chat_request_with_profile(bytes, served_model, &GatewayProfile::text())
+}
+
+pub fn rewrite_chat_request_with_profile(
+    bytes: &[u8],
+    served_model: &str,
+    profile: &GatewayProfile,
 ) -> Result<GenerationRequest, OpenAiError> {
     if bytes.len() > MAX_COMPLETION_BODY_BYTES {
         return Err(invalid_request("request body is too large"));
@@ -1264,12 +1489,15 @@ pub fn rewrite_chat_request(
         "stream_options".into(),
         serde_json::json!({"include_usage":true}),
     );
+    omit_empty_tool_controls(object);
+    apply_sampling_defaults(object, &profile.sampling);
     let body =
         serde_json::to_vec(&value).map_err(|_| invalid_request("request cannot be encoded"))?;
     Ok(GenerationRequest {
         body,
         stream,
         custom_tools: BTreeSet::new(),
+        omit_reasoning: false,
     })
 }
 
@@ -1307,24 +1535,43 @@ pub fn rewrite_anthropic_request_with_profile(
         request.messages,
         profile.vision.as_ref(),
     )?);
+    let messages = merge_system_messages(messages);
     let parallel_tool_calls = request
         .tool_choice
         .as_ref()
         .is_none_or(|choice| !choice.disable_parallel_tool_use);
     let tools = anthropic_tools(request.tools)?;
     let tool_choice = anthropic_tool_choice(request.tool_choice)?;
-    let body = serde_json::to_vec(&serde_json::json!({
+    let response_format = anthropic_response_format(request.output_config.as_ref())?;
+    let enable_thinking = request
+        .thinking
+        .as_ref()
+        .is_none_or(|thinking| thinking.kind != "disabled");
+    let omit_reasoning = request
+        .thinking
+        .as_ref()
+        .and_then(|thinking| thinking.display.as_deref())
+        == Some("omitted");
+    let mut body = serde_json::json!({
         "model":served_model,"messages":messages,"max_tokens":request.max_tokens,
         "stream":true,"stream_options":{"include_usage":true},"tools":tools,
         "tool_choice":tool_choice,"parallel_tool_calls":parallel_tool_calls,
         "stop":request.stop_sequences,"temperature":request.temperature,
-        "top_p":request.top_p,"top_k":request.top_k
-    }))
-    .map_err(|_| anthropic_invalid("request cannot be encoded"))?;
+        "top_p":request.top_p,"top_k":request.top_k,"response_format":response_format,
+        "chat_template_kwargs":{"enable_thinking":enable_thinking}
+    });
+    let body = body
+        .as_object_mut()
+        .ok_or_else(|| anthropic_invalid("request cannot be encoded"))?;
+    omit_empty_tool_controls(body);
+    apply_sampling_defaults(body, &profile.sampling);
+    let body =
+        serde_json::to_vec(&body).map_err(|_| anthropic_invalid("request cannot be encoded"))?;
     Ok(GenerationRequest {
         body,
         stream: request.stream,
         custom_tools: BTreeSet::new(),
+        omit_reasoning,
     })
 }
 
@@ -1355,6 +1602,7 @@ pub fn rewrite_anthropic_count_request(
     if object.keys().any(|key| !KEYS.contains(&key.as_str())) {
         return Err(anthropic_invalid("count request contains an unknown field"));
     }
+    object.remove("thinking");
     object.insert("max_tokens".into(), Value::from(1));
     object.insert("stream".into(), Value::Bool(false));
     let synthetic = serde_json::to_vec(&value)
@@ -1431,8 +1679,14 @@ fn validate_anthropic_options(request: &AnthropicMessageRequest) -> Result<(), A
         return Err(anthropic_invalid("request options are invalid"));
     }
     if let Some(thinking) = &request.thinking {
-        if !matches!(thinking.kind.as_str(), "adaptive" | "disabled")
-            || thinking.budget_tokens.is_some()
+        let budget_valid = match thinking.kind.as_str() {
+            "enabled" => thinking
+                .budget_tokens
+                .is_some_and(|budget| budget >= 1_024 && budget < request.max_tokens),
+            "adaptive" | "disabled" => thinking.budget_tokens.is_none(),
+            _ => false,
+        };
+        if !budget_valid
             || thinking
                 .display
                 .as_deref()
@@ -1449,13 +1703,28 @@ fn validate_anthropic_options(request: &AnthropicMessageRequest) -> Result<(), A
     }) || request
         .output_config
         .as_ref()
-        .is_some_and(|output| !matches!(output.effort.as_str(), "low" | "medium" | "high" | "max"))
+        .and_then(|output| output.effort.as_deref())
+        .is_some_and(|effort| !matches!(effort, "low" | "medium" | "high" | "max"))
     {
         return Err(anthropic_invalid(
             "Claude Code compatibility option is invalid",
         ));
     }
     Ok(())
+}
+
+fn anthropic_response_format(
+    output: Option<&AnthropicOutputConfig>,
+) -> Result<Value, AnthropicError> {
+    let Some(format) = output.and_then(|output| output.format.as_ref()) else {
+        return Ok(Value::Null);
+    };
+    if format.kind != "json_schema" || !format.schema.is_object() {
+        return Err(anthropic_invalid("output format is invalid"));
+    }
+    Ok(serde_json::json!({"type":"json_schema","json_schema":{
+        "name":"anthropic_output","schema":format.schema,"strict":true
+    }}))
 }
 
 fn validate_cache_control(value: Option<&AnthropicCacheControl>) -> Result<(), AnthropicError> {
@@ -1517,7 +1786,7 @@ fn anthropic_messages(
     let mut pending = BTreeSet::new();
     let mut images = ImageBudget::default();
     for message in messages {
-        if !matches!(message.role.as_str(), "user" | "assistant") {
+        if !matches!(message.role.as_str(), "system" | "user" | "assistant") {
             return Err(anthropic_invalid("message role is invalid"));
         }
         match message.content {
@@ -1550,6 +1819,7 @@ fn anthropic_blocks(
     images: &mut ImageBudget,
 ) -> Result<(), AnthropicError> {
     let mut content = Vec::new();
+    let mut reasoning = String::new();
     let mut calls = Vec::new();
     let mut results = Vec::new();
     for block in blocks {
@@ -1609,9 +1879,20 @@ fn anthropic_blocks(
                     .map_err(|error| anthropic_invalid(error.message))?;
                 content.push(canonical_image(&image));
             }
+            AnthropicContentBlock::Thinking {
+                thinking,
+                signature,
+                cache_control,
+            } => {
+                validate_cache_control(cache_control.as_ref())?;
+                if role != "assistant" || !valid_local_reasoning_signature(&thinking, &signature) {
+                    return Err(anthropic_invalid("thinking block is invalid"));
+                }
+                reasoning.push_str(&thinking);
+            }
         }
     }
-    if !content.is_empty() || !calls.is_empty() {
+    if !content.is_empty() || !calls.is_empty() || !reasoning.is_empty() {
         let content = if content.len() == 1 && content[0]["type"] == "text" {
             content[0]["text"].clone()
         } else if content.is_empty() {
@@ -1622,6 +1903,9 @@ fn anthropic_blocks(
         let mut message = serde_json::json!({"role":role,"content":content});
         if !calls.is_empty() {
             message["tool_calls"] = Value::Array(calls);
+        }
+        if !reasoning.is_empty() {
+            message["reasoning_content"] = Value::String(reasoning);
         }
         output.push(message);
     }
@@ -1719,6 +2003,10 @@ pub fn rewrite_chat_response(bytes: &[u8], public_model: &str) -> Result<Value, 
 
 pub fn chat_stream_document(event: GenerationEvent, id: &str, model: &str) -> Option<Value> {
     let (choices, usage) = match event {
+        GenerationEvent::ReasoningDelta { text } => (
+            serde_json::json!([{"index":0,"delta":{"reasoning_content":text},"finish_reason":null}]),
+            Value::Null,
+        ),
         GenerationEvent::TextDelta { text } => (
             serde_json::json!([{"index":0,"delta":{"content":text},"finish_reason":null}]),
             Value::Null,
@@ -1792,22 +2080,44 @@ pub fn rewrite_responses_request_with_profile(
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let body = serde_json::to_vec(&serde_json::json!({
+    let mut body = serde_json::json!({
         "model": served_model, "messages": messages,
-        "stream": true, "stream_options": {"include_usage": true}, "tools": tools,
-        "max_tokens": max_tokens, "parallel_tool_calls": object.get("parallel_tool_calls").cloned().unwrap_or(Value::Bool(true))
-        , "tool_choice": tool_choice
-    })).map_err(|_| invalid_request("request cannot be encoded"))?;
+        "stream": true, "stream_options": {"include_usage": true},
+        "max_tokens": max_tokens,
+        "temperature":object.get("temperature").cloned().unwrap_or(Value::Null),
+        "top_p":object.get("top_p").cloned().unwrap_or(Value::Null)
+    });
+    if !tools.is_empty() {
+        let body = body
+            .as_object_mut()
+            .ok_or_else(|| invalid_request("request cannot be encoded"))?;
+        body.insert("tools".into(), Value::Array(tools));
+        body.insert("tool_choice".into(), tool_choice);
+        body.insert(
+            "parallel_tool_calls".into(),
+            object
+                .get("parallel_tool_calls")
+                .cloned()
+                .unwrap_or(Value::Bool(true)),
+        );
+    }
+    apply_sampling_defaults(
+        body.as_object_mut()
+            .ok_or_else(|| invalid_request("request cannot be encoded"))?,
+        &profile.sampling,
+    );
+    let body =
+        serde_json::to_vec(&body).map_err(|_| invalid_request("request cannot be encoded"))?;
     Ok(GenerationRequest {
         body,
         stream,
         custom_tools,
+        omit_reasoning: false,
     })
 }
 
-/// The pinned Ornith template accepts `system` only at index zero and has no
-/// `developer` branch. Public instruction roles therefore become one native
-/// system message before user/assistant/tool history is sent to vLLM.
+/// A single leading system message is accepted across the supported vLLM chat
+/// templates. Public instruction roles therefore converge before native history.
 fn merge_system_messages(messages: Vec<Value>) -> Vec<Value> {
     let mut system = Vec::new();
     let mut native = Vec::new();
@@ -1983,13 +2293,32 @@ fn response_input_item(
         Some("function_call") => response_tool_call(item, false),
         Some("custom_tool_call") => response_tool_call(item, true),
         Some("function_call_output" | "custom_tool_call_output") => response_tool_output(item),
-        Some("reasoning") => Ok(serde_json::json!({"role": "assistant", "content": ""})),
+        Some("reasoning") => response_reasoning(item),
         Some("computer_call" | "computer_call_output") => Err(OpenAiError {
             code: "unsupported_tool",
             message: "hosted computer tools are unsupported",
         }),
         _ => Err(invalid_request("input item type is unsupported")),
     }
+}
+
+fn response_reasoning(item: &Value) -> Result<Value, OpenAiError> {
+    let summary = item["summary"]
+        .as_array()
+        .ok_or_else(|| invalid_request("reasoning summary must be an array"))?;
+    let reasoning = summary.iter().try_fold(String::new(), |mut output, part| {
+        if part["type"] != "summary_text" {
+            return Err(invalid_request("reasoning summary type is unsupported"));
+        }
+        output.push_str(
+            part["text"]
+                .as_str()
+                .ok_or_else(|| invalid_request("reasoning summary text is invalid"))?,
+        );
+        Ok(output)
+    })?;
+    Ok(serde_json::json!({"role":"assistant","content":"",
+        "reasoning_content":reasoning}))
 }
 
 fn response_message(
@@ -2089,7 +2418,7 @@ fn response_max_tokens(value: Option<&Value>) -> Result<u64, OpenAiError> {
     let tokens = value.and_then(Value::as_u64).unwrap_or(4_096);
     if tokens == 0 || tokens > MAX_OUTPUT_TOKENS {
         Err(invalid_request(
-            "max_output_tokens exceeds the recipe ceiling",
+            "max_output_tokens exceeds the configured ceiling",
         ))
     } else {
         Ok(tokens)
@@ -2121,6 +2450,28 @@ fn response_tool_choice(value: Option<&Value>) -> Result<Value, OpenAiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn configured_sampling_profile() -> GatewayProfile {
+        let mut profile = GatewayProfile::text();
+        profile.sampling.defaults = BTreeMap::from([
+            (
+                "temperature".into(),
+                serde_json::Number::from_f64(0.6).unwrap(),
+            ),
+            ("top_p".into(), serde_json::Number::from_f64(0.95).unwrap()),
+            ("top_k".into(), 20.into()),
+            ("min_p".into(), serde_json::Number::from_f64(0.0).unwrap()),
+            (
+                "presence_penalty".into(),
+                serde_json::Number::from_f64(0.0).unwrap(),
+            ),
+            (
+                "repetition_penalty".into(),
+                serde_json::Number::from_f64(1.0).unwrap(),
+            ),
+        ]);
+        profile
+    }
 
     fn route(generation: u64) -> ObservedRoute {
         ObservedRoute::new(
@@ -2236,6 +2587,55 @@ mod tests {
     }
 
     #[test]
+    fn responses_reasoning_sse_and_final_document_are_native() {
+        let mut encoder = ResponsesEncoder::new("ornith".into(), BTreeSet::new());
+        encoder
+            .accept(GenerationEvent::ReasoningDelta {
+                text: "inspect state".into(),
+            })
+            .unwrap();
+        encoder.accept(GenerationEvent::Done).unwrap();
+        let names = std::iter::from_fn(|| encoder.pop())
+            .map(|event| event.name)
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"response.reasoning_summary_text.delta"));
+        assert_eq!(encoder.final_document()["output"][0]["type"], "reasoning");
+    }
+
+    #[test]
+    fn anthropic_reasoning_sse_and_final_document_are_native() {
+        let mut encoder = AnthropicEncoder::new("ornith".into());
+        encoder
+            .accept(GenerationEvent::ReasoningDelta {
+                text: "inspect state".into(),
+            })
+            .unwrap();
+        encoder.accept(GenerationEvent::Done).unwrap();
+        let deltas = std::iter::from_fn(|| encoder.pop())
+            .filter(|event| event.name == "content_block_delta")
+            .map(|event| event.data["delta"]["type"].clone())
+            .collect::<Vec<_>>();
+        assert!(deltas.contains(&Value::String("thinking_delta".into())));
+        assert_eq!(encoder.final_document()["content"][0]["type"], "thinking");
+    }
+
+    #[test]
+    fn chat_reasoning_delta_stays_separate_from_answer_content() {
+        let document = chat_stream_document(
+            GenerationEvent::ReasoningDelta {
+                text: "inspect state".into(),
+            },
+            "chatcmpl_1",
+            "ornith",
+        )
+        .unwrap();
+        assert_eq!(
+            document["choices"][0]["delta"],
+            serde_json::json!({"reasoning_content":"inspect state"})
+        );
+    }
+
+    #[test]
     fn chat_completions_rewrites_only_identity_over_the_shared_model() {
         let request = rewrite_chat_request(
             br#"{"model":"public","messages":[{"role":"user","content":"hi"}],"stream":true}"#,
@@ -2253,6 +2653,107 @@ mod tests {
             "model"
         )
         .is_err());
+    }
+
+    #[test]
+    fn configured_chat_sampling_defaults_do_not_override_client_values() {
+        let profile = configured_sampling_profile();
+        let defaults = rewrite_chat_request_with_profile(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}]}"#,
+            "Ornith-1.5-9B",
+            &profile,
+        )
+        .unwrap();
+        let defaults: Value = serde_json::from_slice(&defaults.body).unwrap();
+        assert_eq!(
+            (
+                &defaults["temperature"],
+                &defaults["top_p"],
+                &defaults["top_k"]
+            ),
+            (&Value::from(0.6), &Value::from(0.95), &Value::from(20))
+        );
+
+        let explicit = rewrite_chat_request_with_profile(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"temperature":0.2,"top_p":0.7,"presence_penalty":0.4}"#,
+            "Ornith-1.5-9B",
+            &profile,
+        )
+        .unwrap();
+        let explicit: Value = serde_json::from_slice(&explicit.body).unwrap();
+        assert_eq!(
+            (
+                &explicit["temperature"],
+                &explicit["top_p"],
+                &explicit["presence_penalty"]
+            ),
+            (&Value::from(0.2), &Value::from(0.7), &Value::from(0.4))
+        );
+    }
+
+    #[test]
+    fn configured_responses_and_anthropic_share_sampling_defaults() {
+        let profile = configured_sampling_profile();
+        let responses = rewrite_responses_request_with_profile(
+            br#"{"model":"ornith","input":"hi"}"#,
+            "Ornith-1.5-9B",
+            &profile,
+        )
+        .unwrap();
+        let responses: Value = serde_json::from_slice(&responses.body).unwrap();
+        let anthropic = rewrite_anthropic_request_with_profile(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"max_tokens":8}"#,
+            "Ornith-1.5-9B",
+            &profile,
+        )
+        .unwrap();
+        let anthropic: Value = serde_json::from_slice(&anthropic.body).unwrap();
+        assert_eq!(
+            (
+                &responses["temperature"],
+                &responses["top_p"],
+                &responses["top_k"]
+            ),
+            (
+                &anthropic["temperature"],
+                &anthropic["top_p"],
+                &anthropic["top_k"]
+            )
+        );
+        assert_eq!(responses["temperature"], 0.6);
+    }
+
+    #[test]
+    fn responses_without_tools_omit_tool_controls() {
+        let request =
+            rewrite_responses_request(br#"{"model":"ornith","input":"hi"}"#, "Ornith-1.5-9B")
+                .unwrap();
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+
+        assert!(body.get("tools").is_none());
+        assert!(body.get("tool_choice").is_none());
+        assert!(body.get("parallel_tool_calls").is_none());
+    }
+
+    #[test]
+    fn chat_and_anthropic_without_tools_omit_tool_controls() {
+        let chat = rewrite_chat_request(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":true}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let anthropic = rewrite_anthropic_request(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"max_tokens":8}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+
+        for request in [chat, anthropic] {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            assert!(body.get("tools").is_none());
+            assert!(body.get("tool_choice").is_none());
+            assert!(body.get("parallel_tool_calls").is_none());
+        }
     }
 
     #[test]
@@ -2275,6 +2776,17 @@ mod tests {
                 && system.contains("developer rules")
                 && system.contains("system rules")
         );
+    }
+
+    #[test]
+    fn responses_follow_up_preserves_local_reasoning_summary_in_model_history() {
+        let request = rewrite_responses_request(
+            br#"{"model":"ornith","input":[{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"inspect state"}]},{"type":"message","role":"user","content":"continue"}]}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let request: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(request["messages"][0]["reasoning_content"], "inspect state");
     }
 
     #[test]
@@ -2309,5 +2821,131 @@ mod tests {
         ] {
             assert!(rewrite_anthropic_request(body, "Ornith-1.5-9B").is_err());
         }
+    }
+
+    #[test]
+    fn anthropic_preserves_verified_local_thinking_in_follow_up_history() {
+        let reasoning = "inspect state";
+        let signature = local_reasoning_signature(reasoning);
+        let request = serde_json::json!({
+            "model":"ornith","max_tokens":8,
+            "messages":[
+                {"role":"user","content":"start"},
+                {"role":"assistant","content":[
+                    {"type":"thinking","thinking":reasoning,"signature":signature},
+                    {"type":"text","text":"done"}
+                ]},
+                {"role":"user","content":"continue"}
+            ]
+        });
+        let rewritten =
+            rewrite_anthropic_request(&serde_json::to_vec(&request).unwrap(), "Ornith-1.5-9B")
+                .unwrap();
+        let rewritten: Value = serde_json::from_slice(&rewritten.body).unwrap();
+        assert_eq!(rewritten["messages"][1]["reasoning_content"], reasoning);
+    }
+
+    #[test]
+    fn anthropic_accepts_its_omitted_thinking_block_on_the_next_turn() {
+        let signature = local_reasoning_signature("hidden summary");
+        let request = serde_json::json!({"model":"claude-sonnet-4-5","max_tokens":8,
+            "messages":[{"role":"user","content":"start"},{"role":"assistant","content":[
+                {"type":"thinking","thinking":"","signature":signature},
+                {"type":"text","text":"answer"}]},{"role":"user","content":"continue"}]});
+        assert!(
+            rewrite_anthropic_request(&serde_json::to_vec(&request).unwrap(), "Ornith-1.5-9B")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn anthropic_disabled_thinking_reaches_the_ornith_template() {
+        let rewritten = rewrite_anthropic_request(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"max_tokens":8,"thinking":{"type":"disabled"}}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let rewritten: Value = serde_json::from_slice(&rewritten.body).unwrap();
+        assert_eq!(rewritten["chat_template_kwargs"]["enable_thinking"], false);
+    }
+
+    #[test]
+    fn anthropic_manual_thinking_used_by_claude_cli_is_accepted() {
+        let rewritten = rewrite_anthropic_request(
+            br#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"max_tokens":32000,"thinking":{"type":"enabled","budget_tokens":31999}}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let rewritten: Value = serde_json::from_slice(&rewritten.body).unwrap();
+        assert_eq!(rewritten["chat_template_kwargs"]["enable_thinking"], true);
+    }
+
+    #[test]
+    fn anthropic_count_tokens_ignores_output_only_manual_thinking_budget() {
+        let rewritten = rewrite_anthropic_count_request(
+            br#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"thinking":{"type":"enabled","budget_tokens":31999}}"#,
+            "Ornith-1.5-9B",
+        );
+        assert!(rewritten.is_ok());
+    }
+
+    #[test]
+    fn anthropic_omitted_thinking_streams_only_its_signature() {
+        let rewritten = rewrite_anthropic_request(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"max_tokens":8,"thinking":{"type":"adaptive","display":"omitted"}}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        assert!(rewritten.omit_reasoning);
+        let mut encoder = AnthropicEncoder::with_omitted_reasoning("ornith".into());
+        encoder
+            .accept(GenerationEvent::ReasoningDelta { text: "why".into() })
+            .unwrap();
+        encoder.accept(GenerationEvent::Done).unwrap();
+        let deltas = std::iter::from_fn(|| encoder.pop())
+            .filter(|event| event.name == "content_block_delta")
+            .map(|event| event.data["delta"]["type"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(deltas, [Value::String("signature_delta".into())]);
+        assert_eq!(encoder.final_document()["content"][0]["thinking"], "");
+    }
+
+    #[test]
+    fn responses_reasoning_text_and_tool_indices_are_unique_and_ordered() {
+        let mut encoder = ResponsesEncoder::new("ornith".into(), BTreeSet::new());
+        for event in [
+            GenerationEvent::ReasoningDelta { text: "why".into() },
+            GenerationEvent::TextDelta {
+                text: "answer".into(),
+            },
+            GenerationEvent::ToolCallDelta {
+                index: 0,
+                call_id: Some("call_1".into()),
+                name: Some("shell".into()),
+                arguments: "{}".into(),
+            },
+            GenerationEvent::Done,
+        ] {
+            encoder.accept(event).unwrap();
+        }
+        let indices = std::iter::from_fn(|| encoder.pop())
+            .filter(|event| event.name == "response.output_item.added")
+            .map(|event| event.data["output_index"].as_u64().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(indices, [0, 1, 2]);
+    }
+
+    #[test]
+    fn responses_bounds_reasoning_text_and_tools_as_one_output() {
+        let mut encoder = ResponsesEncoder::new("ornith".into(), BTreeSet::new());
+        encoder
+            .accept(GenerationEvent::ReasoningDelta {
+                text: "r".repeat(MAX_COMPLETION_BODY_BYTES / 2 + 1),
+            })
+            .unwrap();
+        let result = encoder.accept(GenerationEvent::TextDelta {
+            text: "t".repeat(MAX_COMPLETION_BODY_BYTES / 2),
+        });
+        assert!(result.is_err());
     }
 }

@@ -17,12 +17,10 @@ use sha2::{Digest, Sha256};
 use super::install::BootstrapMaterial;
 use super::{
     wire::{
-        BenchRequest, CompatibilityEvaluationDocument, DownloadPlanDocument, DownloadRequest,
-        EngineLogDocument, InstanceListDocument, ModelDocument, ModelListDocument,
-        OperationDocument, OperationEvent, OperationListDocument, ProblemDocument,
-        RecipeCatalogDocument, RemovalPlanDocument, RemoveModelRequest, ServeAdmissionRequest,
+        DownloadPlanDocument, DownloadRequest, EngineLogDocument, InstanceListDocument,
+        ModelDocument, ModelListDocument, OperationDocument, OperationEvent, OperationListDocument,
+        ProblemDocument, RemovalPlanDocument, RemoveModelRequest, ServeAdmissionRequest,
         ServeRequest, StopRequest, TokenCreateRequest, TokenCreatedDocument, TokenListDocument,
-        TuneRequest,
     },
     EXIT_INTERNAL, EXIT_OPERATION_FAILED, EXIT_REJECTED, EXIT_UNREACHABLE, EXIT_USAGE,
 };
@@ -305,58 +303,6 @@ impl SparkClient {
 
     pub fn list_operations(&self) -> Result<OperationListDocument, ClientError> {
         self.get_json("api/sy.spark/v1/operations")
-    }
-
-    pub fn recipes(&self, model: Option<&str>) -> Result<RecipeCatalogDocument, ClientError> {
-        let mut route = Url::parse("https://spark.invalid/api/sy.spark/v1/recipes")
-            .map_err(|error| usage(format!("construct recipe route: {error}")))?;
-        if let Some(model) = model {
-            route.query_pairs_mut().append_pair("model", model);
-        }
-        let mut route_text = route.path().trim_start_matches('/').to_owned();
-        if let Some(query) = route.query() {
-            route_text.push('?');
-            route_text.push_str(query);
-        }
-        self.get_json(&route_text)
-    }
-
-    pub fn bench_plan(
-        &self,
-        key: &str,
-        request: &BenchRequest,
-    ) -> Result<CompatibilityEvaluationDocument, ClientError> {
-        self.mutation_json(
-            Method::POST,
-            "api/sy.spark/v1/benchmarks",
-            key,
-            Some(request),
-        )
-    }
-
-    pub fn bench(
-        &self,
-        key: &str,
-        request: &BenchRequest,
-    ) -> Result<OperationDocument, ClientError> {
-        self.mutation_json(
-            Method::POST,
-            "api/sy.spark/v1/benchmarks",
-            key,
-            Some(request),
-        )
-    }
-
-    pub fn tune_plan(
-        &self,
-        key: &str,
-        request: &TuneRequest,
-    ) -> Result<CompatibilityEvaluationDocument, ClientError> {
-        self.mutation_json(Method::POST, "api/sy.spark/v1/tunings", key, Some(request))
-    }
-
-    pub fn tune(&self, key: &str, request: &TuneRequest) -> Result<OperationDocument, ClientError> {
-        self.mutation_json(Method::POST, "api/sy.spark/v1/tunings", key, Some(request))
     }
 
     pub fn list_models(&self) -> Result<ModelListDocument, ClientError> {

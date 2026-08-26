@@ -1056,6 +1056,7 @@ mod tests {
     /// label so the operator sees the binary-prefix vocabulary the
     /// statusbar paints. Pinned here so a refactor that drops the
     /// `humanise_throughput` call site surfaces at build time.
+    #[cfg(feature = "gui-iced")]
     #[test]
     fn waybar_tile_tooltip_includes_throughput() {
         let tile = render_waybar_tile(WaybarSnapshot {

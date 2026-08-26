@@ -79,7 +79,7 @@ sy spark dgx-spark upgrade --yes \
   --json
 ```
 
-Upgrade verifies a database backup, N/N-1 schema compatibility, active recipes,
+Upgrade verifies a database backup, N/N-1 schema compatibility, active engine identities,
 and the protected DGX fingerprint. It changes only the control-plane release and
 keeps healthy engine containers running. Failed semantic health requests
 automatic rollback.

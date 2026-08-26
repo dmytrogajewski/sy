@@ -38,7 +38,7 @@ pub const INSTANCE_SCHEMA: &str = "sy.spark.instance/v1";
 pub const INSTANCE_LIST_SCHEMA: &str = "sy.spark.instance-list/v1";
 #[cfg(feature = "spark-agent")]
 pub const ENGINE_LOG_SCHEMA: &str = "sy.spark.engine-log/v1";
-#[cfg(feature = "spark-agent")]
+#[cfg(all(feature = "spark-agent", test))]
 pub const COMPATIBILITY_EVALUATION_SCHEMA: &str = "sy.spark.compatibility-evaluation/v1";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -199,6 +199,7 @@ pub struct ExecutorSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(feature = "spark-agent")]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum RecipeStatus {
@@ -209,6 +210,7 @@ pub enum RecipeStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(feature = "spark-agent")]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum RecipeSelectionReason {
@@ -218,6 +220,7 @@ pub enum RecipeSelectionReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(feature = "spark-agent")]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct RecipeMismatchDocument {
@@ -227,6 +230,7 @@ pub struct RecipeMismatchDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(feature = "spark-agent")]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct RecipeEvidenceDocument {
@@ -241,6 +245,7 @@ pub struct RecipeEvidenceDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(feature = "spark-agent")]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct RecipeCompatibilityDocument {
@@ -262,6 +267,7 @@ pub struct RecipeCompatibilityDocument {
     pub specialized_toggles: usize,
 }
 
+#[cfg(all(test, feature = "spark-agent"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
@@ -273,6 +279,7 @@ pub enum CandidateStatus {
     Selected,
 }
 
+#[cfg(all(test, feature = "spark-agent"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 pub struct FunctionalGateDocument {
@@ -281,6 +288,7 @@ pub struct FunctionalGateDocument {
     pub detail: String,
 }
 
+#[cfg(all(test, feature = "spark-agent"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 pub struct CandidateEvaluationDocument {
@@ -294,6 +302,7 @@ pub struct CandidateEvaluationDocument {
     pub reason: String,
 }
 
+#[cfg(all(test, feature = "spark-agent"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 pub struct CompatibilityEvaluationDocument {
@@ -314,29 +323,6 @@ pub struct CompatibilityEvaluationDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
-pub struct BenchRequest {
-    pub model: String,
-    pub recipe: Option<String>,
-    #[serde(default = "default_serve_objective")]
-    pub objective: String,
-    #[serde(default)]
-    pub dry_run: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
-#[serde(deny_unknown_fields)]
-pub struct TuneRequest {
-    pub model: String,
-    #[serde(default = "default_serve_objective")]
-    pub objective: String,
-    #[serde(default)]
-    pub dry_run: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
-#[serde(deny_unknown_fields)]
 pub struct RecipeResourceEnvelopeDocument {
     pub image_bytes: u64,
     pub startup_peak_bytes: u64,
@@ -345,6 +331,7 @@ pub struct RecipeResourceEnvelopeDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(feature = "spark-agent")]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct RecipeSelectionDocument {
@@ -354,6 +341,7 @@ pub struct RecipeSelectionDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(feature = "spark-agent")]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct RecipeCatalogDocument {
@@ -386,7 +374,6 @@ pub struct DownloadRequest {
 pub struct ServeAdmissionRequest {
     pub model: String,
     pub name: Option<String>,
-    pub recipe: Option<String>,
     #[serde(default)]
     pub dry_run: bool,
 }
@@ -397,17 +384,8 @@ pub struct ServeAdmissionRequest {
 pub struct ServeRequest {
     pub model: String,
     pub name: Option<String>,
-    pub recipe: Option<String>,
-    #[serde(default = "default_serve_objective")]
-    pub objective: String,
-    #[serde(default)]
-    pub allow_unverified: bool,
     #[serde(default)]
     pub dry_run: bool,
-}
-
-fn default_serve_objective() -> String {
-    "agent".into()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -455,7 +433,9 @@ pub struct InstanceDocument {
     pub model_id: String,
     pub model: String,
     pub model_commit: String,
+    #[serde(rename = "engine_id", alias = "recipe_id")]
     pub recipe_id: String,
+    #[serde(rename = "engine_fingerprint", alias = "recipe_fingerprint")]
     pub recipe_fingerprint: String,
     pub objective: String,
     pub resources: RecipeResourceEnvelopeDocument,

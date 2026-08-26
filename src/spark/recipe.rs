@@ -27,9 +27,13 @@ const ALLOWED_SUBSTITUTIONS: [&str; 5] = [
     "instance_id",
     "max_model_len",
 ];
+#[cfg(test)]
 const ORNITH_FILE: &str = "ornith-vllm.toml";
+#[cfg(test)]
 const QWEN_FILE: &str = "qwen3-embedding.toml";
+#[cfg(test)]
 const FIXTURE_FILE: &str = "fixture-http-echo.toml";
+#[cfg(test)]
 const SIGNED_RECIPES: [(&str, &[u8]); 3] = [
     (
         ORNITH_FILE,
@@ -226,6 +230,7 @@ impl Gateway {
             capabilities: self.capabilities.iter().cloned().collect(),
             vision: self.vision.clone(),
             embeddings: self.embeddings.clone(),
+            sampling: super::gateway::SamplingPolicy::default(),
         }
     }
 }
@@ -300,6 +305,56 @@ impl RecipeCatalog {
         .expect("embedded signed recipe catalog")
     }
 
+    /// Loads migration-only recipes from a root-owned directory.
+    ///
+    /// New instances never select this catalog. It exists solely so an
+    /// upgraded executor can identify, report, and stop generations created
+    /// by pre-engine-policy releases. An absent directory is the normal state
+    /// for a fresh installation.
+    pub fn load_legacy(directory: &Path) -> Result<Self, String> {
+        let entries = match std::fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Self::parse_documents(&[]);
+            }
+            Err(error) => return Err(format!("read legacy recipe directory: {error}")),
+        };
+        let mut names = entries
+            .map(|entry| {
+                entry
+                    .map_err(|error| format!("read legacy recipe entry: {error}"))
+                    .and_then(|entry| {
+                        entry
+                            .file_name()
+                            .into_string()
+                            .map_err(|_| "legacy recipe filename is not UTF-8".to_owned())
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        names.sort();
+        if names.len() > 32
+            || names.iter().any(|name| {
+                !name.ends_with(".toml")
+                    || name.len() > 128
+                    || !name.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                    })
+            })
+        {
+            return Err("legacy recipe directory contains an invalid file set".into());
+        }
+        let documents = names
+            .iter()
+            .map(|name| {
+                std::fs::read(directory.join(name))
+                    .map(|bytes| (name.as_str(), bytes))
+                    .map_err(|error| format!("read legacy recipe {name}: {error}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::parse_documents(&documents)
+    }
+
+    #[cfg(test)]
     pub fn load_signed(directory: &Path) -> Result<Self, String> {
         let actual_names = std::fs::read_dir(directory)
             .map_err(|error| format!("read signed recipe catalog: {error}"))?
@@ -333,10 +388,6 @@ impl RecipeCatalog {
             })
             .collect::<Result<Vec<_>, String>>()?;
         Self::parse_documents(&documents)
-    }
-
-    pub fn signed_assets() -> &'static [(&'static str, &'static [u8])] {
-        &SIGNED_RECIPES
     }
 
     pub fn recipe(&self, id: &str) -> Option<&Recipe> {

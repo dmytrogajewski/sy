@@ -76,41 +76,44 @@ Install it with `sy spark <host> install --dry-run --json`, then
 [How to install the Spark agent](docs/how-to/install-spark.md).
 Before an engine lifecycle is authorized, the agent requires one fresh
 executor-owned snapshot and checks aggregate cold-start memory, live
-`MemAvailable`, full-memory PSI, swap-in activity, disk reserve, recipe
-compatibility, and the single high-memory transition lease.
+`MemAvailable`, full-memory PSI, swap-in activity, disk reserve, immutable model
+identity, and the single high-memory start lease. Stops always remain available
+and are not blocked by a start lease.
 
 ```text
 sy spark dgx-spark install --dry-run --json
 sy spark dgx-spark install --yes --release-signature sy-aarch64.minisig --release-public-key sy-release.pub
 sy spark dgx-spark status --json
+sy spark dgx-spark download ornith-ai/Ornith-1.5-9B --revision <commit> --alias ornith-1.5:9b
 sy spark dgx-spark serve ornith-1.5:9b --dry-run --json
-sy spark dgx-spark serve ornith-1.5:9b --recipe spark-fixture-http-echo-1.0.0 --name fixture
+sy spark dgx-spark serve ornith-1.5:9b --name ornith
 sy spark dgx-spark ps --json
-sy spark dgx-spark logs fixture --limit 100
+sy spark dgx-spark logs ornith --limit 100
 sy spark dgx-spark client-config ornith --client codex
 sy spark dgx-spark client-config ornith --client claude-code
-sy spark dgx-spark download Qwen/Qwen3-Embedding-0.6B --revision 97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3 --alias qwen3-embedding:0.6b
-sy spark dgx-spark bench ornith-1.5:9b --dry-run --json
-sy spark dgx-spark tune ornith-1.5:9b --objective agent --json
+sy spark dgx-spark launch codex --model ornith-1.5:9b
+sy spark dgx-spark launch claude --model ornith-1.5:9b -- --permission-mode plan
+sy spark dgx-spark launch opencode --model ornith-1.5:9b
 sy spark dgx-spark upgrade --dry-run --json
 sy spark dgx-spark rollback --dry-run --json
 sy spark dgx-spark cert rotate --dry-run --json
-sy spark dgx-spark serve qwen3-embedding:0.6b --recipe qwen3-embedding-0.6b-vllm-0.19.1 --name embeddings --allow-unverified
-sy spark dgx-spark stop fixture
+sy spark dgx-spark stop ornith
 ```
 
-`bench` and `tune` perform bounded functional compatibility evaluation only:
-exact identity, API capabilities, semantic evidence, resource safety, isolation,
-health, and durability. They do not measure speed or implicitly download, pull,
-convert, or launch unsupported engines. `tune` persists a deterministic winner
-from installed locally verified recipes; exact verified vLLM remains the visible
-fallback when no valid winner exists.
+Serving is configuration-driven. `/etc/sy/spark/engine.toml` owns the digest-pinned
+vLLM image, entrypoint, arguments, environment, isolation, resource envelope,
+routes, health probe, sampling defaults, and model-type profiles. Rust validates that schema and constructs the
+locked container; it contains no model catalog, image version, digest, or
+model-specific launch branch. A verified vLLM-compatible model therefore needs
+no sy rebuild. Models needing a finite extra parser or capability are mapped by
+`model_type` in the configuration, never by user-provided argv.
 
-The named fixture recipe is a signed, digest-pinned ARM64 HTTP engine used to
-verify the complete Docker lifecycle without loading model weights or using the
-GPU. Omitting `--recipe` uses an exact tuned winner when valid and otherwise
-reports and uses verified vLLM as the fallback. Engines
-run only on the internal managed bridge; `ps` exposes desired versus observed
+`launch` runs Codex, Claude Code, or OpenCode in the current workstation
+directory while inference stays on Spark. It reuses or serves the exact verified
+model, creates a separate inference-only credential for the child, and never
+passes the Spark administrator credential or a shell command to the agent.
+
+Engines run only on the internal managed bridge; `ps` exposes desired versus observed
 state without leaking its address, logs are bounded and redacted, and repeated
 `stop` is successful.
 
@@ -128,16 +131,25 @@ control plane exposes only its authenticated, bounded metrics document. Warming 
 recovering generations return protocol-native `503` errors with `Retry-After`
 and never inherit a stale route.
 
-Capabilities are taken only from the selected signed recipe. Ornith accepts
+Ornith reasoning remains separate from answer text throughout the gateway:
+OpenAI Chat receives `reasoning_content`, Responses receives native reasoning
+summary items and SSE lifecycles, and Anthropic Messages receives thinking
+blocks, thinking deltas, and a deterministic local integrity signature that can
+be returned on a later tool turn. Anthropic adaptive, manual-budget,
+omitted-display, and disabled thinking retain their distinct wire semantics,
+including signed omitted-thinking history on later tool turns. Omitted sampling values
+come from the model-type profile in `engine.toml`; values explicitly supplied by
+the client win. Context length is likewise an engine argument in that file; the
+gateway has no model-name branch or compiled tuning constants.
+
+Capabilities are taken only from the configured engine profile. Ornith accepts
 bounded inline JPEG, PNG, or WebP images through OpenAI Responses and Anthropic
 Messages; the adapters validate the declared media type, file magic, decoded
 bytes, image count, and dimensions before contacting vLLM. Remote URLs, local
 paths, traversal, unsupported media, and images sent to text-only instances are
-rejected. `Qwen/Qwen3-Embedding-0.6B` has its own embedding-only recipe and
-serves strict float vectors at
-`POST /openai/<instance>/v1/embeddings`; it does not expose generation routes.
-Embedding input order, 1024 dimensions, unit normalization, usage, and public
-model identity are checked by the gateway rather than trusted from the engine.
+rejected. A profile exposes only the routes and capabilities declared in
+`engine.toml`; unsupported tasks fail closed rather than selecting another
+runtime.
 
 The admission report exposes the declarative 8 GiB system reserve, 8 GiB
 emergency floor, and 100 GiB disk reserve. Missing or stale telemetry fails
@@ -146,7 +158,7 @@ restart before an emergency victim can be stopped; it never selects unlabeled
 work.
 
 Spark application releases are signed, content-addressed, and installed side by
-side. `upgrade` validates active recipes, the N/N-1 database schema, a verified
+side. `upgrade` validates active engine identities, the N/N-1 database schema, a verified
 backup, and the protected host fingerprint before switching only the control
 plane; healthy engine containers remain running. Failed semantic health requests
 automatic rollback. `rollback` re-verifies both artifacts and swaps the exact

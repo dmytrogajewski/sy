@@ -1,0 +1,91 @@
+schema = "sy.spark.engine/v1"
+id = "vllm-arm64"
+family = "vllm"
+version = "0.27.1"
+image_repository = "vllm/vllm-openai"
+image_digest = "sha256:ae35bb2db70814d1239ea588e1abb5288adcbd287cac1d4d00ea0f28cd2033df"
+image_architecture = "arm64"
+entrypoint = ["vllm", "serve"]
+arguments = [
+  "{model_snapshot}",
+  "--served-model-name", "{served_model}",
+  "--host", "0.0.0.0",
+  "--port", "{port}",
+  "--gpu-memory-utilization", "0.35",
+  "--max-model-len", "262144",
+  "--enable-prefix-caching",
+]
+environment = [
+  "HOME=/tmp",
+  "HF_HUB_OFFLINE=1",
+  "TRANSFORMERS_OFFLINE=1",
+  "HF_DATASETS_OFFLINE=1",
+  "VLLM_CACHE_ROOT=/compile-cache/vllm",
+  "TORCHINDUCTOR_CACHE_DIR=/compile-cache/torchinductor",
+  "TRITON_CACHE_DIR=/compile-cache/triton",
+  "CUDA_CACHE_PATH=/compile-cache/cuda",
+  "XDG_CACHE_HOME=/compile-cache/xdg",
+  "UMASK=0027",
+]
+default_profile = "text"
+model_cache_root = "/var/lib/sy-spark/huggingface"
+compile_cache_root = "/var/lib/sy-spark/compile-cache"
+network = "sy-spark-internal"
+port = 8000
+run_as_uid = 65534
+pid_limit = 512
+seccomp = "default"
+tmpfs = ["/tmp"]
+startup_deadline_seconds = 900
+health_method = "GET"
+health_path = "/health"
+semantic_prompt = "Generate one completion token."
+semantic_max_tokens = 1
+
+[resources]
+image_bytes = 18000000000
+startup_peak_bytes = 68719476736
+steady_peak_bytes = 68719476736
+compile_cache_bytes = 8589934592
+
+[[routes]]
+method = "GET"
+path = "/v1/models"
+
+[[routes]]
+method = "POST"
+path = "/v1/completions"
+
+[[routes]]
+method = "POST"
+path = "/v1/chat/completions"
+
+[[routes]]
+method = "POST"
+path = "/tokenize"
+
+[[profiles]]
+id = "text"
+model_types = []
+arguments = ["--max-num-seqs", "16"]
+capabilities = ["text_generation"]
+
+[[profiles]]
+id = "qwen3"
+model_types = ["qwen3", "qwen3_moe"]
+arguments = [
+  "--max-num-seqs", "16",
+  "--enable-auto-tool-choice",
+  "--tool-call-parser", "qwen3_xml",
+  "--reasoning-parser", "qwen3",
+]
+capabilities = ["text_generation", "tool_calling"]
+sampling = { temperature = 0.6, top_p = 0.95, top_k = 20, min_p = 0.0, presence_penalty = 0.0, repetition_penalty = 1.0 }
+
+[[profiles]]
+id = "qwen3_5"
+model_types = ["qwen3_5", "qwen3_5_moe"]
+# GB10 GDN fails when decode and chunked prefill share a batch.
+arguments = ["--max-num-seqs", "1", "--enforce-eager", "--enable-auto-tool-choice", "--tool-call-parser", "qwen3_xml", "--reasoning-parser", "qwen3"]
+capabilities = ["text_generation", "tool_calling"]
+sampling = { temperature = 0.6, top_p = 0.95, top_k = 20, min_p = 0.0, presence_penalty = 0.0, repetition_penalty = 1.0 }

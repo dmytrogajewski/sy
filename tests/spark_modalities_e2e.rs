@@ -35,6 +35,7 @@ fn vision_profile() -> gateway::GatewayProfile {
             health_disable_thinking: true,
         }),
         embeddings: None,
+        sampling: gateway::SamplingPolicy::default(),
     }
 }
 

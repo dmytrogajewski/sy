@@ -30,18 +30,17 @@ use sha2::{Digest, Sha256};
 use utoipa::OpenApi;
 
 use super::wire::{
-    AnthropicErrorDetail, AnthropicErrorDocument, AnthropicTokenCountDocument, BenchRequest,
-    CertificateStatusDocument, CompatibilityEvaluationDocument, DatabaseHealth, DegradedReason,
-    DoctorCheck, DoctorDocument, DownloadPlanDocument, DownloadRequest, EngineLogDocument,
-    InstanceDesiredState, InstanceDocument, InstanceListDocument, InstanceObservedState,
-    ModelDocument, ModelListDocument, OpenAiEmbeddingDocument, OpenAiEmbeddingRequest,
-    OpenAiEmbeddingUsage, OpenAiEmbeddingVector, OperationDocument, OperationListDocument,
-    OperationProgress, ProblemDocument, RecipeCatalogDocument, RemovalPlanDocument,
-    RemoveModelRequest, ServeAdmissionRequest, ServeRequest, StatusDocument, StopRequest,
-    TokenCreateRequest, TokenCreatedDocument, TokenListDocument, TokenScope, TuneRequest,
-    CERTIFICATE_SCHEMA, DOCTOR_SCHEMA, ENGINE_LOG_SCHEMA, INSTANCE_LIST_SCHEMA, INSTANCE_SCHEMA,
-    MODEL_LIST_SCHEMA, OPERATION_LIST_SCHEMA, PROBLEM_SCHEMA, REMOVAL_PLAN_SCHEMA, STATUS_SCHEMA,
-    TOKEN_LIST_SCHEMA,
+    AnthropicErrorDetail, AnthropicErrorDocument, AnthropicTokenCountDocument,
+    CertificateStatusDocument, DatabaseHealth, DegradedReason, DoctorCheck, DoctorDocument,
+    DownloadPlanDocument, DownloadRequest, EngineLogDocument, InstanceDesiredState,
+    InstanceDocument, InstanceListDocument, InstanceObservedState, ModelDocument,
+    ModelListDocument, OpenAiEmbeddingDocument, OpenAiEmbeddingRequest, OpenAiEmbeddingUsage,
+    OpenAiEmbeddingVector, OperationDocument, OperationListDocument, OperationProgress,
+    ProblemDocument, RemovalPlanDocument, RemoveModelRequest, ServeAdmissionRequest, ServeRequest,
+    StatusDocument, StopRequest, TokenCreateRequest, TokenCreatedDocument, TokenListDocument,
+    TokenScope, CERTIFICATE_SCHEMA, DOCTOR_SCHEMA, ENGINE_LOG_SCHEMA, INSTANCE_LIST_SCHEMA,
+    INSTANCE_SCHEMA, MODEL_LIST_SCHEMA, OPERATION_LIST_SCHEMA, PROBLEM_SCHEMA, REMOVAL_PLAN_SCHEMA,
+    STATUS_SCHEMA, TOKEN_LIST_SCHEMA,
 };
 use super::{
     executor::{
@@ -78,6 +77,7 @@ pub struct AgentConfig {
     pub allowed_client_cidrs: Vec<String>,
     pub plain_http_loopback_only: bool,
     pub executor_socket: PathBuf,
+    pub engine_policy: PathBuf,
     pub operations: OperationsConfig,
     pub resources: ResourcePolicyConfig,
     pub retention: RetentionConfig,
@@ -117,6 +117,7 @@ pub struct AgentState {
     auth: Arc<ArcSwap<AuthSnapshot>>,
     limiter: Arc<TokenLimiter>,
     executor: Option<ExecutorClient>,
+    engine_policy: Option<Arc<super::engine::EnginePolicy>>,
     models: Option<Arc<HubAcquirer>>,
     download_slots: Arc<tokio::sync::Semaphore>,
     start_slots: Arc<tokio::sync::Semaphore>,
@@ -147,6 +148,21 @@ impl AgentState {
                 NonZeroU32::new(30).expect("static non-zero quota"),
             ))),
             executor: None,
+            engine_policy: {
+                #[cfg(test)]
+                {
+                    Some(Arc::new(
+                        super::engine::EnginePolicy::parse(include_str!(
+                            "../../configs/sy/spark/engine.toml"
+                        ))
+                        .expect("test engine policy"),
+                    ))
+                }
+                #[cfg(not(test))]
+                {
+                    None
+                }
+            },
             models: None,
             download_slots: Arc::new(tokio::sync::Semaphore::new(1)),
             start_slots: Arc::new(tokio::sync::Semaphore::new(1)),
@@ -156,6 +172,11 @@ impl AgentState {
             #[cfg(test)]
             executor_ready_override: false,
         }
+    }
+
+    fn with_engine_policy(mut self, policy: super::engine::EnginePolicy) -> Self {
+        self.engine_policy = Some(Arc::new(policy));
+        self
     }
 
     fn inference_slot(&self, id: &str, maximum: u32) -> Arc<tokio::sync::Semaphore> {
@@ -280,9 +301,6 @@ impl Cidr {
         create_token,
         list_tokens,
         revoke_token,
-        recipes,
-        bench_candidate,
-        tune_candidates,
         list_models,
         get_model,
         download_model,
@@ -311,10 +329,6 @@ impl Cidr {
         TokenCreateRequest,
         TokenCreatedDocument,
         TokenListDocument,
-        RecipeCatalogDocument,
-        BenchRequest,
-        TuneRequest,
-        CompatibilityEvaluationDocument,
         DownloadRequest,
         DownloadPlanDocument,
         ModelDocument,
@@ -349,15 +363,6 @@ pub fn router(state: AgentState) -> Router {
             get(certificate_status),
         )
         .route(&format!("{API_BASE}/operations"), get(list_operations))
-        .route(&format!("{API_BASE}/recipes"), get(recipes))
-        .route(
-            &format!("{API_BASE}/benchmarks"),
-            axum::routing::post(bench_candidate),
-        )
-        .route(
-            &format!("{API_BASE}/tunings"),
-            axum::routing::post(tune_candidates),
-        )
         .route(&format!("{API_BASE}/models"), get(list_models))
         .route(
             &format!("{API_BASE}/downloads"),
@@ -548,7 +553,11 @@ async fn gateway_anthropic_messages(
         Ok(upstream) => upstream,
         Err(_) => return anthropic_upstream_unavailable(),
     };
-    let encoder = gateway::AnthropicEncoder::new(route.public_model.clone());
+    let encoder = if request.omit_reasoning {
+        gateway::AnthropicEncoder::with_omitted_reasoning(route.public_model.clone())
+    } else {
+        gateway::AnthropicEncoder::new(route.public_model.clone())
+    };
     if request.stream {
         anthropic_sse(upstream, encoder, permit, token_permit)
     } else {
@@ -795,6 +804,11 @@ async fn gateway_completions(
                             "model": public_model,
                             "choices": [{"index": 0, "text": text, "finish_reason": null}]
                         }),
+                        Ok(GenerationEvent::ReasoningDelta { text }) => serde_json::json!({
+                            "object": "text_completion.reasoning",
+                            "model": public_model,
+                            "reasoning_content": text
+                        }),
                         Ok(GenerationEvent::Finished { finish_reason }) => serde_json::json!({
                             "object": "text_completion",
                             "model": public_model,
@@ -1015,7 +1029,11 @@ async fn gateway_chat_completions(
     if !route.profile.allows(PublicAction::Chat) {
         return openai_not_found().await;
     }
-    let request = match gateway::rewrite_chat_request(&body, &route.served_model) {
+    let request = match gateway::rewrite_chat_request_with_profile(
+        &body,
+        &route.served_model,
+        &route.profile,
+    ) {
         Ok(request) => request,
         Err(error) => return openai_error(StatusCode::BAD_REQUEST, error),
     };
@@ -1203,272 +1221,6 @@ fn gateway_upstream_unavailable() -> Response {
         },
     )
 }
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RecipesQuery {
-    model: Option<String>,
-    commit: Option<String>,
-    #[serde(default = "default_recipe_objective")]
-    objective: String,
-}
-
-fn default_recipe_objective() -> String {
-    "agent".into()
-}
-
-#[utoipa::path(get, path = "/api/sy.spark/v1/recipes", params(("model" = Option<String>, Query), ("commit" = Option<String>, Query), ("objective" = Option<String>, Query)), responses((status = 200, body = RecipeCatalogDocument)))]
-async fn recipes(State(state): State<AgentState>, Query(query): Query<RecipesQuery>) -> Response {
-    let Some(executor) = &state.executor else {
-        return problem(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "spark.executor.unavailable",
-            "recipe compatibility requires the root-owned executor catalog",
-        );
-    };
-    match executor
-        .recipes(query.model, query.commit, query.objective)
-        .await
-    {
-        Ok(catalog) => Json(catalog).into_response(),
-        Err(_) => problem(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "spark.recipe.catalog-unavailable",
-            "the signed root-owned recipe catalog is unavailable",
-        ),
-    }
-}
-
-#[utoipa::path(post, path = "/api/sy.spark/v1/benchmarks", request_body = BenchRequest, responses((status = 200, body = CompatibilityEvaluationDocument), (status = 202, body = OperationDocument)))]
-async fn bench_candidate(
-    State(state): State<AgentState>,
-    headers: HeaderMap,
-    Extension(auth): Extension<AuthenticatedToken>,
-    Json(body): Json<BenchRequest>,
-) -> Response {
-    let hash = match super::wire::canonical_request_sha256(&body) {
-        Ok(hash) => hash,
-        Err(_) => {
-            return problem(
-                StatusCode::BAD_REQUEST,
-                "spark.request.invalid",
-                "bench request cannot be canonicalized",
-            )
-        }
-    };
-    evaluate_candidates(EvaluationContext {
-        state,
-        headers,
-        auth,
-        model_reference: body.model,
-        named_recipe: body.recipe,
-        objective: body.objective,
-        dry_run: body.dry_run,
-        promote: false,
-        operation_kind: "engine.bench",
-        request_hash: hash,
-    })
-    .await
-}
-
-#[utoipa::path(post, path = "/api/sy.spark/v1/tunings", request_body = TuneRequest, responses((status = 200, body = CompatibilityEvaluationDocument), (status = 202, body = OperationDocument)))]
-async fn tune_candidates(
-    State(state): State<AgentState>,
-    headers: HeaderMap,
-    Extension(auth): Extension<AuthenticatedToken>,
-    Json(body): Json<TuneRequest>,
-) -> Response {
-    let hash = match super::wire::canonical_request_sha256(&body) {
-        Ok(hash) => hash,
-        Err(_) => {
-            return problem(
-                StatusCode::BAD_REQUEST,
-                "spark.request.invalid",
-                "tune request cannot be canonicalized",
-            )
-        }
-    };
-    evaluate_candidates(EvaluationContext {
-        state,
-        headers,
-        auth,
-        model_reference: body.model,
-        named_recipe: None,
-        objective: body.objective,
-        dry_run: body.dry_run,
-        promote: true,
-        operation_kind: "engine.tune",
-        request_hash: hash,
-    })
-    .await
-}
-
-struct EvaluationContext {
-    state: AgentState,
-    headers: HeaderMap,
-    auth: AuthenticatedToken,
-    model_reference: String,
-    named_recipe: Option<String>,
-    objective: String,
-    dry_run: bool,
-    promote: bool,
-    operation_kind: &'static str,
-    request_hash: String,
-}
-
-async fn evaluate_candidates(context: EvaluationContext) -> Response {
-    let EvaluationContext {
-        state,
-        headers,
-        auth,
-        model_reference,
-        named_recipe,
-        objective,
-        dry_run,
-        promote,
-        operation_kind,
-        request_hash,
-    } = context;
-    if !matches!(
-        objective.as_str(),
-        "agent" | "interactive" | "long-context" | "retrieval"
-    ) {
-        return problem(
-            StatusCode::BAD_REQUEST,
-            "spark.engine.invalid-objective",
-            "functional selection objective is invalid",
-        );
-    }
-    let Some(database) = state.database.clone() else {
-        return database_unavailable();
-    };
-    let Some(executor) = state.executor.clone() else {
-        return executor_unavailable();
-    };
-    let model = match database.model(&model_reference).await {
-        Ok(model) => model,
-        Err(error) => return state_problem(error),
-    };
-    let catalog = match executor
-        .recipes(
-            Some(model.repository.clone()),
-            Some(model.commit.clone()),
-            objective.clone(),
-        )
-        .await
-    {
-        Ok(catalog) => catalog,
-        Err(_) => return executor_unavailable(),
-    };
-    let evidence_id = ulid::Ulid::new().to_string();
-    let evaluation = match super::bench::evaluate_catalog(
-        &catalog,
-        super::bench::EvaluationInput {
-            id: &evidence_id,
-            model_id: &model.id,
-            repository: &model.repository,
-            commit: &model.commit,
-            objective: &objective,
-            named_recipe: named_recipe.as_deref(),
-            promote,
-            cancelled: false,
-            created_at: &chrono::Utc::now().to_rfc3339(),
-        },
-    ) {
-        Ok(evaluation) => evaluation,
-        Err(super::bench::EvaluationError::NamedRecipeMissing) => {
-            return problem(
-                StatusCode::CONFLICT,
-                "spark.recipe.unsupported",
-                "named recipe is not installed for this immutable model",
-            )
-        }
-        Err(super::bench::EvaluationError::Cancelled) => {
-            return problem(
-                StatusCode::CONFLICT,
-                "spark.operation.cancelled",
-                "compatibility evaluation was cancelled",
-            )
-        }
-    };
-    if dry_run {
-        return Json(evaluation).into_response();
-    }
-    let key = match required_idempotency(&headers) {
-        Ok(key) => key,
-        Err(()) => return missing_idempotency(),
-    };
-    let accepted = match database
-        .accept_operation(
-            &auth.id,
-            operation_kind,
-            &key,
-            &request_hash,
-            Some(model.id.clone()),
-        )
-        .await
-    {
-        Ok(accepted) => accepted,
-        Err(error) => return state_problem(error),
-    };
-    if accepted.reused {
-        return accepted_response(accepted.operation);
-    }
-    let running = match database
-        .transition(
-            &accepted.operation.id,
-            super::wire::OperationState::Running,
-            OperationProgress {
-                stage: "evaluating".into(),
-                current: Some(0),
-                total: Some(evaluation.candidates.len() as u64),
-                unit: Some("candidate".into()),
-                message: "checking exact functional compatibility".into(),
-            },
-            None,
-            None,
-        )
-        .await
-    {
-        Ok(operation) => operation,
-        Err(error) => return state_problem(error),
-    };
-    let evaluation = match database.store_evaluation(evaluation).await {
-        Ok(evaluation) => evaluation,
-        Err(error) => return state_problem(error),
-    };
-    let result = match serde_json::to_value(&evaluation) {
-        Ok(result) => result,
-        Err(_) => {
-            return problem(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "spark.engine.evidence-invalid",
-                "compatibility evidence cannot be encoded",
-            )
-        }
-    };
-    let operation = match database
-        .transition(
-            &running.id,
-            super::wire::OperationState::Succeeded,
-            OperationProgress {
-                stage: "complete".into(),
-                current: Some(evaluation.candidates.len() as u64),
-                total: Some(evaluation.candidates.len() as u64),
-                unit: Some("candidate".into()),
-                message: "functional compatibility evidence persisted".into(),
-            },
-            Some(result),
-            None,
-        )
-        .await
-    {
-        Ok(operation) => operation,
-        Err(error) => return state_problem(error),
-    };
-    accepted_response(operation)
-}
-
 #[utoipa::path(post, path = "/api/sy.spark/v1/admission", request_body = ServeAdmissionRequest, responses((status = 200, body = crate::spark::resources::AdmissionReport)))]
 async fn admission(
     State(state): State<AgentState>,
@@ -1512,55 +1264,18 @@ async fn admission(
     let Some(executor) = &state.executor else {
         return executor_unavailable();
     };
-    let mut catalog = match executor
-        .recipes(
-            Some(model.repository.clone()),
-            Some(model.commit.clone()),
-            "agent".into(),
-        )
-        .await
-    {
-        Ok(catalog) => catalog,
-        Err(_) => return executor_unavailable(),
+    let Some(policy) = &state.engine_policy else {
+        return executor_unavailable();
     };
-    if body.recipe.is_none() {
-        match database.selected_evaluation(&model.id, "agent").await {
-            Ok(Some(mut evaluation)) => {
-                super::bench::apply_winner(&mut catalog, &mut evaluation);
-                if evaluation.invalidated_reason.is_some() {
-                    if let Err(error) = database.store_evaluation(evaluation).await {
-                        return state_problem(error);
-                    }
-                }
-            }
-            Ok(None) => {}
-            Err(error) => return state_problem(error),
-        }
-    }
-    let selected_id = catalog
-        .selection
-        .as_ref()
-        .map(|selection| selection.recipe_id.as_str());
-    let selected = selected_id.and_then(|id| catalog.recipes.iter().find(|recipe| recipe.id == id));
-    let named_matches = body
-        .recipe
-        .as_deref()
-        .is_none_or(|requested| Some(requested) == selected_id);
     let snapshot = match executor.snapshot().await {
         Ok(snapshot) => snapshot,
         Err(_) => return executor_unavailable(),
     };
-    let (startup_peak, required_disk) = selected
-        .map(|recipe| {
-            (
-                recipe.resources.startup_peak_bytes,
-                recipe
-                    .resources
-                    .image_bytes
-                    .saturating_add(recipe.resources.compile_cache_bytes),
-            )
-        })
-        .unwrap_or((u64::MAX, u64::MAX));
+    let resources = policy.resources();
+    let startup_peak = resources.startup_peak_bytes;
+    let required_disk = resources
+        .image_bytes
+        .saturating_add(resources.compile_cache_bytes);
     let desired: Vec<DeclaredEnvelope> = match database.desired_resource_envelopes().await {
         Ok(envelopes) => envelopes,
         Err(error) => return state_problem(error),
@@ -1588,31 +1303,18 @@ async fn admission(
                 startup_peak,
                 required_disk,
             ),
-            compatibility_verified: selected.is_some_and(|recipe| recipe.compatible)
-                && named_matches,
+            compatibility_verified: true,
             guard_healthy: snapshot.health.guard_heartbeat,
         },
         unix_millis(),
     );
-    report.selection = catalog
-        .selection
-        .as_ref()
-        .zip(selected)
-        .filter(|_| named_matches)
-        .map(|(selection, recipe)| super::resources::AdmissionSelection {
-            recipe_id: selection.recipe_id.clone(),
-            selection_kind: match selection.reason {
-                super::wire::RecipeSelectionReason::NamedCompatible => "named_compatible",
-                super::wire::RecipeSelectionReason::TunedWinner => "tuned_winner",
-                super::wire::RecipeSelectionReason::VerifiedVllmFallback => {
-                    "verified_vllm_fallback"
-                }
-            }
-            .into(),
-            engine: recipe.engine.clone(),
-            image: recipe.image.clone(),
-            fingerprint: selection.fingerprint.clone(),
-        });
+    report.selection = Some(super::resources::AdmissionSelection {
+        recipe_id: policy.config().id.clone(),
+        selection_kind: "configured_engine".into(),
+        engine: policy.config().family.clone(),
+        image: policy.image(),
+        fingerprint: policy.fingerprint().into(),
+    });
     Json(report).into_response()
 }
 
@@ -1629,21 +1331,10 @@ async fn serve_instance(
             Json(ServeAdmissionRequest {
                 model: body.model,
                 name: body.name,
-                recipe: body.recipe,
                 dry_run: true,
             }),
         )
         .await;
-    }
-    if !matches!(
-        body.objective.as_str(),
-        "agent" | "interactive" | "long-context" | "retrieval"
-    ) {
-        return problem(
-            StatusCode::BAD_REQUEST,
-            "spark.instance.invalid-objective",
-            "serve objective is invalid",
-        );
     }
     if let Err(response) = require_executor_for_mutation(&state).await {
         return response;
@@ -1654,63 +1345,14 @@ async fn serve_instance(
     let Some(executor) = state.executor.clone() else {
         return executor_unavailable();
     };
+    let Some(policy) = state.engine_policy.clone() else {
+        return executor_unavailable();
+    };
     let model = match database.model(&body.model).await {
         Ok(model) => model,
         Err(error) => return state_problem(error),
     };
-    let mut catalog = match executor
-        .recipes(
-            Some(model.repository.clone()),
-            Some(model.commit.clone()),
-            body.objective.clone(),
-        )
-        .await
-    {
-        Ok(catalog) => catalog,
-        Err(_) => return executor_unavailable(),
-    };
-    if body.recipe.is_none() {
-        match database
-            .selected_evaluation(&model.id, &body.objective)
-            .await
-        {
-            Ok(Some(mut evaluation)) => {
-                super::bench::apply_winner(&mut catalog, &mut evaluation);
-                if evaluation.invalidated_reason.is_some() {
-                    if let Err(error) = database.store_evaluation(evaluation).await {
-                        return state_problem(error);
-                    }
-                }
-            }
-            Ok(None) => {}
-            Err(error) => return state_problem(error),
-        }
-    }
-    let selected_id = body.recipe.as_deref().or_else(|| {
-        catalog
-            .selection
-            .as_ref()
-            .map(|selection| selection.recipe_id.as_str())
-    });
-    let Some(recipe) = selected_id.and_then(|id| {
-        catalog
-            .recipes
-            .iter()
-            .find(|recipe| recipe.id == id && recipe.compatible)
-    }) else {
-        return problem(
-            StatusCode::CONFLICT,
-            "spark.recipe.no-compatible-selection",
-            "no compatible verified recipe can serve this immutable model",
-        );
-    };
-    if matches!(recipe.status, super::wire::RecipeStatus::Experimental) && !body.allow_unverified {
-        return problem(
-            StatusCode::CONFLICT,
-            "spark.recipe.acknowledgement-required",
-            "experimental recipe requires --allow-unverified",
-        );
-    }
+    let resources = policy.resources();
     let snapshot = match executor.snapshot().await {
         Ok(snapshot) => snapshot,
         Err(_) => return executor_unavailable(),
@@ -1741,12 +1383,11 @@ async fn serve_instance(
             desired,
             candidate: CandidateEnvelope::new(
                 name.clone(),
-                recipe.resources.startup_peak_bytes,
-                recipe.resources.startup_peak_bytes,
-                recipe
-                    .resources
+                resources.startup_peak_bytes,
+                resources.startup_peak_bytes,
+                resources
                     .image_bytes
-                    .saturating_add(recipe.resources.compile_cache_bytes),
+                    .saturating_add(resources.compile_cache_bytes),
             ),
             compatibility_verified: true,
             guard_healthy: snapshot.health.guard_heartbeat,
@@ -1807,16 +1448,6 @@ async fn serve_instance(
     if accepted.reused {
         return accepted_response(accepted.operation);
     }
-    let recipe_fingerprint = match serde_json::to_vec(recipe) {
-        Ok(bytes) => format!("sha256:{:x}", sha2::Sha256::digest(bytes)),
-        Err(_) => {
-            return problem(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "spark.recipe.invalid",
-                "selected recipe cannot be fingerprinted",
-            );
-        }
-    };
     let instance = InstanceDocument {
         schema: INSTANCE_SCHEMA.into(),
         id: instance_id(&name),
@@ -1824,10 +1455,10 @@ async fn serve_instance(
         model_id: model.id.clone(),
         model: model.canonical.clone(),
         model_commit: model.commit.clone(),
-        recipe_id: recipe.id.clone(),
-        recipe_fingerprint,
-        objective: body.objective,
-        resources: recipe.resources.clone(),
+        recipe_id: policy.config().id.clone(),
+        recipe_fingerprint: policy.fingerprint().into(),
+        objective: "inference".into(),
+        resources,
         generation: 0,
         desired: InstanceDesiredState::Running,
         observed: InstanceObservedState::Creating,
@@ -1912,7 +1543,6 @@ async fn run_serve(
         .await;
         return;
     };
-    let startup_started = tokio::time::Instant::now();
     if database
         .transition(
             &operation_id,
@@ -1938,6 +1568,13 @@ async fn run_serve(
             instance_id: instance.id.clone(),
             generation: instance.generation,
             model_commit: instance.model_commit.clone(),
+            model_repository: instance
+                .model
+                .strip_prefix("huggingface:")
+                .and_then(|model| model.split_once('@'))
+                .map(|(repository, _)| repository)
+                .unwrap_or_default()
+                .to_owned(),
             recipe_id: instance.recipe_id.clone(),
             operation_id: operation_id.clone(),
         })
@@ -1989,6 +1626,9 @@ async fn run_serve(
             return;
         }
     };
+    // Pulling an exact image is preparation, not engine startup. A cold pull must
+    // not consume the configured health and semantic-readiness deadline.
+    let startup_started = tokio::time::Instant::now();
     if serve_cancelled(&database, &operation_id).await {
         cancel_prehealth_serve(&database, &executor, &instance).await;
         return;
@@ -2229,6 +1869,13 @@ async fn reconcile_once(
             instance_id: instance.id.clone(),
             generation: instance.generation,
             model_commit: instance.model_commit.clone(),
+            model_repository: instance
+                .model
+                .strip_prefix("huggingface:")
+                .and_then(|model| model.split_once('@'))
+                .map(|(repository, _)| repository)
+                .unwrap_or_default()
+                .to_owned(),
             recipe_id: instance.recipe_id.clone(),
         })
         .collect();
@@ -2350,6 +1997,13 @@ async fn reconcile_once(
                 instance_id: instance.id.clone(),
                 generation: instance.generation,
                 model_commit: instance.model_commit.clone(),
+                model_repository: instance
+                    .model
+                    .strip_prefix("huggingface:")
+                    .and_then(|model| model.split_once('@'))
+                    .map(|(repository, _)| repository)
+                    .unwrap_or_default()
+                    .to_owned(),
                 recipe_id: instance.recipe_id.clone(),
                 operation_id,
             })
@@ -2462,6 +2116,12 @@ async fn reconcile_running_engine(
     instance: &InstanceDocument,
     observed: ObservedEngine,
 ) -> Result<(), ()> {
+    if observed.running
+        && observed.restart_policy == "unless-stopped"
+        && routes.is_some_and(|routes| exact_route_is_published(routes, instance))
+    {
+        return Ok(());
+    }
     if !observed.running || !persistent_restart_allowed(database, executor).await? {
         let _ = executor
             .disable_restart(StopInstanceInput {
@@ -2550,6 +2210,13 @@ async fn reconcile_running_engine(
         .map_err(|_| ())
 }
 
+fn exact_route_is_published(routes: &RouteRegistry, instance: &InstanceDocument) -> bool {
+    matches!(
+        routes.lookup(&instance.name),
+        RouteLookup::Healthy(route) if route.generation == instance.generation
+    )
+}
+
 async fn semantic_probe_result(
     route: &ObservedRoute,
     observed: &ObservedEngine,
@@ -2609,6 +2276,18 @@ async fn fail_serve(
     detail: &str,
 ) {
     routes.drain(&instance.name, instance.generation);
+    let failure_detail = executor
+        .logs(LogInput {
+            instance_id: instance.id.clone(),
+            generation: instance.generation,
+            cursor: 0,
+            limit: 12,
+        })
+        .await
+        .map_or_else(
+            |_| detail.to_owned(),
+            |logs| failure_detail_with_logs(detail, &logs.lines),
+        );
     let _ = executor
         .stop_instance(StopInstanceInput {
             instance_id: instance.id.clone(),
@@ -2623,7 +2302,7 @@ async fn fail_serve(
             instance.generation,
             InstanceObservedState::Failed,
             None,
-            Some(detail.into()),
+            Some(failure_detail.clone()),
             None,
         )
         .await;
@@ -2632,19 +2311,31 @@ async fn fail_serve(
         r#type: "https://sy.local/problems/spark-engine-start".into(),
         code: "spark.instance.start-failed".into(),
         status: 503,
-        detail: detail.into(),
-        remediation: vec!["inspect bounded instance logs before serving again".into()],
+        detail: failure_detail.clone(),
+        remediation: vec![
+            "inspect the instance last_failure diagnostic before serving again".into(),
+        ],
         operation_id: Some(operation_id.into()),
     };
     let _ = database
         .transition(
             operation_id,
             super::wire::OperationState::Failed,
-            lifecycle_progress("failed", detail),
+            lifecycle_progress("failed", &failure_detail),
             None,
             Some(problem),
         )
         .await;
+}
+
+fn failure_detail_with_logs(detail: &str, lines: &[String]) -> String {
+    const MAX_FAILURE_DETAIL_CHARS: usize = 2_048;
+    let mut result = detail.to_owned();
+    if !lines.is_empty() {
+        result.push_str("; final engine log: ");
+        result.push_str(&lines.join(" | "));
+    }
+    result.chars().take(MAX_FAILURE_DETAIL_CHARS).collect()
 }
 
 #[utoipa::path(get, path = "/api/sy.spark/v1/instances", responses((status = 200, body = InstanceListDocument)))]
@@ -2707,26 +2398,6 @@ async fn stop_instance(
             );
         }
     };
-    let transition = match state
-        .admission
-        .try_acquire(format!("stop:{}:{}", instance.id, instance.generation))
-    {
-        Ok(lease) => lease,
-        Err(TransitionLeaseError::Busy { .. }) => {
-            return problem(
-                StatusCode::CONFLICT,
-                "spark.memory.transition-busy",
-                "another high-memory transition owns the admission lease",
-            );
-        }
-        Err(TransitionLeaseError::Unavailable) => {
-            return problem(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "spark.memory.admission-unavailable",
-                "the admission coordinator is unavailable",
-            );
-        }
-    };
     let Some(executor) = state.executor.clone() else {
         return executor_unavailable();
     };
@@ -2758,7 +2429,6 @@ async fn stop_instance(
                 database,
                 executor,
                 routes,
-                transition,
                 operation_id,
                 stopping,
                 body.timeout_seconds,
@@ -2772,12 +2442,10 @@ async fn run_stop(
     database: DbActor,
     executor: ExecutorClient,
     routes: RouteRegistry,
-    transition: TransitionLease,
     operation_id: String,
     instance: InstanceDocument,
     timeout_seconds: u64,
 ) {
-    let coordinator = transition.coordinator();
     routes.drain(&instance.name, instance.generation);
     let _ = database
         .transition(
@@ -2817,8 +2485,6 @@ async fn run_stop(
                     None,
                 )
                 .await;
-            drop(transition);
-            let _ = reconcile_once(&database, &executor, None, &coordinator).await;
         }
         Err(_) => {
             let problem = ProblemDocument {
@@ -2954,7 +2620,7 @@ fn executor_unavailable() -> Response {
     problem(
         StatusCode::SERVICE_UNAVAILABLE,
         "spark.executor.unavailable",
-        "fresh executor resource telemetry is unavailable",
+        "the managed Spark executor operation is unavailable",
     )
 }
 
@@ -4038,12 +3704,6 @@ fn required_scope(method: &Method, path: &str) -> Option<TokenScope> {
     {
         return Some(TokenScope::Admin);
     }
-    if path == format!("{API_BASE}/recipes") {
-        return Some(TokenScope::ModelsRead);
-    }
-    if path == format!("{API_BASE}/benchmarks") || path == format!("{API_BASE}/tunings") {
-        return Some(TokenScope::BenchmarksWrite);
-    }
     if path.starts_with(&format!("{API_BASE}/models")) {
         return Some(if method == Method::DELETE {
             TokenScope::ModelsWrite
@@ -4298,6 +3958,12 @@ pub async fn serve(
         "unsupported Spark agent configuration schema"
     );
     anyhow::ensure!(
+        config.engine_policy == Path::new("/etc/sy/spark/engine.toml"),
+        "engine policy must use the fixed root-owned path"
+    );
+    let engine_policy =
+        super::engine::EnginePolicy::load(&config.engine_policy).map_err(anyhow::Error::msg)?;
+    anyhow::ensure!(
         config.models.endpoint.starts_with("https://")
             && config.models.cache_root.is_absolute()
             && config.models.fallback_executable.is_absolute()
@@ -4373,6 +4039,7 @@ pub async fn serve(
         Err(_) => None,
     };
     let mut state = AgentState::new(token.trim(), Vec::new(), Vec::new())
+        .with_engine_policy(engine_policy)
         .with_database(database.clone())
         .await?
         .with_models(
@@ -4536,7 +4203,7 @@ async fn tls13_config(
 
 #[cfg(test)]
 mod tests {
-    use super::{router, AgentState, API_BASE};
+    use super::{router, AgentState, ApiDoc, API_BASE};
     use axum::{
         body::Body,
         http::{header, Request},
@@ -4554,6 +4221,19 @@ mod tests {
     use utoipa::OpenApi;
 
     const TOKEN: &str = "test-bootstrap-token-with-at-least-256-bits-of-random-material";
+
+    #[test]
+    fn legacy_recipe_benchmark_and_tuning_paths_are_not_public() {
+        let document = serde_json::to_value(ApiDoc::openapi()).unwrap();
+        let paths = document["paths"].as_object().unwrap();
+        for path in [
+            "/api/sy.spark/v1/recipes",
+            "/api/sy.spark/v1/benchmarks",
+            "/api/sy.spark/v1/tunings",
+        ] {
+            assert!(!paths.contains_key(path));
+        }
+    }
 
     #[tokio::test]
     async fn metrics_are_authenticated_bounded_and_content_free() {
@@ -4869,6 +4549,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn failed_serve_preserves_bounded_final_engine_logs() {
+        let detail = super::failure_detail_with_logs(
+            "engine health check failed",
+            &["loading weights".into(), "CUDA allocation failed".into()],
+        );
+
+        assert_eq!(
+            detail,
+            "engine health check failed; final engine log: loading weights | CUDA allocation failed"
+        );
+        assert!(
+            super::failure_detail_with_logs("failed", &["x".repeat(4_096)])
+                .chars()
+                .count()
+                <= 2_048
+        );
+    }
+
     struct ResourceExecutor;
 
     impl sy_ipc::Handler for ResourceExecutor {
@@ -5076,6 +4775,31 @@ mod tests {
             restart_suppressed: false,
             quarantine: None,
         }
+    }
+
+    #[test]
+    fn published_exact_generation_needs_no_recovery_probe() {
+        let mut instance = creating_instance(&ornith_model());
+        instance.generation = 1;
+        let routes = crate::spark::gateway::RouteRegistry::default();
+        let upstream = crate::spark::upstream::ObservedRoute::new(
+            &instance.id,
+            instance.generation,
+            "172.30.0.2".parse().unwrap(),
+            8000,
+            [("GET", "/health")],
+        )
+        .unwrap();
+        routes.publish(
+            &instance.name,
+            instance.model.clone(),
+            "Ornith-1.5-9B".into(),
+            upstream,
+        );
+
+        assert!(super::exact_route_is_published(&routes, &instance));
+        instance.generation += 1;
+        assert!(!super::exact_route_is_published(&routes, &instance));
     }
 
     #[tokio::test]
@@ -5327,7 +5051,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explicit_stop_lease_excludes_reconcile_and_completes_one_removal() {
+    async fn explicit_stop_completes_one_removal_while_transition_is_busy() {
         let (state, database, root) = durable_state().await;
         let socket = root.join("executor.sock");
         let listener = tokio::net::UnixListener::bind(&socket).unwrap();
@@ -5346,7 +5070,7 @@ mod tests {
             .await
             .unwrap()
             .instance;
-        let lease = state.admission.try_acquire("explicit-stop").unwrap();
+        let _lease = state.admission.try_acquire("explicit-stop").unwrap();
         let operation = database
             .accept_operation(
                 "bootstrap",
@@ -5369,7 +5093,6 @@ mod tests {
             database.clone(),
             executor,
             state.routes.clone(),
-            lease,
             operation.id.clone(),
             stopping,
             5,
@@ -5386,8 +5109,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explicit_stop_busy_rejects_before_accepting_an_operation() {
-        let (state, database, _root) = durable_state().await;
+    async fn explicit_stop_preempts_a_busy_high_memory_transition() {
+        let (state, database, root) = durable_state().await;
+        let socket = root.join("executor.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(
+            sy_ipc::Server::new(StopRaceExecutor {
+                stops: Arc::new(AtomicUsize::new(0)),
+                removed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            })
+            .serve(listener),
+        );
+        let state = state.with_executor(crate::spark::executor::ExecutorClient::new(socket));
         let model = ornith_model();
         database.promote_model(model.clone(), false).await.unwrap();
         let instance = database
@@ -5405,20 +5138,14 @@ mod tests {
 
         let response = router(state).oneshot(request).await.unwrap();
 
-        assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
-        let problem: crate::spark::wire::ProblemDocument = serde_json::from_slice(
-            &axum::body::to_bytes(response.into_body(), 65536)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(problem.code, "spark.memory.transition-busy");
-        assert!(database.list_operations().await.unwrap().is_empty());
+        assert_eq!(response.status(), axum::http::StatusCode::ACCEPTED);
+        assert_eq!(database.list_operations().await.unwrap().len(), 1);
         assert_eq!(
             database.instance(&instance.id).await.unwrap().desired,
-            crate::spark::wire::InstanceDesiredState::Running
+            crate::spark::wire::InstanceDesiredState::Stopped
         );
         database.shutdown().unwrap();
+        server.abort();
     }
 
     #[tokio::test]
@@ -5521,7 +5248,7 @@ mod tests {
             .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(
-                r#"{"model":"ornith-1.5:9b","name":null,"recipe":null,"dry_run":true}"#,
+                r#"{"model":"ornith-1.5:9b","name":null,"dry_run":true}"#,
             ))
             .unwrap();
         let response = router(state).oneshot(request).await.unwrap();
@@ -5534,8 +5261,8 @@ mod tests {
         .unwrap();
         assert!(report.admitted);
         let selection = report.selection.unwrap();
-        assert_eq!(selection.recipe_id, "ornith-1.5-9b-vllm-0.19.1");
-        assert_eq!(selection.selection_kind, "verified_vllm_fallback");
+        assert_eq!(selection.recipe_id, "vllm-arm64");
+        assert_eq!(selection.selection_kind, "configured_engine");
         assert_eq!(selection.engine, "vllm");
         assert!(selection.image.starts_with("vllm/vllm-openai@sha256:"));
         assert!(selection.fingerprint.starts_with("sha256:"));
@@ -5673,7 +5400,7 @@ mod tests {
                 .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    r#"{"model":"ornith-1.5:9b","name":null,"recipe":null,"dry_run":true}"#,
+                    r#"{"model":"ornith-1.5:9b","name":null,"dry_run":true}"#,
                 ))
                 .unwrap(),
         ];
@@ -5874,11 +5601,11 @@ mod tests {
         );
         assert_eq!(
             super::required_scope(&Method::POST, &format!("{API_BASE}/benchmarks")),
-            Some(TokenScope::BenchmarksWrite)
+            None
         );
         assert_eq!(
             super::required_scope(&Method::POST, &format!("{API_BASE}/tunings")),
-            Some(TokenScope::BenchmarksWrite)
+            None
         );
     }
 

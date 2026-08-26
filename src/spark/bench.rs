@@ -221,6 +221,7 @@ fn select_winner(candidates: &[CandidateEvaluationDocument]) -> Option<usize> {
         .map(|(index, _)| index)
 }
 
+#[cfg(test)]
 pub fn apply_winner(
     catalog: &mut RecipeCatalogDocument,
     evaluation: &mut CompatibilityEvaluationDocument,

@@ -3,7 +3,7 @@
 # Spark reference
 
 `sy spark <host>` drives a Spark appliance from your laptop. Use this
-page for admission numbers, gateway paths, and recipe rules. For
+page for admission numbers, gateway paths, and engine-policy rules. For
 install steps see [How to install the Spark agent](../how-to/install-spark.md).
 For serving a model see [How to serve a model on Spark](../how-to/serve-a-model-on-spark.md).
 
@@ -35,9 +35,8 @@ sy spark <host> rollback --dry-run --json
 sy spark <host> cert rotate [--ca] --dry-run --json
 sy spark <host> status --json
 sy spark <host> doctor --json
-sy spark <host> bench <model> [--recipe <id>] [--dry-run] [--json]
-sy spark <host> tune <model> [--objective <agent|interactive|long-context|retrieval>] [--detach] [--dry-run] [--json]
-sy spark <host> serve <model> [--recipe <id>] [--name <instance>] [--dry-run] [--json] [--allow-unverified]
+sy spark <host> serve <model> [--name <instance>] [--detach] [--dry-run] [--json]
+sy spark <host> launch <codex|claude|opencode> [--model <model>] [--config] [--restore] [-y] [-- <agent-args>...]
 sy spark <host> ps [--json]
 sy spark <host> logs <instance> [--limit N]
 sy spark <host> stop <instance>
@@ -50,21 +49,23 @@ sy spark <host> client-config <name> --client <codex|claude-code>
 Before an engine lifecycle is authorised, the agent requires one
 fresh executor-owned snapshot and checks aggregate cold-start
 memory, live `MemAvailable`, full-memory PSI, swap-in activity,
-disk reserve, recipe compatibility, and the single high-memory
-transition lease.
+disk reserve, immutable model provenance, and the single high-memory
+start lease. Stop does not take that lease: reducing memory must remain
+available while a start or startup reconciliation is active.
 
-Capabilities come only from the selected signed recipe. The named
-fixture recipe is a signed, digest-pinned ARM64 HTTP engine used to
-verify the Docker lifecycle without loading weights or using the
-GPU. Omitting `--recipe` uses an exact tuned winner when valid and otherwise
-reports and uses verified vLLM as the fallback.
+The root-owned `/etc/sy/spark/engine.toml` is the only serving policy. It owns
+the vLLM image repository and digest, entrypoint, bounded arguments, environment,
+mounts, network, UID, resource envelope, health probe, public route allowlist,
+context length, sampling defaults, and finite profiles selected from the model's `config.json`
+`model_type`. Rust owns schema validation and security invariants only. It does
+not embed model IDs, image versions, digests, tuning values, or per-model commands.
 
-`bench` evaluates one installed exact recipe; `tune` evaluates the finite set of
-installed locally verified recipes. Both use functional gates for identity,
-capabilities, semantic evidence, safety, isolation, health, and durability. They
-do not measure speed or implicitly download, pull, convert, or launch an engine.
-The persisted winner is keyed by the complete fingerprint and objective; drift
-invalidates it and restores the visible verified vLLM fallback.
+`serve` accepts only a verified model reference and optional instance name. The
+HTTP schema rejects unknown fields, so callers cannot inject an image,
+entrypoint, mount, network, or argv. A model supported by the configured vLLM
+version can be downloaded and served without rebuilding sy. Unsupported models
+fail at bounded startup/semantic validation; sy never substitutes another
+engine.
 
 After health check and an exact model-identity completion probe,
 the agent publishes:
@@ -79,6 +80,23 @@ protocol-native chat completions, Responses, Messages, and token
 count with bounded SSE and client-side tool continuation. Engine-native health,
 metrics, tokenizer, debug, admin, and addresses stay private; the separate
 control-plane metrics endpoint requires an admin token.
+
+The gateway preserves Ornith's parsed reasoning as a distinct channel. OpenAI
+Chat streams `reasoning_content`; Responses streams reasoning summary item
+events and includes the same item in non-stream documents; Anthropic streams a
+thinking block and accepts sy's integrity-checked block back in later turns.
+The sy-owned Codex catalog advertises reasoning-summary support so Codex sends
+the summary request and renders these native Responses events instead of
+discarding them as unsupported model output.
+Anthropic `display: "omitted"` emits the block and signature without thinking
+deltas, while `type: "disabled"` disables thinking in the Ornith template.
+
+Missing sampling values come from the selected profile in `engine.toml` and are
+applied consistently to OpenAI Chat, Responses, and Anthropic Messages. Explicit
+client values are preserved. Runtime workarounds are profile arguments in the
+same file. The current Qwen profile selects eager execution because the compiled
+Qwen 3.5 GEMM path can terminate vLLM on GB10; removing that workaround requires
+only a configuration edit after the upstream path is proven stable.
 
 Warming or recovering generations return protocol-native `503`
 with `Retry-After` and never inherit a stale route.
@@ -95,7 +113,7 @@ Missing or stale telemetry fails closed. The root executor samples
 pressure independently and can suppress restart before an emergency
 victim is stopped; it never selects unlabeled work.
 
-## Recipes and modalities
+## Engine profiles and modalities
 
 - Ornith accepts bounded inline JPEG, PNG, or WebP through OpenAI
   Responses and Anthropic Messages. The adapters validate media
@@ -103,11 +121,10 @@ victim is stopped; it never selects unlabeled work.
   before contacting vLLM. Remote URLs, local paths, traversal,
   unsupported media, and images sent to text-only instances are
   rejected.
-- `Qwen/Qwen3-Embedding-0.6B` has an embedding-only recipe at
-  `POST /openai/<instance>/v1/embeddings` (1024-dim unit-normalised
-  float vectors). It does not expose generation routes. Input
-  order, dimensions, usage, and public model identity are checked
-  by the gateway.
+- Model types needing finite parser arguments are declared as profiles in
+  `engine.toml`. Unknown model types use the declared default profile. Profiles
+  cannot override the image, executable, mounts, network, UID, or arbitrary
+  command line.
 
 ## `client-config`
 
@@ -117,16 +134,39 @@ Code 2.1.241 projection. Both name the protected token and CA
 environment variables without reading, printing, or persisting the
 token.
 
+## `launch`
+
+`launch` runs a registered coding-agent executable on the workstation and
+routes its model calls to one exact managed Spark instance. A healthy matching
+instance is reused; otherwise the configuration-driven `serve` operation is
+followed to healthy. The launcher never guesses or downloads a missing model.
+
+`--model` selects a verified model ID, canonical identity, repository, or exact
+alias. Without it, the saved host/integration selection is reused; an
+interactive terminal can select from installed models. `--config` writes only
+launch-owned state/config and exits. `--dry-run` performs no local or remote
+mutation. `--json` is valid with either of those non-agent modes. `--restore`
+removes only sy-owned Codex profile/catalog files. `-y` permits the fixed Claude
+or OpenCode installer when the executable is absent. Only arguments after `--`
+are forwarded, without a shell.
+
+State is serialized with a local lock. Metadata stores only the token ID; the
+bearer is held separately in a mode-0600 credential file. The child receives an
+inference-only token and pinned CA, never the administrator credential. Claude
+uses the native Anthropic route, Codex uses a sy-owned Responses profile and
+catalog, and OpenCode uses process-local `OPENCODE_CONFIG_CONTENT`.
+
 ## Examples
 
 ```bash
 sy spark dgx-spark serve ornith-1.5:9b --dry-run --json
-sy spark dgx-spark bench ornith-1.5:9b --dry-run --json
-sy spark dgx-spark tune ornith-1.5:9b --objective agent --json
-sy spark dgx-spark serve ornith-1.5:9b --recipe spark-fixture-http-echo-1.0.0 --name fixture
+sy spark dgx-spark launch codex --model ornith-1.5:9b
+sy spark dgx-spark launch claude --model ornith-1.5:9b -- --permission-mode plan
+sy spark dgx-spark launch opencode --model ornith-1.5:9b
+sy spark dgx-spark serve ornith-1.5:9b --name ornith
 sy spark dgx-spark ps --json
-sy spark dgx-spark logs fixture --limit 100
-sy spark dgx-spark stop fixture
+sy spark dgx-spark logs ornith --limit 100
+sy spark dgx-spark stop ornith
 ```
 
 ## See also

@@ -63,7 +63,7 @@ source):
 - **`sy auto`** — `configure`, `list-detectors`.
 - **`sy stack`** — `push --json`, `list --json`.
 - **`sy spark`** — `install`, `status`, `doctor`, `operations`, `token`,
-  `recipes`, `download`, `serve`, `ps`, `logs`, `stop`, `ls`, `show`,
+  `download`, `serve`, `launch`, `ps`, `logs`, `stop`, `ls`, `show`,
   `rm`, `client-config`, `cert status`.
 - **`sy file`** — `doctor`. `sy file ipc <op>` prints the JSON
   response envelope by default.
@@ -141,7 +141,7 @@ load-bearing globals are:
 - `SY_SPARK_*` — Spark client flags (`JSON`, `DRY_RUN`, `YES`,
   `CONFIG_DIR`, `PROBE`, `LISTEN_ADDRESS`, `LISTEN_PORT`,
   `RELEASE_SIGNATURE`, `RELEASE_PUBLIC_KEY`, and per-command
-  `REVISION` / `ALIAS` / `RECIPE` / …). See [`sy spark`](#sy-spark).
+  `REVISION` / `ALIAS` / `INSTANCE_NAME` / …). See [`sy spark`](#sy-spark).
 - `SY_FILE_SOCK` — override `$XDG_RUNTIME_DIR/sy-file.sock` for
   `sy file ipc`.
 - `SY_MON_HISTORY_SIZE`, `SY_MON_TICK_MS`, `SY_MON_BIND`,
@@ -1140,11 +1140,9 @@ sy spark <HOST> <COMMAND>
 | `doctor` | Authenticated, read-only compatibility and security checks. |
 | `operations` | Inspect, `--follow`, or `cancel` durable operations. |
 | `token` | `create` / `list` / `revoke` scoped bearer tokens. Create returns the secret once on stdout. |
-| `recipes` | Explain signed engine recipes and preview selection. Read-only: never downloads, pulls, or starts. |
-| `bench` | Evaluate one exact installed recipe against bounded functional gates; never measures speed or downloads/starts engines. |
-| `tune` | Persist the deterministic compatible winner from installed locally verified recipes; vLLM remains the visible fallback. |
 | `download` | Acquire and verify one immutable Hugging Face model snapshot. |
-| `serve` | Start one recipe-selected instance after fail-closed admission. |
+| `serve` | Start a verified model with the root-configured engine after fail-closed admission. |
+| `launch` | Run Codex, Claude Code, or OpenCode locally against an exact managed Spark model. |
 | `ps` | Desired versus observed managed instances. Does not print the internal bridge address. |
 | `logs` | Bounded, redacted logs for one instance. |
 | `stop` | Persist stopped intent, drain, and remove one instance. An already-absent instance is an idempotent success. |
@@ -1173,19 +1171,42 @@ sy spark <HOST> <COMMAND>
 `--dry-run`, `--yes`, `--json`, and `--config-dir`; exactly one of `--dry-run`
 and `--yes` is required. `cert rotate --ca` explicitly replaces the local CA.
 
+### Options (`launch`)
+
+```text
+sy spark <HOST> launch <codex|claude|opencode> [OPTIONS] [-- <AGENT_ARGS>...]
+```
+
+| Name | Type | Env | Description |
+|------|------|-----|-------------|
+| `--model` | string | `SY_SPARK_LAUNCH_MODEL` | Exact installed model identity or alias. |
+| `--config` | bool | `SY_SPARK_LAUNCH_CONFIG` | Configure launch-owned state and exit. |
+| `--restore` | bool | `SY_SPARK_LAUNCH_RESTORE` | Remove only sy-owned Codex launch files. |
+| `-y`, `--yes` | bool | `SY_SPARK_YES` | Approve a fixed missing-client installer. |
+| `--dry-run` | bool | `SY_SPARK_DRY_RUN` | Resolve/reuse/admit without mutation. |
+| `--json` | bool | `SY_SPARK_JSON` | Emit `sy.spark.launch-plan/v1`; requires `--dry-run` or `--config`. |
+| `--config-dir` | path | `SY_SPARK_CONFIG_DIR` | Protected Spark configuration root. |
+
+Arguments are accepted only after `--` and are passed directly without a
+shell. The agent runs in the current directory with inherited terminal I/O and
+receives a separate inference-only token. The Spark administrator credential is
+never exposed. Exit codes `1..125` from the child are propagated.
+
 ### Token scopes (`token create --scope`)
 
 `models:read`, `models:write`, `instances:read`, `instances:write`,
 `inference`, `logs:read`, `operations:read`, `operations:cancel`,
-`benchmarks:read`, `benchmarks:write`. Repeat `--scope` for each.
+`benchmarks:read`, `benchmarks:write`. Repeat `--scope` for each. The benchmark
+scopes remain wire-compatible for pre-policy clients; the normal CLI has no
+recipe, benchmark, or tuning commands.
 
 ### Exit codes
 
 - `0` — success.
 - `1` — unexpected failure.
 - `2` — usage or local configuration.
-- `3` — remote policy or state rejection (admission denied, recipe
-  refused, and similar).
+- `3` — remote policy or state rejection (admission denied, invalid model
+  intent, and similar).
 - `4` — OpenSSH/SFTP/agent unreachable, TLS identity mismatch, or
   authentication failure.
 
@@ -1205,6 +1226,9 @@ sy spark dgx-spark ps --json
 sy spark dgx-spark token create --name reader --scope models:read \
   --scope operations:read --detach --json
 sy spark dgx-spark client-config ornith --client codex
+sy spark dgx-spark launch codex --model ornith-1.5:9b
+sy spark dgx-spark launch claude --model ornith-1.5:9b -- --permission-mode plan
+sy spark dgx-spark launch opencode --model ornith-1.5:9b
 ```
 
 ### See also
