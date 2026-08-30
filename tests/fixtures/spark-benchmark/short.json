@@ -1,0 +1,59 @@
+{
+  "schema": "sy.spark.benchmark-plan/v1",
+  "warmup_samples": 1,
+  "measured_samples": 10,
+  "sampling": {
+    "temperature": 0.0,
+    "max_output_tokens": 400
+  },
+  "workloads": [
+    {
+      "id": "code",
+      "kind": "code",
+      "timeout_seconds": 600,
+      "request": {
+      "instructions": "Continue the Rust source from the exact prefix. Emit code only, completing the implementation and focused unit tests.",
+      "reasoning": { "effort": "none" },
+      "input": "use std::fmt;\n\n#[derive(Debug, PartialEq)]\npub struct CsvError { pub field_index: usize, pub value: String }\n\nimpl fmt::Display for CsvError {\n    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {\n        write!(f, \"invalid signed integer at field {}: {:?}\", self.field_index, self.value)\n    }\n}\n\npub fn parse_signed_csv(input: &str) -> Result<Vec<i64>, CsvError> {\n    input.split(',').enumerate().map(|(field_index, field)| {"
+      }
+    },
+    {
+      "id": "prose",
+      "kind": "prose",
+      "timeout_seconds": 600,
+      "request": {
+        "instructions": "Write precise technical prose for an experienced systems engineer.",
+        "input": "Explain how an atomic write-verify-rename protocol prevents a partially generated model cache from being trusted after power loss, including filesystem ordering and recovery behavior."
+      }
+    },
+    {
+      "id": "reasoning-tool",
+      "kind": "reasoning_tool",
+      "timeout_seconds": 600,
+      "request": {
+        "instructions": "Use the lookup tool once before giving a concise recommendation.",
+        "input": "Look up the current free-memory reading and decide whether an operation requiring 8 GiB of headroom is admissible.",
+        "tools": [
+          {
+            "type": "function",
+            "name": "lookup",
+            "description": "Read one named metric.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "metric": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "metric"
+              ],
+              "additionalProperties": false
+            }
+          }
+        ],
+        "tool_choice": "required"
+      }
+    }
+  ]
+}

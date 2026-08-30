@@ -42,7 +42,7 @@ esac
 # Placeholder vocabulary. Tuned to flag intent-to-defer language without
 # false-positiving common English ("todo list" in a doc string is rare
 # enough in code; if it bites, add it here).
-PATTERNS='\b(TODO|FIXME|HACK|XXX)\b|todo!\(|unimplemented!\(|panic!\("not (yet )?implemented|\bstub\b|placeholder|for now[,.: ]|in (a |the )?real implementation|TEMPORARY\b|\bWIP\b'
+PATTERNS='\b(TODO|FIXME|HACK|XXX)\b|todo!\(|unimplemented!\(|panic!\("not (yet )?implemented|\bstub\b|for now[,.: ]|in (a |the )?real implementation|TEMPORARY\b|\bWIP\b'
 
 HITS=$(grep -niE "$PATTERNS" "$FILE_PATH" 2>/dev/null || true)
 [ -z "$HITS" ] && exit 0

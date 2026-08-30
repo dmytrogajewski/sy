@@ -33,9 +33,11 @@ email channel is reserved for vulnerability reports.
 
 Save yourself (and the maintainer) a round trip:
 
-1. **Read the README.** [`README.md`](README.md) describes every plane
-   (`aiplane`, `agt`, `knowledge`, `power`, `stack`, `syauth`) and the
-   `sy apply` declarative layer.
+1. **Read the start-here page.** [`docs/intro.md`](docs/intro.md)
+   maps tutorials, how-tos, reference, and explanation.
+   [`README.md`](README.md) describes the planes
+   (`aiplane`, `agt`, `knowledge`, `power`, `file`, `spark`, `stack`,
+   `syauth`) and `sy apply`.
 2. **Search existing issues and discussions.** Someone may have hit
    the same wall already.
 3. **Run `sy doctor`.** Many setup problems surface as a failed

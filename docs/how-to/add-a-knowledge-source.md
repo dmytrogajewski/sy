@@ -82,3 +82,9 @@ and from the waybar tile.
 the source up on every scheduled incremental sync from now on, and
 the `sy-knowledge` MCP server exposes the same hits to any agent
 registered through `sy auto`.
+
+## See also
+
+- [Tutorial: search your local files](../tutorials/search-your-files.md)
+- [CLI: `sy knowledge`](../reference/cli.md#sy-knowledge)
+- [How to wire MCP into your agents](wire-mcp-into-agents.md)

@@ -31,5 +31,5 @@ pub use reserved::{
     MonSnapshotParams, MonSubscribeParams, SystemMethods, MON_SECONDS_MAX, MON_SECONDS_MIN,
     PROTOCOL_VERSION, SYSTEM_METHODS,
 };
-pub use server::{Handler, Server};
+pub use server::{Handler, PeerAuthorizer, PeerCredentials, SameEuidAuthorizer, Server};
 pub use stream::{Event, EventCodec, KIND_CLOSED};

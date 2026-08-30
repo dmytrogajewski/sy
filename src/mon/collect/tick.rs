@@ -37,14 +37,7 @@ pub const KIND_TIMEOUT: &str = "timeout";
 /// rest. Until then the scraper's path discovery still includes them so
 /// the moment a socket appears it gets picked up — failed connects
 /// surface as `MonError { kind: "scrape_failed", … }`.
-pub const KNOWN_PLANES: &[&str] = &[
-    "aiplane",
-    "knowledge",
-    "agt",
-    "supervisor",
-    "stack-bar",
-    "power",
-];
+pub const KNOWN_PLANES: &[&str] = &["aiplane", "knowledge", "agt", "supervisor", "stack-bar"];
 
 /// Resolve one known plane's expected `metrics.sock` path under
 /// `$XDG_RUNTIME_DIR/sy/<plane>/metrics.sock` — the layout SPEC §3

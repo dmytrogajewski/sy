@@ -27,9 +27,8 @@ use std::{
     os::unix::net::UnixStream,
     path::PathBuf,
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
+        mpsc, Arc,
     },
     thread,
     time::Duration,
@@ -41,7 +40,7 @@ use serde::{Deserialize, Serialize};
 use sy_core::{ErrorCode, Priority};
 use sy_ipc::{
     BuildInfo, CancelRegistry, Capabilities, ErrorBody, Handler, HealthFn, HealthSnapshot,
-    HealthState, RequestCodec, ResponseCodec, SCHEMA_VERSION, SystemMethods,
+    HealthState, RequestCodec, ResponseCodec, SystemMethods, SCHEMA_VERSION,
 };
 use tokio::sync::oneshot;
 use tokio_util::codec::{FramedRead, FramedWrite};

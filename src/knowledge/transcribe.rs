@@ -45,7 +45,7 @@ use anyhow::{Context, Result};
 use crate::aiplane::registry::{WorkloadInput, WorkloadKind, WorkloadOutput};
 use crate::aiplane::supervisor::{self, Supervisor};
 
-use super::{KnowledgeError, exit};
+use super::{exit, KnowledgeError};
 
 /// Whisper's fixed input sample rate — 16 kHz mono. Must match the
 /// `Stt` workload's `SAMPLE_RATE` guard.
@@ -333,10 +333,10 @@ mod tests {
             socket: &Path,
         ) -> Result<Box<dyn crate::aiplane::supervisor::child::Child>> {
             use crate::aiplane::worker_ipc::{
-                WorkerHealth, WorkerReq, WorkerResp, serve, write_resp,
+                serve, write_resp, WorkerHealth, WorkerReq, WorkerResp,
             };
             use std::sync::atomic::{AtomicBool, Ordering};
-            use std::sync::{Arc, Mutex, mpsc};
+            use std::sync::{mpsc, Arc, Mutex};
 
             let (req_tx, req_rx) = mpsc::channel::<(WorkerReq, std::os::unix::net::UnixStream)>();
             serve(socket, req_tx)?;

@@ -33,9 +33,8 @@ The module owns no state on disk. The pairing record lives at
 user runtime directory, and the audit log is written to the
 journal by `pam_syauth` and `syauth-presenced` independently.
 
-The `sy syauth install-pam` wrapper bakes in the reality-corrected
-defaults below. Passing `--control` or `--module-args` to the
-wrapper overrides them per invocation.
+The `sy syauth install-pam` wrapper sets the defaults below.
+`--control` or `--module-args` on the wrapper override them.
 
 ## Control flags
 

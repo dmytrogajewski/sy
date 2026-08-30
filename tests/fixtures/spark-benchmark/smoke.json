@@ -1,0 +1,19 @@
+{
+  "schema": "sy.spark.benchmark-plan/v1",
+  "warmup_samples": 0,
+  "measured_samples": 1,
+  "sampling": {
+    "temperature": 0.0,
+    "max_output_tokens": 64
+  },
+  "workloads": [
+    {
+      "id": "smoke",
+      "kind": "prose",
+      "timeout_seconds": 30,
+      "request": {
+        "input": "Reply with OK."
+      }
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "schema": "sy.spark.status/v1",
+  "agent": "0.1.0",
+  "executor": "0.1.0",
+  "read_only": false,
+  "degraded_reasons": [],
+  "database": {
+    "available": true,
+    "journal_mode": "wal",
+    "synchronous": "FULL",
+    "foreign_keys": true,
+    "backup_valid": true,
+    "queue_capacity": 64
+  },
+  "executor_health": {
+    "health": {
+      "schema": "sy.spark.executor.health/v1",
+      "version": "0.1.0",
+      "authorized_agent_uid": 996,
+      "guard_heartbeat": true,
+      "event_heartbeat": true,
+      "event_epoch": 0
+    },
+    "host": {
+      "schema": "sy.spark.executor.host/v1",
+      "hostname": "dgx-spark",
+      "kernel_release": "6.17.0-1022-nvidia",
+      "architecture": "aarch64",
+      "identity_sha256": "8bdc9f06b98d09f7ddbaf1901719535a584d044acc1f9db15c20fc5e56b98999"
+    },
+    "docker": {
+      "schema": "sy.spark.executor.docker/v1",
+      "transport": "unix",
+      "version": "29.2.1",
+      "api_version": "1.53",
+      "minimum_api_version": "1.44",
+      "os": "linux",
+      "architecture": "arm64",
+      "experimental": false
+    },
+    "resources": {
+      "schema": "sy.spark.resources.snapshot/v1",
+      "observed_at_unix_ms": 1788027889916,
+      "mem_total_bytes": 128427978752,
+      "mem_available_bytes": 124289765376,
+      "memory_full_psi_avg10_percent": 0.0,
+      "swap_in_pages_delta": 0,
+      "disk_available_bytes": 110991663104
+    },
+    "resource_policy": {
+      "system_reserve_bytes": 8589934592,
+      "emergency_available_floor_bytes": 8589934592,
+      "disk_reserve_bytes": 107374182400,
+      "startup_guard_interval_ms": 500,
+      "steady_guard_interval_ms": 2000,
+      "emergency_consecutive_samples": 3,
+      "memory_full_psi_avg10_percent": 100.0
+    }
+  }
+}

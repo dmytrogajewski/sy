@@ -8,14 +8,27 @@ agent-first workstation. One repo, one source of truth, zero
 snowflakes: `cargo build --release && ./target/release/sy apply` on a
 fresh machine reproduces the entire system.
 
+You get a desktop that matches this git tree, search over folders
+you register, a file manager on Super+E, and the same CLI for a
+coding agent. An NPU, a DGX
+Spark, and phone-as-key sudo are extras — bring-up does not need
+them. The story is
+[What sy is](docs/explanation/what-sy-is.md); the rest of the docs
+starts at [Start here](docs/intro.md).
+
+![sy sits on Fedora; you and an agent drive the same binary](docs/img/sy-stack.svg)
+
 ```
 sy apply              # render configs/* → ~/.config/, ~/.local/share/, /etc/* (via diff)
 sy aiplane daemon     # on-device NPU inference plane (ORT + VitisAI EP)
 sy agt …              # sandboxed agent runner
 sy knowledge daemon   # semantic search over local files (NPU-accelerated)
-sy power status       # adaptive power governor (ppd shim + bandit + MCP)
+sy file               # native iced file manager (Mod+E)
+sy mon                # layer-shell health dashboard (Super+m)
+sy spark HOST …       # remote DGX Spark model appliance
 sy auto               # auto-configure MCP servers across agents (Claude, …)
 sy stack bar          # layer-shell waybar replacement
+sy profile performance # switch Fedora's tuned-ppd profile (alias: sy pwr)
 sy syauth doctor      # phone-as-key sudo (PAM + BlueZ + Android)
 …
 ```
@@ -29,7 +42,10 @@ for the "no snowflakes" rule that drives the single-binary choice
 and [`AGENTS.md`](AGENTS.md) for the coding-agent persona. For
 one-line definitions of `sy`-specific terms (plane, aiplane,
 re-exec dance, snowflake, VitisAI EP, …) see the
-[glossary](docs/reference/glossary.md).
+[glossary](docs/reference/glossary.md). The browsable site (the
+story, tutorials, how-tos, reference) lives under `docs/` and is
+built by Docusaurus in `website/` — `cd website && npm start` to
+preview.
 
 ## Planes
 
@@ -52,11 +68,166 @@ what to load at start-up.
 - A `workloads::fake` impl returns deterministic vectors so daemon
   tests run on CI without `/dev/accel/accel0`.
 
+### `spark` — remote DGX Spark model appliance
+
+`sy spark <host>` manages a separately installed, authenticated Spark agent.
+Install it with `sy spark <host> install --dry-run --json`, then
+`--yes` plus the signed release inventory and public key; see
+[How to install the Spark agent](docs/how-to/install-spark.md).
+Before an engine lifecycle is authorized, the agent requires one fresh
+executor-owned snapshot and checks aggregate cold-start memory, live
+`MemAvailable`, full-memory PSI, swap-in activity, disk reserve, immutable model
+identity, and the single high-memory start lease. Stops always remain available
+and are not blocked by a start lease.
+
+```text
+sy spark dgx-spark install --dry-run --json
+sy spark dgx-spark install --yes --release-manifest SHA256SUMS --release-signature SHA256SUMS.minisig --release-public-key sy-release.pub
+sy spark dgx-spark status --json
+sy spark dgx-spark download ornith-1.5:35b
+sy spark dgx-spark download ornith-1.5:35b --dry-run --json
+sy spark dgx-spark download owner/model --revision <commit> --alias model:tag
+sy spark dgx-spark download owner/model --revision <commit> --artifact model.gguf --auxiliary projector=mmproj.gguf --alias model:q4
+sy spark dgx-spark serve ornith-1.5:35b --dry-run --json
+sy spark dgx-spark serve ornith-1.5:35b --name ornith
+sy spark dgx-spark ls                 # compact runnable model inventory
+sy spark dgx-spark ps                 # compact active process list
+sy spark dgx-spark ps --json          # same active set as structured data
+sy spark dgx-spark logs ornith --limit 100
+sy spark dgx-spark client-config ornith --client codex
+sy spark dgx-spark client-config ornith --client claude-code
+sy spark dgx-spark launch codex --model ornith-1.5:35b
+sy spark dgx-spark launch claude --model ornith-1.5:35b -- --permission-mode plan
+sy spark dgx-spark launch opencode --model ornith-1.5:35b
+sy spark dgx-spark upgrade --dry-run --json
+sy spark dgx-spark rollback --dry-run --json
+sy spark dgx-spark cert rotate --dry-run --json
+sy spark dgx-spark stop ornith
+```
+
+Serving is configuration-driven. `/etc/sy/spark/engines/*.toml` owns each
+digest-pinned engine image, entrypoint, arguments, artifact-role bindings,
+environment, isolation, resource envelope, routes, health probe, sampling
+defaults, and model-type profiles. `/etc/sy/spark/models.toml` provides optional
+recommended aliases and exact immutable artifacts; it is never an install
+allowlist. Unconfigured repositories use deterministic artifact inspection,
+preferring safetensors with vLLM and then Spark's GGUF quantization defaults.
+Explicit `--artifact` and `--auxiliary` selectors override inspection. Rust validates those schemas and
+constructs the locked container; it contains no model catalog, image version,
+digest, or model-specific launch branch. Uncatalogued downloads label each
+auxiliary as `ROLE=PATH`. Roles are validated lowercase identifiers rather than
+a compiled allowlist. An engine must bind a role to confined arguments or
+explicitly ignore it; for example, llama.cpp binds `projector` to `--mmproj` and
+`draft_model` to `--model-draft`, while `weight_shard` remains a verified file
+discovered from the primary model.
+
+#### Add a Spark model without changing Rust
+
+Add an entry to [`configs/sy/spark/models.toml`](configs/sy/spark/models.toml),
+then build and deploy the signed release. The installed catalog is validated as
+`sy.spark.models/v2` before activation and is loaded when the agent starts.
+Repository revisions must be immutable 40-character commits; artifact paths,
+byte sizes, optional SHA-256 values, typed auxiliaries, quantization, and
+capabilities are data, not compiled policy.
+
+```toml
+[[models]]
+aliases = ["example:27b-q4"]
+repository = "owner/example-GGUF"
+revision = "0123456789abcdef0123456789abcdef01234567"
+
+[models.artifact]
+format = "gguf"
+quantization = "Q4_K_XL"
+capabilities = ["text_generation", "tool_calling"]
+
+[models.artifact.primary]
+path = "example-Q4_K_XL.gguf"
+bytes = 17559178144
+sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+```
+
+If an existing engine matcher accepts the declared format, quantization, and
+capabilities, no engine edit is needed. Otherwise add another complete
+`sy.spark.engine/v3` file under [`configs/sy/spark/engines/`](configs/sy/spark/engines/).
+Selection uses only those traits and priority; an unsupported artifact or an
+equal-priority tie fails validation/admission instead of guessing from a model
+name. A signed upgrade replaces the installed catalogs authoritatively.
+
+`launch` runs Codex, Claude Code, or OpenCode in the current workstation
+directory while inference stays on Spark. It reuses or serves the exact verified
+model, creates a separate inference-only credential for the child, and never
+passes the Spark administrator credential or a shell command to the agent.
+
+Engines run only on the internal managed bridge. `ls` renders the verified models
+available to run as an Ollama-style table; `ps` renders only active lifecycle
+instances without leaking bridge addresses. `show`, `logs`, and JSON retain detailed
+identity and state. Logs are bounded and redacted, and repeated `stop` is successful.
+
+After the engine passes both its health check and an exact model-identity
+completion probe, the agent publishes OpenAI-compatible routes at
+`https://<spark>:9843/openai/<instance>/v1` and native Anthropic Messages routes
+below `/anthropic/<instance>/v1`. The allowlist exposes authenticated models,
+completions, protocol-native chat completions, Responses, Messages, and token
+count with bounded SSE and client-side tool continuation. The read-only
+`client-config` output supports Codex's `wire_api = "responses"` provider and a
+Claude Code 2.1.241 projection; both name the protected token and CA environment
+variables without reading, printing, or persisting the token. Engine-native
+health, metrics, tokenizer, debug, admin, and addresses remain private; the
+control plane exposes only its authenticated, bounded metrics document. Warming or
+recovering generations return protocol-native `503` errors with `Retry-After`
+and never inherit a stale route.
+
+Ornith reasoning remains separate from answer text throughout the gateway:
+OpenAI Chat receives `reasoning_content`, Responses receives native reasoning
+summary items and SSE lifecycles, and Anthropic Messages receives thinking
+blocks, thinking deltas, and a deterministic local integrity signature that can
+be returned on a later tool turn. Anthropic adaptive, manual-budget,
+omitted-display, and disabled thinking retain their distinct wire semantics,
+including signed omitted-thinking history on later tool turns. Omitted sampling values
+come from the selected profile in `/etc/sy/spark/engines/*.toml`; values explicitly supplied by
+the client win. Context length is likewise an engine argument in that profile; a
+translated-stream idle deadline can be raised there for long prefills while retaining a
+bounded default for other profiles. The gateway has no model-name branch or compiled
+tuning constants.
+
+Capabilities are taken only from the configured engine profile. Ornith accepts
+bounded inline JPEG, PNG, or WebP images through OpenAI Responses and Anthropic
+Messages; the adapters validate the declared media type, file magic, decoded
+bytes, image count, and dimensions before contacting vLLM. Remote URLs, local
+paths, traversal, unsupported media, and images sent to text-only instances are
+rejected. A profile exposes only the routes and capabilities declared in
+`/etc/sy/spark/engines/*.toml`; unsupported tasks fail closed rather than selecting another
+runtime.
+
+The admission report exposes the declarative 8 GiB system reserve, 8 GiB
+emergency floor, and 100 GiB disk reserve. Missing or stale telemetry fails
+closed. The root executor independently samples pressure and durably suppresses
+restart before an emergency victim can be stopped; it never selects unlabeled
+work.
+
+Spark application releases are signed, content-addressed bundles installed side by
+side. Signed `SHA256SUMS` covers the ARM binary and the separate model and engine
+TOML files; `scripts/package-spark-release.sh` builds that layout. `upgrade`
+validates active engine identities, the N/N-1 database schema, a verified
+backup, and the protected host fingerprint before switching only the control
+plane; healthy engine containers remain running. Failed semantic health requests
+automatic rollback. `rollback` re-verifies both artifacts and swaps the exact
+`current`/`previous` links. `cert rotate` is SSH-only, preserves overlap material,
+hot-reloads a leaf under the pinned CA, and updates the workstation pin only when
+`--ca` explicitly rotates the CA. Every maintenance mutation requires exactly
+one of `--dry-run` or `--yes`.
+
+These commands never update the DGX OS, kernel, NVIDIA driver, CUDA, firmware,
+Docker, container toolkit, system Python, firewall, swap, clocks, or power
+configuration. Docker restart and host reboot are separate optional operator
+actions and are reported as `not_run` by default.
+
 ### `agt` — sandboxed agent runner
 
-`sy agt` runs coding/inference agents under an intent-whitelisted
-sandbox. The whitelist lives in [`configs/sy/intent_whitelist.toml`](configs/sy/intent_whitelist.toml);
-the runner enforces it before dispatching tool calls. Used by `sy auto`
+`sy agt` runs coding/inference agents under policy-profile sandboxes.
+The profiles live under [`configs/policy/profiles/`](configs/policy/profiles/);
+the runner enforces them before dispatching tool calls. Used by `sy auto`
 to plumb MCP servers into Claude / Cursor / Codex / Gemini configs
 without each tool re-implementing tool-permission policy.
 
@@ -109,32 +280,6 @@ Voice/video notes can be transcribed into the index (Whisper, CPU/iGPU)
 by building with `--features transcribe` (off by default — it vendors
 whisper.cpp and downloads a model).
 
-### `power` — adaptive power governor
-
-The `sy-powerd` user daemon (under `src/power/`) is a power-profiles-daemon
-shim with an adaptive layer on top: cpufreq governor selection, EPP,
-turbo, and `net.hadess.PowerProfiles` D-Bus name ownership are all
-managed declaratively from [`configs/sy/power.toml`](configs/sy/power.toml).
-A contextual bandit picks profile transitions; every decision is
-journaled and reachable over MCP (`sy power mcp`).
-
-```
-sy power status            # current profile, source, rationale
-sy power apply             # apply config rules
-sy power show --json       # full snapshot (governor, EPP, bandit weights)
-```
-
-`sy power show` renders an offline PDF report over the decision journal:
-an executive summary, the per-arm decision mix, cumulative regret against
-the rules-only baseline, and power/reward plots — so you can audit what
-the bandit actually did over a window. Add `--json` for the
-`sy.power.report/v1` schema instead of a PDF, `--out` to pin the path, and
-`--since` to widen the window. The PDF is byte-identical over the same
-audit window once its two wall-clock inputs are pinned via
-`SY_POWER_REPORT_TIMESTAMP` and `SY_POWER_REPORT_MODEL_SHA`.
-
-<img src="assets/sy-power-report.png" alt="sy power show report — executive summary and methodology page" width="600" />
-
 ### Rice — niri + waybar + …
 
 Gruvbox Material Dark Medium. Configs live as
@@ -164,7 +309,7 @@ Stack:
 | Launcher         | fuzzel          | `dnf`                           |
 | Terminal         | foot            | `dnf`                           |
 | Notifications    | mako            | `dnf`                           |
-| File manager     | `sy file` (iced) | productivised under `configs/sy/file*.toml`; opens via `Mod+E` / `sy file --ipc` |
+| File manager     | `sy file` (iced) | configs under `configs/sy/file*.toml`; opens via `Mod+E` / `sy file` |
 | Lock             | swaylock        | `dnf`                           |
 | Idle             | swayidle        | `dnf` (DPMS via `niri msg`)     |
 | Night light      | wlsunset        | `dnf`                           |
@@ -203,7 +348,6 @@ the PAM module's control flags and arguments are in
 │   ├── aiplane/              # NPU plane: registry, session pool, IPC, daemon
 │   ├── agt/                  # sandboxed agent runner
 │   ├── knowledge/            # qdrant-backed semantic search
-│   ├── power/                # adaptive power governor
 │   ├── supervision/          # sy.target supervisor + unit linker
 │   ├── stack/                # layer-shell waybar replacement
 │   ├── doctor/               # cross-plane health probes
@@ -211,7 +355,6 @@ the PAM module's control flags and arguments are in
 ├── configs/                  # declarative config (rendered by `sy apply`)
 │   ├── systemd/{system,user}/*.service|*.target
 │   ├── niri/ waybar/ mako/ fuzzel/ foot/ swaylock/
-│   ├── sy/{power,intent_whitelist}.toml
 │   ├── dbus-1/ policy/ selinux/ udev/ modprobe.d/ grub/ dracut/
 │   └── …
 ├── scripts/                  # one-shot helpers (prep_npu_workload.py …)
@@ -380,12 +523,6 @@ sy knowledge mcp                   # MCP server (stdio): knowledge_search,
                                    #   knowledge_get_chunk, knowledge_index,
                                    #   knowledge_list_sources
 
-# power
-sy power status [--json]
-sy power apply
-sy power show --json
-sy power mcp
-
 # mon — system health popup + 1 Hz aggregator
 sy mon                             # toggle the layer-shell popup (Super+m)
 sy mon snapshot [--json]           # one-shot snapshot from the aggregator
@@ -397,7 +534,7 @@ sy mon waybar                      # waybar custom-module tile (ok/degraded/down
 sy agt run <prompt> [--profile <name>]
 
 # auto-configure MCP across agents
-sy auto                            # plumbs sy-knowledge / sy-power into Claude, Cursor, Codex, Gemini
+sy auto                            # configures sy MCP servers for Claude, Cursor, Codex, Gemini
 
 # syauth
 sy syauth install-pam --service sudo

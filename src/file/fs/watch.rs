@@ -127,7 +127,8 @@ fn filter_inputs(paths: &[PathBuf]) -> Vec<PathBuf> {
     out
 }
 
-/// Spawn the `notify::recommended_watcher` on a blocking thread.
+/// Spawn the `notify::recommended_watcher` on a blocking thread and
+/// wait until every watch registration attempt has completed.
 /// The watcher is moved into the spawned closure so it lives as
 /// long as the channel does; dropping `raw_tx` from the debouncer
 /// side propagates a `mpsc::error::SendError` here that ends the
@@ -138,11 +139,13 @@ fn spawn_watcher(paths: Vec<PathBuf>, raw_tx: mpsc::Sender<notify::Result<Event>
     if paths.is_empty() {
         return;
     }
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
     std::thread::spawn(move || {
         let mut watcher = match build_watcher(raw_tx) {
             Ok(w) => w,
             Err(e) => {
                 eprintln!("fs::watch: failed to build watcher: {e:#}");
+                let _ = ready_tx.send(());
                 return;
             }
         };
@@ -151,6 +154,7 @@ fn spawn_watcher(paths: Vec<PathBuf>, raw_tx: mpsc::Sender<notify::Result<Event>
                 eprintln!("fs::watch: watcher.watch({p:?}) failed: {e}");
             }
         }
+        let _ = ready_tx.send(());
         // Park forever; the OS drops the watcher when the thread is
         // joined (i.e. when the runtime tears down the test binary
         // or the daemon shuts down). We can't `recv()` from this
@@ -160,6 +164,7 @@ fn spawn_watcher(paths: Vec<PathBuf>, raw_tx: mpsc::Sender<notify::Result<Event>
             std::thread::park();
         }
     });
+    let _ = ready_rx.recv();
 }
 
 fn build_watcher(
@@ -322,13 +327,10 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let dir = tmp.path().to_path_buf();
         let mut stream = Box::pin(watch(std::slice::from_ref(&dir)));
-        // Give the inotify thread one runtime tick to register the
-        // watch before we trigger the event.
-        tokio::time::sleep(Duration::from_millis(20)).await;
         tokio::fs::File::create(dir.join("foo"))
             .await
             .expect("create foo");
-        let ev = tokio::time::timeout(Duration::from_millis(200), stream.next())
+        let ev = tokio::time::timeout(Duration::from_millis(100), stream.next())
             .await
             .expect("timeout waiting for create event");
         match ev {

@@ -1,0 +1,3423 @@
+//! Strict, generation-safe inference gateway routing.
+
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    sync::Arc,
+};
+
+use arc_swap::ArcSwap;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use image::{ImageFormat, ImageReader};
+use serde::Deserialize;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+use super::upstream::{
+    decode_embedding_response, GenerationEvent, ImagePart, ObservedRoute,
+    DEFAULT_STREAM_IDLE_TIMEOUT,
+};
+
+pub const MAX_COMPLETION_BODY_BYTES: usize = 1024 * 1024;
+pub const RETRY_AFTER_SECONDS: &str = "1";
+pub const MAX_OUTPUT_TOKENS: u64 = 32_768;
+const MAX_INSTANCE_CONCURRENCY: usize = 4;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SamplingPolicy {
+    pub defaults: BTreeMap<String, serde_json::Number>,
+    #[serde(default)]
+    pub reasoning_effort_map: BTreeMap<String, String>,
+    #[serde(default)]
+    pub chat_template_kwargs: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VisionPolicy {
+    pub processor_sha256: String,
+    pub media_types: BTreeSet<String>,
+    pub max_bytes: usize,
+    pub max_total_bytes: usize,
+    pub max_count: usize,
+    pub max_width: u32,
+    pub max_height: u32,
+    pub health_media_type: String,
+    pub health_image_base64: String,
+    pub health_image_sha256: String,
+    pub health_prompt: String,
+    pub health_expected_text: String,
+    pub health_max_tokens: u32,
+    pub health_disable_thinking: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmbeddingPolicy {
+    pub dimensions: usize,
+    pub max_batch: usize,
+    pub max_input_bytes: usize,
+    pub normalized: bool,
+    pub normalization_tolerance_ppm: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GatewayProfile {
+    pub capabilities: BTreeSet<String>,
+    pub vision: Option<VisionPolicy>,
+    pub embeddings: Option<EmbeddingPolicy>,
+    pub startup_protocol_probe: bool,
+    #[serde(default)]
+    pub native_responses: bool,
+    #[serde(default)]
+    pub native_response_timeout_seconds: u64,
+    #[serde(default)]
+    pub stream_idle_timeout_seconds: u64,
+    #[serde(default)]
+    pub sampling: SamplingPolicy,
+}
+
+impl GatewayProfile {
+    pub fn stream_idle_timeout(&self) -> std::time::Duration {
+        if self.stream_idle_timeout_seconds == 0 {
+            DEFAULT_STREAM_IDLE_TIMEOUT
+        } else {
+            std::time::Duration::from_secs(self.stream_idle_timeout_seconds)
+        }
+    }
+
+    pub fn text() -> Self {
+        Self {
+            capabilities: ["text_generation".into(), "tool_calling".into()].into(),
+            vision: None,
+            embeddings: None,
+            startup_protocol_probe: true,
+            native_responses: false,
+            native_response_timeout_seconds: 0,
+            stream_idle_timeout_seconds: 0,
+            sampling: SamplingPolicy::default(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn embedding(
+        dimensions: usize,
+        max_batch: usize,
+        max_input_bytes: usize,
+        normalized: bool,
+        normalization_tolerance_ppm: u32,
+    ) -> Self {
+        Self {
+            capabilities: ["text_embeddings".into()].into(),
+            vision: None,
+            embeddings: Some(EmbeddingPolicy {
+                dimensions,
+                max_batch,
+                max_input_bytes,
+                normalized,
+                normalization_tolerance_ppm,
+            }),
+            startup_protocol_probe: true,
+            native_responses: false,
+            native_response_timeout_seconds: 0,
+            stream_idle_timeout_seconds: 0,
+            sampling: SamplingPolicy::default(),
+        }
+    }
+
+    pub fn allows(&self, action: PublicAction) -> bool {
+        match action {
+            PublicAction::Models => !self.capabilities.is_empty(),
+            PublicAction::Completions | PublicAction::Chat | PublicAction::Responses => {
+                self.capabilities.contains("text_generation")
+            }
+            PublicAction::Embeddings => self.capabilities.contains("text_embeddings"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GenerationRequest {
+    pub body: Vec<u8>,
+    pub stream: bool,
+    pub custom_tools: BTreeSet<String>,
+    pub omit_reasoning: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct NativeResponsesRequest {
+    pub body: Vec<u8>,
+    pub stream: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct EmbeddingsRequest {
+    pub body: Vec<u8>,
+    pub input_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiError {
+    pub code: &'static str,
+    pub message: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenAiStreamEvent {
+    pub name: &'static str,
+    pub data: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnthropicStreamEvent {
+    pub name: &'static str,
+    pub data: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnthropicError {
+    pub error_type: &'static str,
+    pub message: &'static str,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnthropicMessageRequest {
+    model: String,
+    messages: Vec<AnthropicMessage>,
+    #[serde(default)]
+    system: Option<AnthropicContent>,
+    max_tokens: u64,
+    #[serde(default)]
+    stream: bool,
+    #[serde(default)]
+    tools: Vec<AnthropicTool>,
+    #[serde(default)]
+    tool_choice: Option<AnthropicToolChoice>,
+    #[serde(default)]
+    stop_sequences: Vec<String>,
+    #[serde(default)]
+    temperature: Option<f64>,
+    #[serde(default)]
+    top_p: Option<f64>,
+    #[serde(default)]
+    top_k: Option<u64>,
+    #[serde(default)]
+    metadata: Option<AnthropicMetadata>,
+    #[serde(default)]
+    thinking: Option<AnthropicThinking>,
+    #[serde(default)]
+    context_management: Option<AnthropicContextManagement>,
+    #[serde(default)]
+    output_config: Option<AnthropicOutputConfig>,
+    #[serde(default)]
+    service_tier: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnthropicMessage {
+    role: String,
+    content: AnthropicContent,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AnthropicContent {
+    Text(String),
+    Blocks(Vec<AnthropicContentBlock>),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum AnthropicContentBlock {
+    Text {
+        text: String,
+        #[serde(default)]
+        cache_control: Option<AnthropicCacheControl>,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+        #[serde(default)]
+        cache_control: Option<AnthropicCacheControl>,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: AnthropicToolResultContent,
+        #[serde(default)]
+        is_error: bool,
+        #[serde(default)]
+        cache_control: Option<AnthropicCacheControl>,
+    },
+    Image {
+        source: AnthropicImageSource,
+    },
+    Thinking {
+        thinking: String,
+        signature: String,
+        #[serde(default)]
+        cache_control: Option<AnthropicCacheControl>,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnthropicImageSource {
+    #[serde(rename = "type")]
+    kind: String,
+    media_type: String,
+    data: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AnthropicToolResultContent {
+    Text(String),
+    Blocks(Vec<AnthropicToolResultText>),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnthropicToolResultText {
+    #[serde(rename = "type")]
+    kind: String,
+    text: String,
+    #[serde(default)]
+    cache_control: Option<AnthropicCacheControl>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnthropicCacheControl {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    ttl: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnthropicTool {
+    name: String,
+    #[serde(default)]
+    description: String,
+    input_schema: Value,
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    cache_control: Option<AnthropicCacheControl>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnthropicToolChoice {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    disable_parallel_tool_use: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnthropicMetadata {
+    #[serde(default)]
+    user_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnthropicThinking {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    budget_tokens: Option<u64>,
+    #[serde(default)]
+    display: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnthropicContextManagement {
+    #[serde(default)]
+    edits: Vec<AnthropicContextEdit>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnthropicContextEdit {
+    #[serde(rename = "type")]
+    kind: String,
+    keep: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnthropicOutputConfig {
+    #[serde(default)]
+    effort: Option<String>,
+    #[serde(default)]
+    format: Option<AnthropicOutputFormat>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnthropicOutputFormat {
+    #[serde(rename = "type")]
+    kind: String,
+    schema: Value,
+}
+
+#[derive(Debug, Default)]
+struct ToolCall {
+    call_id: String,
+    name: String,
+    arguments: String,
+    announced: bool,
+    output_index: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct AnthropicToolCall {
+    call_id: String,
+    name: String,
+    arguments: String,
+    block_index: Option<u32>,
+}
+
+pub struct AnthropicEncoder {
+    id: String,
+    model: String,
+    reasoning: String,
+    reasoning_index: Option<u32>,
+    omit_reasoning: bool,
+    text: String,
+    text_index: Option<u32>,
+    tools: BTreeMap<u32, AnthropicToolCall>,
+    usage: (u64, u64),
+    output_bytes: usize,
+    finish_reason: Option<String>,
+    next_index: u32,
+    pending: VecDeque<AnthropicStreamEvent>,
+}
+
+impl AnthropicEncoder {
+    pub fn new(model: String) -> Self {
+        Self::create(model, false)
+    }
+
+    pub fn with_omitted_reasoning(model: String) -> Self {
+        Self::create(model, true)
+    }
+
+    fn create(model: String, omit_reasoning: bool) -> Self {
+        let id = format!("msg_{}", ulid::Ulid::new().to_string().to_ascii_lowercase());
+        let mut encoder = Self {
+            id,
+            model,
+            reasoning: String::new(),
+            reasoning_index: None,
+            omit_reasoning,
+            text: String::new(),
+            text_index: None,
+            tools: BTreeMap::new(),
+            usage: (0, 0),
+            output_bytes: 0,
+            finish_reason: None,
+            next_index: 0,
+            pending: VecDeque::new(),
+        };
+        encoder.event(
+            "message_start",
+            serde_json::json!({"message":{
+            "id":encoder.id,"type":"message","role":"assistant","content":[],
+            "model":encoder.model,"stop_reason":null,"stop_sequence":null,
+            "usage":{"input_tokens":0,"output_tokens":0}}}),
+        );
+        encoder
+    }
+
+    pub fn pop(&mut self) -> Option<AnthropicStreamEvent> {
+        self.pending.pop_front()
+    }
+
+    pub fn final_document(&self) -> Value {
+        let mut content = Vec::new();
+        if self.reasoning_index.is_some() {
+            content.push(serde_json::json!({"type":"thinking",
+                "thinking":if self.omit_reasoning { "" } else { &self.reasoning },
+                "signature":local_reasoning_signature(&self.reasoning)}));
+        }
+        if self.text_index.is_some() {
+            content.push(serde_json::json!({"type":"text","text":self.text}));
+        }
+        content.extend(self.tools.values().map(|tool| serde_json::json!({
+            "type":"tool_use","id":tool.call_id,"name":tool.name,
+            "input":serde_json::from_str::<Value>(&tool.arguments).unwrap_or_else(|_| serde_json::json!({}))
+        })));
+        serde_json::json!({"id":self.id,"type":"message","role":"assistant",
+            "model":self.model,"content":content,"stop_reason":anthropic_stop_reason(self.finish_reason.as_deref()),
+            "stop_sequence":null,"usage":{"input_tokens":self.usage.0,"output_tokens":self.usage.1}})
+    }
+
+    pub fn accept(&mut self, event: GenerationEvent) -> Result<(), AnthropicError> {
+        match event {
+            GenerationEvent::ReasoningDelta { text } => self.reasoning_delta(text),
+            GenerationEvent::TextDelta { text } => self.text_delta(text),
+            GenerationEvent::ToolCallDelta {
+                index,
+                call_id,
+                name,
+                arguments,
+            } => self.tool_delta(index, call_id, name, arguments),
+            GenerationEvent::Usage {
+                prompt_tokens,
+                completion_tokens,
+            } => {
+                self.usage = (prompt_tokens, completion_tokens);
+                Ok(())
+            }
+            GenerationEvent::Finished { finish_reason } => {
+                self.finish_reason = finish_reason;
+                Ok(())
+            }
+            GenerationEvent::Done => self.done(),
+        }
+    }
+
+    pub fn fail(&mut self) {
+        self.event(
+            "error",
+            serde_json::json!({"error":{
+            "type":"api_error","message":"upstream stream failed"}}),
+        );
+    }
+
+    fn event(&mut self, name: &'static str, fields: Value) {
+        let mut data = fields.as_object().cloned().unwrap_or_default();
+        data.insert("type".into(), Value::String(name.into()));
+        self.pending.push_back(AnthropicStreamEvent {
+            name,
+            data: Value::Object(data),
+        });
+    }
+
+    fn text_delta(&mut self, text: String) -> Result<(), AnthropicError> {
+        if self.output_bytes.saturating_add(text.len()) > MAX_COMPLETION_BODY_BYTES {
+            return Err(anthropic_invalid(
+                "response exceeds the bounded output buffer",
+            ));
+        }
+        let index = match self.text_index {
+            Some(index) => index,
+            None => {
+                let index = self.allocate_index();
+                self.text_index = Some(index);
+                self.event(
+                    "content_block_start",
+                    serde_json::json!({"index":index,
+                    "content_block":{"type":"text","text":""}}),
+                );
+                index
+            }
+        };
+        self.output_bytes = self.output_bytes.saturating_add(text.len());
+        self.text.push_str(&text);
+        self.event(
+            "content_block_delta",
+            serde_json::json!({"index":index,
+            "delta":{"type":"text_delta","text":text}}),
+        );
+        Ok(())
+    }
+
+    fn reasoning_delta(&mut self, text: String) -> Result<(), AnthropicError> {
+        if self.output_bytes.saturating_add(text.len()) > MAX_COMPLETION_BODY_BYTES {
+            return Err(anthropic_invalid(
+                "response exceeds the bounded output buffer",
+            ));
+        }
+        let index = match self.reasoning_index {
+            Some(index) => index,
+            None => {
+                let index = self.allocate_index();
+                self.reasoning_index = Some(index);
+                self.event(
+                    "content_block_start",
+                    serde_json::json!({"index":index,
+                    "content_block":{"type":"thinking","thinking":"","signature":""}}),
+                );
+                index
+            }
+        };
+        self.output_bytes = self.output_bytes.saturating_add(text.len());
+        self.reasoning.push_str(&text);
+        if !self.omit_reasoning {
+            self.event(
+                "content_block_delta",
+                serde_json::json!({"index":index,
+                "delta":{"type":"thinking_delta","thinking":text}}),
+            );
+        }
+        Ok(())
+    }
+
+    fn tool_delta(
+        &mut self,
+        engine_index: u32,
+        call_id: Option<String>,
+        name: Option<String>,
+        arguments: String,
+    ) -> Result<(), AnthropicError> {
+        let tool = self.tools.entry(engine_index).or_default();
+        if let Some(call_id) = call_id {
+            tool.call_id = call_id;
+        }
+        if let Some(name) = name {
+            tool.name = name;
+        }
+        if self.output_bytes.saturating_add(arguments.len()) > MAX_COMPLETION_BODY_BYTES {
+            return Err(anthropic_invalid(
+                "tool input exceeds the bounded output buffer",
+            ));
+        }
+        self.output_bytes = self.output_bytes.saturating_add(arguments.len());
+        tool.arguments.push_str(&arguments);
+        let announce = tool.block_index.is_none();
+        let call_id = tool.call_id.clone();
+        let name = tool.name.clone();
+        let index = tool.block_index;
+        let index = if let Some(index) = index {
+            index
+        } else {
+            let index = self.allocate_index();
+            let Some(tool) = self.tools.get_mut(&engine_index) else {
+                return Err(anthropic_invalid("upstream tool state is invalid"));
+            };
+            tool.block_index = Some(index);
+            index
+        };
+        if announce {
+            self.event(
+                "content_block_start",
+                serde_json::json!({"index":index,
+                "content_block":{"type":"tool_use","id":call_id,"name":name,"input":{}}}),
+            );
+        }
+        if !arguments.is_empty() {
+            self.event(
+                "content_block_delta",
+                serde_json::json!({"index":index,
+                "delta":{"type":"input_json_delta","partial_json":arguments}}),
+            );
+        }
+        Ok(())
+    }
+
+    fn allocate_index(&mut self) -> u32 {
+        let index = self.next_index;
+        self.next_index = self.next_index.saturating_add(1);
+        index
+    }
+
+    fn done(&mut self) -> Result<(), AnthropicError> {
+        for tool in self.tools.values() {
+            if tool.call_id.is_empty()
+                || tool.name.is_empty()
+                || serde_json::from_str::<Value>(&tool.arguments).is_err()
+            {
+                return Err(anthropic_invalid("upstream tool input is invalid"));
+            }
+        }
+        let mut indices = self
+            .reasoning_index
+            .into_iter()
+            .chain(self.text_index)
+            .chain(self.tools.values().filter_map(|tool| tool.block_index))
+            .collect::<Vec<_>>();
+        indices.sort_unstable();
+        for index in indices {
+            if self.reasoning_index == Some(index) {
+                self.event(
+                    "content_block_delta",
+                    serde_json::json!({"index":index,"delta":{"type":"signature_delta",
+                        "signature":local_reasoning_signature(&self.reasoning)}}),
+                );
+            }
+            self.event("content_block_stop", serde_json::json!({"index":index}));
+        }
+        self.event("message_delta", serde_json::json!({"delta":{
+            "stop_reason":anthropic_stop_reason(self.finish_reason.as_deref()),"stop_sequence":null},
+            "usage":{"input_tokens":self.usage.0,"output_tokens":self.usage.1}}));
+        self.event("message_stop", serde_json::json!({}));
+        Ok(())
+    }
+}
+
+fn local_reasoning_signature(reasoning: &str) -> String {
+    format!("sy-local-v1:{:x}", Sha256::digest(reasoning.as_bytes()))
+}
+
+fn valid_local_reasoning_signature(reasoning: &str, signature: &str) -> bool {
+    if !reasoning.is_empty() {
+        return signature == local_reasoning_signature(reasoning);
+    }
+    signature
+        .strip_prefix("sy-local-v1:")
+        .is_some_and(|digest| {
+            digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+}
+
+fn anthropic_stop_reason(reason: Option<&str>) -> &'static str {
+    match reason {
+        Some("length") => "max_tokens",
+        Some("tool_calls") => "tool_use",
+        Some("stop") | None => "end_turn",
+        Some(_) => "stop_sequence",
+    }
+}
+
+pub struct ResponsesEncoder {
+    id: String,
+    model: String,
+    custom_tools: BTreeSet<String>,
+    reasoning: String,
+    reasoning_index: Option<u32>,
+    text: String,
+    text_index: Option<u32>,
+    tools: BTreeMap<u32, ToolCall>,
+    usage: (u64, u64),
+    output_bytes: usize,
+    finish_reason: Option<String>,
+    sequence: u64,
+    next_index: u32,
+    pending: VecDeque<OpenAiStreamEvent>,
+}
+
+fn invalid_request(message: &'static str) -> OpenAiError {
+    OpenAiError {
+        code: "invalid_request_error",
+        message,
+    }
+}
+
+fn apply_sampling_defaults(object: &mut serde_json::Map<String, Value>, policy: &SamplingPolicy) {
+    for (key, value) in &policy.defaults {
+        if object.get(key).is_none_or(Value::is_null) {
+            object.insert(key.clone(), Value::Number(value.clone()));
+        }
+    }
+    if policy.chat_template_kwargs.is_empty() {
+        return;
+    }
+    let template = object
+        .entry("chat_template_kwargs")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if let Some(template) = template.as_object_mut() {
+        for (key, value) in &policy.chat_template_kwargs {
+            template.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+}
+
+fn omit_empty_tool_controls(object: &mut serde_json::Map<String, Value>) {
+    if object
+        .get("tools")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        object.remove("tools");
+        object.remove("tool_choice");
+        object.remove("parallel_tool_calls");
+    }
+}
+
+#[derive(Default)]
+struct ImageBudget {
+    count: usize,
+    bytes: usize,
+}
+
+fn parse_data_uri(value: &str) -> Result<(&str, &str), OpenAiError> {
+    let value = value
+        .strip_prefix("data:")
+        .ok_or_else(|| invalid_request("remote and file image URLs are unsupported"))?;
+    let (media_type, data) = value
+        .split_once(";base64,")
+        .ok_or_else(|| invalid_request("image data URI must contain base64 content"))?;
+    if media_type.is_empty() || data.is_empty() {
+        return Err(invalid_request("image data URI is empty"));
+    }
+    Ok((media_type, data))
+}
+
+fn decode_image(
+    media_type: &str,
+    encoded: &str,
+    policy: Option<&VisionPolicy>,
+    budget: &mut ImageBudget,
+) -> Result<ImagePart, OpenAiError> {
+    let policy = policy.ok_or_else(|| invalid_request("image input requires a vision profile"))?;
+    if !policy.media_types.contains(media_type)
+        || encoded.len() > policy.max_bytes.saturating_add(2) / 3 * 4 + 4
+    {
+        return Err(invalid_request(
+            "image format or encoded size is unsupported",
+        ));
+    }
+    let bytes = BASE64
+        .decode(encoded)
+        .map_err(|_| invalid_request("image base64 is invalid"))?;
+    if bytes.is_empty()
+        || bytes.len() > policy.max_bytes
+        || budget.count >= policy.max_count
+        || budget.bytes.saturating_add(bytes.len()) > policy.max_total_bytes
+    {
+        return Err(invalid_request("image byte or count limit is exceeded"));
+    }
+    let format = match media_type {
+        "image/png" if bytes.starts_with(b"\x89PNG\r\n\x1a\n") => ImageFormat::Png,
+        "image/jpeg" if bytes.starts_with(b"\xff\xd8\xff") => ImageFormat::Jpeg,
+        "image/webp"
+            if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP".as_slice()) =>
+        {
+            ImageFormat::WebP
+        }
+        _ => {
+            return Err(invalid_request(
+                "image media type does not match its magic bytes",
+            ))
+        }
+    };
+    let (width, height) = ImageReader::with_format(std::io::Cursor::new(&bytes), format)
+        .into_dimensions()
+        .map_err(|_| invalid_request("image header is invalid"))?;
+    if width == 0 || height == 0 || width > policy.max_width || height > policy.max_height {
+        return Err(invalid_request("image dimensions exceed the profile limit"));
+    }
+    budget.count += 1;
+    budget.bytes += bytes.len();
+    Ok(ImagePart {
+        media_type: media_type.into(),
+        bytes,
+        width,
+        height,
+    })
+}
+
+fn canonical_image(image: &ImagePart) -> Value {
+    serde_json::json!({
+        "type":"image_url",
+        "image_url":{"url":format!("data:{};base64,{}", image.media_type, BASE64.encode(&image.bytes))}
+    })
+}
+
+pub fn vision_health_image(policy: &VisionPolicy) -> Result<ImagePart, OpenAiError> {
+    if policy.health_prompt.is_empty()
+        || policy.health_prompt.len() > 256
+        || policy.health_expected_text.is_empty()
+        || policy.health_expected_text.len() > 64
+        || !(1..=256).contains(&policy.health_max_tokens)
+        || !policy.health_disable_thinking
+    {
+        return Err(invalid_request("vision health contract is invalid"));
+    }
+    let mut budget = ImageBudget::default();
+    let image = decode_image(
+        &policy.health_media_type,
+        &policy.health_image_base64,
+        Some(policy),
+        &mut budget,
+    )?;
+    if format!("{:x}", Sha256::digest(&image.bytes)) != policy.health_image_sha256 {
+        return Err(invalid_request("vision health image identity changed"));
+    }
+    Ok(image)
+}
+
+impl ResponsesEncoder {
+    fn custom_input(arguments: &str) -> String {
+        serde_json::from_str::<Value>(arguments)
+            .ok()
+            .and_then(|value| value["input"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| arguments.to_owned())
+    }
+
+    pub fn new(model: String, custom_tools: BTreeSet<String>) -> Self {
+        let id = format!(
+            "resp_{}",
+            ulid::Ulid::new().to_string().to_ascii_lowercase()
+        );
+        let mut encoder = Self {
+            id,
+            model,
+            custom_tools,
+            reasoning: String::new(),
+            reasoning_index: None,
+            text: String::new(),
+            text_index: None,
+            tools: BTreeMap::new(),
+            usage: (0, 0),
+            output_bytes: 0,
+            finish_reason: None,
+            sequence: 0,
+            next_index: 0,
+            pending: VecDeque::new(),
+        };
+        encoder.push("response.created", "in_progress");
+        encoder.push("response.in_progress", "in_progress");
+        encoder
+    }
+
+    pub fn pop(&mut self) -> Option<OpenAiStreamEvent> {
+        self.pending.pop_front()
+    }
+
+    pub fn fail(&mut self) {
+        let sequence = self.next_sequence();
+        self.pending.push_back(OpenAiStreamEvent { name: "response.failed",
+            data: serde_json::json!({"type":"response.failed","response":{
+                "id":self.id,"object":"response","status":"failed","model":self.model,
+                "output":self.output_items(),"error":{"code":"server_error","message":"upstream stream failed"}},
+                "sequence_number":sequence}) });
+    }
+
+    pub fn final_document(&self) -> Value {
+        self.document(if self.finish_reason.as_deref() == Some("length") {
+            "incomplete"
+        } else {
+            "completed"
+        })
+    }
+
+    pub fn accept(&mut self, event: GenerationEvent) -> Result<(), OpenAiError> {
+        match event {
+            GenerationEvent::ReasoningDelta { text } => self.reasoning_delta(text),
+            GenerationEvent::TextDelta { text } => self.text_delta(text),
+            GenerationEvent::ToolCallDelta {
+                index,
+                call_id,
+                name,
+                arguments,
+            } => self.tool_delta(index, call_id, name, arguments),
+            GenerationEvent::Usage {
+                prompt_tokens,
+                completion_tokens,
+            } => {
+                self.usage = (prompt_tokens, completion_tokens);
+                Ok(())
+            }
+            GenerationEvent::Finished { finish_reason } => {
+                self.finish_reason = finish_reason;
+                Ok(())
+            }
+            GenerationEvent::Done => self.done(),
+        }
+    }
+
+    fn push(&mut self, name: &'static str, status: &str) {
+        let sequence = self.next_sequence();
+        self.pending.push_back(OpenAiStreamEvent {
+            name,
+            data: serde_json::json!({"type":name,"sequence_number":sequence,"response":self.document(status)}),
+        });
+    }
+
+    fn event(&mut self, name: &'static str, fields: Value) {
+        let mut data = fields.as_object().cloned().unwrap_or_default();
+        data.insert("type".into(), Value::String(name.into()));
+        data.insert("sequence_number".into(), Value::from(self.next_sequence()));
+        self.pending.push_back(OpenAiStreamEvent {
+            name,
+            data: Value::Object(data),
+        });
+    }
+
+    fn next_sequence(&mut self) -> u64 {
+        let current = self.sequence;
+        self.sequence += 1;
+        current
+    }
+
+    fn document(&self, status: &str) -> Value {
+        serde_json::json!({"id":self.id,"object":"response","created_at":chrono::Utc::now().timestamp(),
+            "status":status,"model":self.model,"output":self.output_items(),
+            "usage":{"input_tokens":self.usage.0,"output_tokens":self.usage.1,
+                "total_tokens":self.usage.0.saturating_add(self.usage.1)},"error":null,
+            "incomplete_details":if status == "incomplete" { Some(serde_json::json!({"reason":"max_output_tokens"})) } else { None }})
+    }
+
+    fn output_items(&self) -> Vec<Value> {
+        let mut output = Vec::new();
+        if let Some(index) = self.reasoning_index {
+            output.push((
+                index,
+                serde_json::json!({"id":format!("rs_{}", &self.id[5..]),
+                "type":"reasoning","status":"completed","summary":[{
+                    "type":"summary_text","text":self.reasoning}]}),
+            ));
+        }
+        if let Some(index) = self.text_index {
+            output.push((
+                index,
+                serde_json::json!({"id":format!("msg_{}", &self.id[5..]),
+            "type":"message","status":"completed","role":"assistant","phase":self.text_phase(),"content":[{
+                "type":"output_text","text":self.text,"annotations":[]}]}),
+            ));
+        }
+        output.extend(self.tools.values().filter_map(|tool| tool.output_index.map(|index| (index, {
+            if self.custom_tools.contains(&tool.name) {
+                serde_json::json!({"id":format!("ctc_{}",tool.call_id),"type":"custom_tool_call","status":"completed","call_id":tool.call_id,"name":tool.name,"input":Self::custom_input(&tool.arguments)})
+            } else {
+                serde_json::json!({"id":format!("fc_{}",tool.call_id),"type":"function_call","status":"completed","call_id":tool.call_id,"name":tool.name,"arguments":tool.arguments})
+            }
+        }))));
+        output.sort_by_key(|(index, _)| *index);
+        output.into_iter().map(|(_, item)| item).collect()
+    }
+
+    fn text_phase(&self) -> &'static str {
+        if self.tools.is_empty() {
+            "final_answer"
+        } else {
+            "commentary"
+        }
+    }
+
+    fn allocate_index(&mut self) -> u32 {
+        let index = self.next_index;
+        self.next_index = self.next_index.saturating_add(1);
+        index
+    }
+
+    fn reserve_output(&mut self, bytes: usize) -> Result<(), OpenAiError> {
+        if self.output_bytes.saturating_add(bytes) > MAX_COMPLETION_BODY_BYTES {
+            return Err(invalid_request(
+                "response exceeds the bounded output buffer",
+            ));
+        }
+        self.output_bytes = self.output_bytes.saturating_add(bytes);
+        Ok(())
+    }
+
+    fn reasoning_delta(&mut self, text: String) -> Result<(), OpenAiError> {
+        self.reserve_output(text.len())?;
+        let index = match self.reasoning_index {
+            Some(index) => index,
+            None => {
+                let index = self.allocate_index();
+                self.reasoning_index = Some(index);
+                let item = serde_json::json!({"id":format!("rs_{}", &self.id[5..]),
+                    "type":"reasoning","status":"in_progress","summary":[]});
+                self.event(
+                    "response.output_item.added",
+                    serde_json::json!({"output_index":index,"item":item}),
+                );
+                self.event(
+                    "response.reasoning_summary_part.added",
+                    serde_json::json!({
+                    "item_id":format!("rs_{}", &self.id[5..]),"output_index":index,
+                    "summary_index":0,"part":{"type":"summary_text","text":""}}),
+                );
+                index
+            }
+        };
+        self.reasoning.push_str(&text);
+        self.event(
+            "response.reasoning_summary_text.delta",
+            serde_json::json!({
+            "item_id":format!("rs_{}", &self.id[5..]),"output_index":index,
+            "summary_index":0,"delta":text}),
+        );
+        Ok(())
+    }
+
+    fn text_delta(&mut self, text: String) -> Result<(), OpenAiError> {
+        self.reserve_output(text.len())?;
+        if self.text_index.is_none() {
+            let index = self.allocate_index();
+            self.text_index = Some(index);
+            let item = serde_json::json!({"id":format!("msg_{}", &self.id[5..]),"type":"message",
+                "status":"in_progress","role":"assistant","content":[]});
+            self.event(
+                "response.output_item.added",
+                serde_json::json!({"output_index":index,"item":item}),
+            );
+            self.event("response.content_part.added", serde_json::json!({"item_id":format!("msg_{}", &self.id[5..]),
+                "output_index":index,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}));
+        }
+        self.text.push_str(&text);
+        self.event("response.output_text.delta", serde_json::json!({"item_id":format!("msg_{}", &self.id[5..]),"output_index":self.text_index,"content_index":0,"delta":text}));
+        Ok(())
+    }
+
+    fn tool_delta(
+        &mut self,
+        index: u32,
+        call_id: Option<String>,
+        name: Option<String>,
+        arguments: String,
+    ) -> Result<(), OpenAiError> {
+        self.reserve_output(arguments.len())?;
+        let output_index = match self.tools.get(&index).and_then(|tool| tool.output_index) {
+            Some(output_index) => output_index,
+            None => self.allocate_index(),
+        };
+        let tool = self.tools.entry(index).or_default();
+        tool.output_index = Some(output_index);
+        if let Some(call_id) = call_id {
+            tool.call_id = call_id;
+        }
+        if let Some(name) = name {
+            tool.name = name;
+        }
+        tool.arguments.push_str(&arguments);
+        let (announce, call_id, name) = (!tool.announced, tool.call_id.clone(), tool.name.clone());
+        tool.announced = true;
+        if announce {
+            self.announce_tool(output_index, &call_id, &name);
+        }
+        if !self.custom_tools.contains(&name) && !arguments.is_empty() {
+            self.event("response.function_call_arguments.delta", serde_json::json!({"item_id":format!("fc_{call_id}"),"output_index":output_index,"delta":arguments}));
+        }
+        Ok(())
+    }
+
+    fn announce_tool(&mut self, index: u32, call_id: &str, name: &str) {
+        let custom = self.custom_tools.contains(name);
+        let item = if custom {
+            serde_json::json!({"id":format!("ctc_{call_id}"),"type":"custom_tool_call",
+                "status":"in_progress","call_id":call_id,"name":name,"input":""})
+        } else {
+            serde_json::json!({"id":format!("fc_{call_id}"),"type":"function_call",
+                "status":"in_progress","call_id":call_id,"name":name,"arguments":""})
+        };
+        self.event(
+            "response.output_item.added",
+            serde_json::json!({"output_index":index,"item":item}),
+        );
+    }
+
+    fn finish_text(&mut self) {
+        let Some(index) = self.text_index else {
+            return;
+        };
+        let item_id = format!("msg_{}", &self.id[5..]);
+        let phase = self.text_phase();
+        let part = serde_json::json!({"type":"output_text","text":self.text,"annotations":[]});
+        self.event("response.output_text.done", serde_json::json!({"item_id":item_id,"output_index":index,"content_index":0,"text":self.text}));
+        self.event("response.content_part.done", serde_json::json!({"item_id":item_id,"output_index":index,"content_index":0,"part":part.clone()}));
+        let item = serde_json::json!({"id":item_id,"type":"message","status":"completed","role":"assistant","phase":phase,"content":[part]});
+        self.event(
+            "response.output_item.done",
+            serde_json::json!({"output_index":index,"item":item}),
+        );
+    }
+
+    fn finish_reasoning(&mut self) {
+        let Some(index) = self.reasoning_index else {
+            return;
+        };
+        let item_id = format!("rs_{}", &self.id[5..]);
+        let part = serde_json::json!({"type":"summary_text","text":self.reasoning});
+        self.event(
+            "response.reasoning_summary_text.done",
+            serde_json::json!({
+            "item_id":item_id,"output_index":index,"summary_index":0,"text":self.reasoning}),
+        );
+        self.event(
+            "response.reasoning_summary_part.done",
+            serde_json::json!({
+            "item_id":item_id,"output_index":index,"summary_index":0,"part":part.clone()}),
+        );
+        let item = serde_json::json!({"id":item_id,"type":"reasoning","status":"completed",
+            "summary":[part]});
+        self.event(
+            "response.output_item.done",
+            serde_json::json!({"output_index":index,"item":item}),
+        );
+    }
+
+    fn finish_tools(&mut self) {
+        let tools = self
+            .tools
+            .values()
+            .filter_map(|tool| {
+                let index = tool.output_index?;
+                Some((
+                    index,
+                    tool.call_id.clone(),
+                    tool.name.clone(),
+                    tool.arguments.clone(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        for (index, call_id, name, arguments) in tools {
+            if self.custom_tools.contains(&name) {
+                let input = Self::custom_input(&arguments);
+                self.event("response.custom_tool_call_input.done", serde_json::json!({"item_id":format!("ctc_{call_id}"),"output_index":index,"input":input}));
+                let item = serde_json::json!({"id":format!("ctc_{call_id}"),"type":"custom_tool_call","status":"completed","call_id":call_id,"name":name,"input":input});
+                self.event(
+                    "response.output_item.done",
+                    serde_json::json!({"output_index":index,"item":item}),
+                );
+            } else {
+                self.finish_function(index, &call_id, &name, &arguments);
+            }
+        }
+    }
+
+    fn finish_function(&mut self, index: u32, call_id: &str, name: &str, arguments: &str) {
+        self.event(
+            "response.function_call_arguments.done",
+            serde_json::json!({
+            "item_id":format!("fc_{call_id}"),"output_index":index,"arguments":arguments}),
+        );
+        let item = serde_json::json!({"id":format!("fc_{call_id}"),"type":"function_call",
+            "status":"completed","call_id":call_id,"name":name,"arguments":arguments});
+        self.event(
+            "response.output_item.done",
+            serde_json::json!({"output_index":index,"item":item}),
+        );
+    }
+
+    fn done(&mut self) -> Result<(), OpenAiError> {
+        if self.tools.values().any(|tool| {
+            tool.call_id.is_empty()
+                || tool.name.is_empty()
+                || serde_json::from_str::<Value>(&tool.arguments).is_err()
+        }) {
+            return Err(invalid_request("upstream tool arguments are invalid"));
+        }
+        if self.finish_reason.as_deref() == Some("stop")
+            && !self.reasoning.trim().is_empty()
+            && self.text.trim().is_empty()
+            && self.tools.is_empty()
+        {
+            return Err(OpenAiError {
+                code: "server_error",
+                message: "upstream generation produced no actionable output",
+            });
+        }
+        self.finish_reasoning();
+        self.finish_text();
+        self.finish_tools();
+        let incomplete = self.finish_reason.as_deref() == Some("length");
+        self.push(
+            if incomplete {
+                "response.incomplete"
+            } else {
+                "response.completed"
+            },
+            if incomplete {
+                "incomplete"
+            } else {
+                "completed"
+            },
+        );
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicAction {
+    Models,
+    Completions,
+    Chat,
+    Responses,
+    Embeddings,
+}
+
+#[derive(Debug, Clone)]
+pub struct HealthyRoute {
+    pub generation: u64,
+    pub public_model: String,
+    pub served_model: String,
+    pub upstream: ObservedRoute,
+    pub profile: GatewayProfile,
+    inference: Arc<tokio::sync::Semaphore>,
+}
+
+impl HealthyRoute {
+    pub async fn acquire(&self) -> Result<tokio::sync::OwnedSemaphorePermit, OpenAiError> {
+        Arc::clone(&self.inference)
+            .acquire_owned()
+            .await
+            .map_err(|_| OpenAiError {
+                code: "server_error",
+                message: "instance concurrency limiter is unavailable",
+            })
+    }
+}
+
+#[derive(Debug, Clone)]
+enum RouteState {
+    Warming { generation: u64 },
+    Healthy(Arc<HealthyRoute>),
+}
+
+#[derive(Debug, Clone)]
+pub enum RouteLookup {
+    Missing,
+    Warming,
+    Healthy(Arc<HealthyRoute>),
+}
+
+#[derive(Clone)]
+pub struct RouteRegistry {
+    snapshot: Arc<ArcSwap<BTreeMap<String, RouteState>>>,
+}
+
+impl Default for RouteRegistry {
+    fn default() -> Self {
+        Self {
+            snapshot: Arc::new(ArcSwap::from_pointee(BTreeMap::new())),
+        }
+    }
+}
+
+impl RouteRegistry {
+    pub fn mark_warming(&self, instance: &str, generation: u64) {
+        self.update(instance, RouteState::Warming { generation });
+    }
+
+    #[cfg(test)]
+    pub fn publish(
+        &self,
+        instance: &str,
+        public_model: String,
+        served_model: String,
+        upstream: ObservedRoute,
+    ) {
+        self.publish_with_profile(
+            instance,
+            public_model,
+            served_model,
+            GatewayProfile::text(),
+            upstream,
+        );
+    }
+
+    pub fn publish_with_profile(
+        &self,
+        instance: &str,
+        public_model: String,
+        served_model: String,
+        profile: GatewayProfile,
+        upstream: ObservedRoute,
+    ) {
+        let generation = upstream.identity().1;
+        self.update(
+            instance,
+            RouteState::Healthy(Arc::new(HealthyRoute {
+                generation,
+                public_model,
+                served_model,
+                upstream,
+                profile,
+                inference: Arc::new(tokio::sync::Semaphore::new(MAX_INSTANCE_CONCURRENCY)),
+            })),
+        );
+    }
+
+    pub fn drain(&self, instance: &str, generation: u64) {
+        let mut next = (*self.snapshot.load_full()).clone();
+        let matches = next.get(instance).is_some_and(|state| match state {
+            RouteState::Warming {
+                generation: current,
+            } => *current == generation,
+            RouteState::Healthy(route) => route.generation == generation,
+        });
+        if matches {
+            next.remove(instance);
+            self.snapshot.store(Arc::new(next));
+        }
+    }
+
+    pub fn lookup(&self, instance: &str) -> RouteLookup {
+        match self.snapshot.load().get(instance) {
+            None => RouteLookup::Missing,
+            Some(RouteState::Warming { .. }) => RouteLookup::Warming,
+            Some(RouteState::Healthy(route)) => RouteLookup::Healthy(Arc::clone(route)),
+        }
+    }
+
+    fn update(&self, instance: &str, state: RouteState) {
+        let mut next = (*self.snapshot.load_full()).clone();
+        next.insert(instance.into(), state);
+        self.snapshot.store(Arc::new(next));
+    }
+}
+
+pub fn public_action(method: &str, suffix: &str) -> Option<PublicAction> {
+    match (method, suffix) {
+        ("GET", "models") => Some(PublicAction::Models),
+        ("POST", "completions") => Some(PublicAction::Completions),
+        ("POST", "chat/completions") => Some(PublicAction::Chat),
+        ("POST", "responses") => Some(PublicAction::Responses),
+        ("POST", "embeddings") => Some(PublicAction::Embeddings),
+        _ => None,
+    }
+}
+
+pub fn models_document(route: &HealthyRoute) -> Value {
+    serde_json::json!({
+        "object": "list",
+        "data": [{
+            "id": route.public_model,
+            "object": "model",
+            "owned_by": "sy-spark"
+        }]
+    })
+}
+
+pub fn rewrite_embeddings_request(
+    bytes: &[u8],
+    served_model: &str,
+    profile: &GatewayProfile,
+) -> Result<EmbeddingsRequest, OpenAiError> {
+    if bytes.len() > MAX_COMPLETION_BODY_BYTES || !profile.allows(PublicAction::Embeddings) {
+        return Err(invalid_request(
+            "instance does not provide bounded text embeddings",
+        ));
+    }
+    let policy = profile
+        .embeddings
+        .as_ref()
+        .ok_or_else(|| invalid_request("embedding policy is unavailable"))?;
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|_| invalid_request("embedding request JSON is invalid"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| invalid_request("embedding request must be an object"))?;
+    const KEYS: &[&str] = &["model", "input", "encoding_format", "dimensions", "user"];
+    if object.keys().any(|key| !KEYS.contains(&key.as_str()))
+        || object
+            .get("model")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        || object
+            .get("encoding_format")
+            .is_some_and(|value| value.as_str() != Some("float"))
+        || object
+            .get("dimensions")
+            .is_some_and(|value| value.as_u64() != Some(policy.dimensions as u64))
+        || object.get("user").is_some_and(|value| {
+            value
+                .as_str()
+                .is_none_or(|user| user.is_empty() || user.len() > 256)
+        })
+    {
+        return Err(invalid_request("embedding options are unsupported"));
+    }
+    let inputs = match object.get("input") {
+        Some(Value::String(input)) => vec![input.clone()],
+        Some(Value::Array(inputs)) => inputs
+            .iter()
+            .map(|input| {
+                input
+                    .as_str()
+                    .filter(|input| !input.is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(|| invalid_request("embedding inputs must be non-empty strings"))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => {
+            return Err(invalid_request(
+                "embedding input must be a string or string array",
+            ))
+        }
+    };
+    if inputs.is_empty()
+        || inputs.len() > policy.max_batch
+        || inputs.iter().map(String::len).sum::<usize>() > policy.max_input_bytes
+    {
+        return Err(invalid_request(
+            "embedding input batch exceeds the recipe limit",
+        ));
+    }
+    let input = if inputs.len() == 1 && object["input"].is_string() {
+        Value::String(inputs[0].clone())
+    } else {
+        serde_json::to_value(&inputs).map_err(|_| invalid_request("embedding input is invalid"))?
+    };
+    let body = serde_json::to_vec(&serde_json::json!({
+        "model":served_model,
+        "input":input,
+        "encoding_format":"float",
+    }))
+    .map_err(|_| invalid_request("embedding request cannot be encoded"))?;
+    Ok(EmbeddingsRequest {
+        body,
+        input_count: inputs.len(),
+    })
+}
+
+pub fn rewrite_embeddings_response(
+    bytes: &[u8],
+    public_model: &str,
+    served_model: &str,
+    profile: &GatewayProfile,
+    expected_count: usize,
+) -> Result<Value, OpenAiError> {
+    let policy = profile
+        .embeddings
+        .as_ref()
+        .filter(|_| profile.allows(PublicAction::Embeddings))
+        .ok_or_else(|| invalid_request("embedding policy is unavailable"))?;
+    let batch = decode_embedding_response(
+        bytes,
+        served_model,
+        expected_count,
+        policy.dimensions,
+        policy.normalized,
+        policy.normalization_tolerance_ppm,
+    )
+    .map_err(|_| invalid_request("upstream embedding contract is invalid"))?;
+    Ok(serde_json::json!({
+        "object":"list",
+        "model":public_model,
+        "data":batch.vectors.into_iter().map(|vector| serde_json::json!({
+            "object":"embedding","index":vector.index,"embedding":vector.values
+        })).collect::<Vec<_>>(),
+        "usage":{"prompt_tokens":batch.prompt_tokens,"total_tokens":batch.total_tokens}
+    }))
+}
+
+pub fn rewrite_completion_request(bytes: &[u8], served_model: &str) -> Result<(Vec<u8>, bool), ()> {
+    if bytes.len() > MAX_COMPLETION_BODY_BYTES {
+        return Err(());
+    }
+    let mut value: Value = serde_json::from_slice(bytes).map_err(|_| ())?;
+    let object = value.as_object_mut().ok_or(())?;
+    object.insert("model".into(), Value::String(served_model.into()));
+    let streaming = object
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if streaming {
+        object.insert(
+            "stream_options".into(),
+            serde_json::json!({"include_usage":true}),
+        );
+    }
+    serde_json::to_vec(&value)
+        .map(|bytes| (bytes, streaming))
+        .map_err(|_| ())
+}
+
+pub fn rewrite_completion_response(bytes: &[u8], public_model: &str) -> Result<Value, ()> {
+    let mut value: Value = serde_json::from_slice(bytes).map_err(|_| ())?;
+    value
+        .as_object_mut()
+        .ok_or(())?
+        .insert("model".into(), Value::String(public_model.into()));
+    Ok(value)
+}
+
+#[cfg(test)]
+pub fn rewrite_chat_request(
+    bytes: &[u8],
+    served_model: &str,
+) -> Result<GenerationRequest, OpenAiError> {
+    rewrite_chat_request_with_profile(bytes, served_model, &GatewayProfile::text())
+}
+
+pub fn rewrite_chat_request_with_profile(
+    bytes: &[u8],
+    served_model: &str,
+    profile: &GatewayProfile,
+) -> Result<GenerationRequest, OpenAiError> {
+    if bytes.len() > MAX_COMPLETION_BODY_BYTES {
+        return Err(invalid_request("request body is too large"));
+    }
+    let mut value: Value =
+        serde_json::from_slice(bytes).map_err(|_| invalid_request("request JSON is invalid"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| invalid_request("request must be an object"))?;
+    validate_chat_options(object)?;
+    let messages = object
+        .get("messages")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid_request("messages must be an array"))?;
+    if messages.iter().any(|message| {
+        message["content"].as_array().is_some_and(|parts| {
+            parts.iter().any(|part| {
+                matches!(part["type"].as_str(), Some("image_url" | "input_image"))
+                    || part.get("image_url").is_some()
+                    || part.get("file_id").is_some()
+            })
+        })
+    }) {
+        return Err(invalid_request(
+            "chat image inputs are unsupported; use the Responses route",
+        ));
+    }
+    let stream = object
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    object.insert("model".into(), Value::String(served_model.into()));
+    if stream {
+        object.insert(
+            "stream_options".into(),
+            serde_json::json!({"include_usage":true}),
+        );
+    } else {
+        object.remove("stream_options");
+    }
+    omit_empty_tool_controls(object);
+    apply_sampling_defaults(object, &profile.sampling);
+    let body =
+        serde_json::to_vec(&value).map_err(|_| invalid_request("request cannot be encoded"))?;
+    Ok(GenerationRequest {
+        body,
+        stream,
+        custom_tools: BTreeSet::new(),
+        omit_reasoning: false,
+    })
+}
+
+pub fn rewrite_anthropic_request(
+    bytes: &[u8],
+    served_model: &str,
+) -> Result<GenerationRequest, AnthropicError> {
+    rewrite_anthropic_request_with_profile(bytes, served_model, &GatewayProfile::text())
+}
+
+pub fn rewrite_anthropic_request_with_profile(
+    bytes: &[u8],
+    served_model: &str,
+    profile: &GatewayProfile,
+) -> Result<GenerationRequest, AnthropicError> {
+    if bytes.len() > MAX_COMPLETION_BODY_BYTES {
+        return Err(anthropic_invalid("request body is too large"));
+    }
+    let request: AnthropicMessageRequest =
+        serde_json::from_slice(bytes).map_err(|_| anthropic_invalid("request JSON is invalid"))?;
+    if request.model.is_empty()
+        || request.messages.is_empty()
+        || request.max_tokens == 0
+        || request.max_tokens > MAX_OUTPUT_TOKENS
+    {
+        return Err(anthropic_invalid("model or output token limit is invalid"));
+    }
+    validate_anthropic_options(&request)?;
+    let thinking_token_budget = request
+        .thinking
+        .as_ref()
+        .and_then(|thinking| thinking.budget_tokens);
+    let mut messages = Vec::new();
+    if let Some(system) = request.system {
+        messages
+            .push(serde_json::json!({"role":"system","content":anthropic_system_text(system)?}));
+    }
+    messages.extend(anthropic_messages(
+        request.messages,
+        profile.vision.as_ref(),
+    )?);
+    let messages = merge_system_messages(messages);
+    let parallel_tool_calls = request
+        .tool_choice
+        .as_ref()
+        .is_none_or(|choice| !choice.disable_parallel_tool_use);
+    let tools = anthropic_tools(request.tools)?;
+    let tool_choice = anthropic_tool_choice(request.tool_choice)?;
+    let response_format = anthropic_response_format(request.output_config.as_ref())?;
+    let reasoning_effort = request
+        .output_config
+        .as_ref()
+        .and_then(|output| output.effort.as_deref())
+        .map(|effort| {
+            profile
+                .sampling
+                .reasoning_effort_map
+                .get(effort)
+                .cloned()
+                .unwrap_or_else(|| effort.into())
+        });
+    let enable_thinking = request
+        .thinking
+        .as_ref()
+        .is_none_or(|thinking| thinking.kind != "disabled");
+    let effort_controls_budget = reasoning_effort.is_some() && thinking_token_budget.is_none();
+    let omit_reasoning = request
+        .thinking
+        .as_ref()
+        .and_then(|thinking| thinking.display.as_deref())
+        == Some("omitted");
+    let mut body = serde_json::json!({
+        "model":served_model,"messages":messages,"max_tokens":request.max_tokens,
+        "stream":true,"stream_options":{"include_usage":true},"tools":tools,
+        "tool_choice":tool_choice,"parallel_tool_calls":parallel_tool_calls,
+        "stop":request.stop_sequences,"temperature":request.temperature,
+        "top_p":request.top_p,"top_k":request.top_k,"response_format":response_format,
+        "chat_template_kwargs":{"enable_thinking":enable_thinking}
+    });
+    let body = body
+        .as_object_mut()
+        .ok_or_else(|| anthropic_invalid("request cannot be encoded"))?;
+    if let Some(budget) = thinking_token_budget {
+        body.insert("thinking_token_budget".into(), budget.into());
+    }
+    if let Some(effort) = reasoning_effort {
+        body.insert("reasoning_effort".into(), effort.into());
+    }
+    omit_empty_tool_controls(body);
+    apply_sampling_defaults(body, &profile.sampling);
+    if effort_controls_budget {
+        body.remove("thinking_token_budget");
+    }
+    let body =
+        serde_json::to_vec(&body).map_err(|_| anthropic_invalid("request cannot be encoded"))?;
+    Ok(GenerationRequest {
+        body,
+        stream: request.stream,
+        custom_tools: BTreeSet::new(),
+        omit_reasoning,
+    })
+}
+
+fn parse_anthropic_count_request(bytes: &[u8]) -> Result<Value, AnthropicError> {
+    if bytes.len() > MAX_COMPLETION_BODY_BYTES {
+        return Err(anthropic_invalid("request body is too large"));
+    }
+    let value: Value =
+        serde_json::from_slice(bytes).map_err(|_| anthropic_invalid("request JSON is invalid"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| anthropic_invalid("request must be an object"))?;
+    const KEYS: &[&str] = &[
+        "model",
+        "messages",
+        "system",
+        "tools",
+        "tool_choice",
+        "thinking",
+        "context_management",
+        "output_config",
+        "metadata",
+        "service_tier",
+    ];
+    if object.keys().any(|key| !KEYS.contains(&key.as_str())) {
+        return Err(anthropic_invalid("count request contains an unknown field"));
+    }
+    Ok(value)
+}
+
+pub fn rewrite_anthropic_native_count_request(
+    bytes: &[u8],
+    served_model: &str,
+) -> Result<Vec<u8>, AnthropicError> {
+    let mut value = parse_anthropic_count_request(bytes)?;
+    value["model"] = Value::String(served_model.into());
+    serde_json::to_vec(&value).map_err(|_| anthropic_invalid("count request cannot be encoded"))
+}
+
+pub fn rewrite_anthropic_count_request(
+    bytes: &[u8],
+    served_model: &str,
+) -> Result<Vec<u8>, AnthropicError> {
+    let mut value = parse_anthropic_count_request(bytes)?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| anthropic_invalid("request must be an object"))?;
+    object.remove("thinking");
+    object.insert("max_tokens".into(), Value::from(1));
+    object.insert("stream".into(), Value::Bool(false));
+    let synthetic = serde_json::to_vec(&value)
+        .map_err(|_| anthropic_invalid("count request cannot be encoded"))?;
+    let generation = rewrite_anthropic_request(&synthetic, served_model)?;
+    let generation: Value = serde_json::from_slice(&generation.body)
+        .map_err(|_| anthropic_invalid("count request cannot be encoded"))?;
+    serde_json::to_vec(&serde_json::json!({
+        "model":served_model,"messages":generation["messages"],
+        "tools":generation["tools"],"add_generation_prompt":true
+    }))
+    .map_err(|_| anthropic_invalid("count request cannot be encoded"))
+}
+
+pub fn rewrite_anthropic_count_response(bytes: &[u8]) -> Result<u64, AnthropicError> {
+    if bytes.len() > MAX_COMPLETION_BODY_BYTES {
+        return Err(anthropic_invalid("tokenizer response is too large"));
+    }
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|_| anthropic_invalid("tokenizer response is invalid"))?;
+    let count = value
+        .get("input_tokens")
+        .or_else(|| value.get("count"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anthropic_invalid("tokenizer response is invalid"))?;
+    Ok(count)
+}
+
+fn anthropic_invalid(message: &'static str) -> AnthropicError {
+    AnthropicError {
+        error_type: "invalid_request_error",
+        message,
+    }
+}
+
+fn anthropic_system_text(content: AnthropicContent) -> Result<String, AnthropicError> {
+    match content {
+        AnthropicContent::Text(text) => Ok(text),
+        AnthropicContent::Blocks(blocks) => {
+            blocks
+                .into_iter()
+                .try_fold(String::new(), |mut text, block| {
+                    let AnthropicContentBlock::Text {
+                        text: part,
+                        cache_control,
+                    } = block
+                    else {
+                        return Err(anthropic_invalid("system content must contain only text"));
+                    };
+                    validate_cache_control(cache_control.as_ref())?;
+                    text.push_str(&part);
+                    Ok(text)
+                })
+        }
+    }
+}
+
+fn validate_anthropic_options(request: &AnthropicMessageRequest) -> Result<(), AnthropicError> {
+    if request.top_k.is_some_and(|value| value == 0)
+        || request
+            .temperature
+            .is_some_and(|value| !(0.0..=1.0).contains(&value))
+        || request
+            .top_p
+            .is_some_and(|value| !(0.0..=1.0).contains(&value))
+        || request
+            .metadata
+            .as_ref()
+            .and_then(|value| value.user_id.as_ref())
+            .is_some_and(|value| value.len() > 256)
+        || request
+            .service_tier
+            .as_deref()
+            .is_some_and(|value| value != "auto")
+    {
+        return Err(anthropic_invalid("request options are invalid"));
+    }
+    if let Some(thinking) = &request.thinking {
+        let budget_valid = match thinking.kind.as_str() {
+            "enabled" => thinking
+                .budget_tokens
+                .is_some_and(|budget| budget >= 1_024 && budget < request.max_tokens),
+            "adaptive" | "disabled" => thinking.budget_tokens.is_none(),
+            _ => false,
+        };
+        if !budget_valid
+            || thinking
+                .display
+                .as_deref()
+                .is_some_and(|value| value != "omitted")
+        {
+            return Err(anthropic_invalid("thinking mode is unsupported"));
+        }
+    }
+    if request.context_management.as_ref().is_some_and(|context| {
+        context
+            .edits
+            .iter()
+            .any(|edit| edit.kind != "clear_thinking_20251015" || edit.keep != "all")
+    }) || request
+        .output_config
+        .as_ref()
+        .and_then(|output| output.effort.as_deref())
+        .is_some_and(|effort| !matches!(effort, "low" | "medium" | "high" | "max"))
+    {
+        return Err(anthropic_invalid(
+            "Claude Code compatibility option is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn anthropic_response_format(
+    output: Option<&AnthropicOutputConfig>,
+) -> Result<Value, AnthropicError> {
+    let Some(format) = output.and_then(|output| output.format.as_ref()) else {
+        return Ok(Value::Null);
+    };
+    if format.kind != "json_schema" || !format.schema.is_object() {
+        return Err(anthropic_invalid("output format is invalid"));
+    }
+    Ok(serde_json::json!({"type":"json_schema","json_schema":{
+        "name":"anthropic_output","schema":format.schema,"strict":true
+    }}))
+}
+
+fn validate_cache_control(value: Option<&AnthropicCacheControl>) -> Result<(), AnthropicError> {
+    if value.is_some_and(|value| {
+        value.kind != "ephemeral"
+            || value
+                .ttl
+                .as_deref()
+                .is_some_and(|ttl| !matches!(ttl, "5m" | "1h"))
+    }) {
+        Err(anthropic_invalid("cache control is invalid"))
+    } else {
+        Ok(())
+    }
+}
+
+fn anthropic_tools(tools: Vec<AnthropicTool>) -> Result<Vec<Value>, AnthropicError> {
+    tools
+        .into_iter()
+        .map(|tool| {
+            validate_cache_control(tool.cache_control.as_ref())?;
+            if tool.kind.is_some() || tool.name.is_empty() || tool.name.len() > 128 {
+                return Err(AnthropicError {
+                    error_type: "invalid_request_error",
+                    message: "provider-hosted tools are unsupported",
+                });
+            }
+            if !tool.input_schema.is_object() {
+                return Err(anthropic_invalid("tool input_schema must be an object"));
+            }
+            Ok(serde_json::json!({"type":"function","function":{
+                "name":tool.name,"description":tool.description,"parameters":tool.input_schema}}))
+        })
+        .collect()
+}
+
+fn anthropic_tool_choice(choice: Option<AnthropicToolChoice>) -> Result<Value, AnthropicError> {
+    let Some(choice) = choice else {
+        return Ok(Value::String("auto".into()));
+    };
+    match choice.kind.as_str() {
+        "auto" => Ok(Value::String("auto".into())),
+        "any" => Ok(Value::String("required".into())),
+        "none" => Ok(Value::String("none".into())),
+        "tool" => choice
+            .name
+            .filter(|name| !name.is_empty())
+            .map(|name| serde_json::json!({"type":"function","function":{"name":name}}))
+            .ok_or_else(|| anthropic_invalid("tool choice name is required")),
+        _ => Err(anthropic_invalid("tool choice is unsupported")),
+    }
+}
+
+fn anthropic_messages(
+    messages: Vec<AnthropicMessage>,
+    vision: Option<&VisionPolicy>,
+) -> Result<Vec<Value>, AnthropicError> {
+    let mut output = Vec::new();
+    let mut pending = BTreeSet::new();
+    let mut images = ImageBudget::default();
+    for message in messages {
+        if !matches!(message.role.as_str(), "system" | "user" | "assistant") {
+            return Err(anthropic_invalid("message role is invalid"));
+        }
+        match message.content {
+            AnthropicContent::Text(text) => {
+                output.push(serde_json::json!({"role":message.role,"content":text}))
+            }
+            AnthropicContent::Blocks(blocks) => anthropic_blocks(
+                &message.role,
+                blocks,
+                &mut pending,
+                &mut output,
+                vision,
+                &mut images,
+            )?,
+        }
+    }
+    if pending.is_empty() {
+        Ok(output)
+    } else {
+        Err(anthropic_invalid("tool_use is missing its tool_result"))
+    }
+}
+
+fn anthropic_blocks(
+    role: &str,
+    blocks: Vec<AnthropicContentBlock>,
+    pending: &mut BTreeSet<String>,
+    output: &mut Vec<Value>,
+    vision: Option<&VisionPolicy>,
+    images: &mut ImageBudget,
+) -> Result<(), AnthropicError> {
+    let mut content = Vec::new();
+    let mut reasoning = String::new();
+    let mut calls = Vec::new();
+    let mut results = Vec::new();
+    for block in blocks {
+        match block {
+            AnthropicContentBlock::Text {
+                text: part,
+                cache_control,
+            } => {
+                validate_cache_control(cache_control.as_ref())?;
+                content.push(serde_json::json!({"type":"text","text":part}));
+            }
+            AnthropicContentBlock::ToolUse {
+                id,
+                name,
+                input,
+                cache_control,
+            } => {
+                validate_cache_control(cache_control.as_ref())?;
+                if role != "assistant"
+                    || id.is_empty()
+                    || name.is_empty()
+                    || !pending.insert(id.clone())
+                {
+                    return Err(anthropic_invalid("tool_use block is invalid"));
+                }
+                calls.push(serde_json::json!({"id":id,"type":"function","function":{
+                    "name":name,"arguments":input.to_string()}}));
+            }
+            AnthropicContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+                cache_control,
+            } => {
+                validate_cache_control(cache_control.as_ref())?;
+                if role != "user" || !pending.remove(&tool_use_id) {
+                    return Err(anthropic_invalid(
+                        "tool_result does not match a prior tool_use",
+                    ));
+                }
+                let content = anthropic_tool_result_text(content)?;
+                let content = if is_error {
+                    format!("Tool error: {content}")
+                } else {
+                    content
+                };
+                results.push(serde_json::json!({"role":"tool","tool_call_id":tool_use_id,
+                    "content":content}));
+            }
+            AnthropicContentBlock::Image { source } => {
+                if role != "user" || source.kind != "base64" {
+                    return Err(anthropic_invalid(
+                        "image source must be inline base64 user content",
+                    ));
+                }
+                let image = decode_image(&source.media_type, &source.data, vision, images)
+                    .map_err(|error| anthropic_invalid(error.message))?;
+                content.push(canonical_image(&image));
+            }
+            AnthropicContentBlock::Thinking {
+                thinking,
+                signature,
+                cache_control,
+            } => {
+                validate_cache_control(cache_control.as_ref())?;
+                if role != "assistant" || !valid_local_reasoning_signature(&thinking, &signature) {
+                    return Err(anthropic_invalid("thinking block is invalid"));
+                }
+                reasoning.push_str(&thinking);
+            }
+        }
+    }
+    if !content.is_empty() || !calls.is_empty() || !reasoning.is_empty() {
+        let content = if content.len() == 1 && content[0]["type"] == "text" {
+            content[0]["text"].clone()
+        } else if content.is_empty() {
+            Value::Null
+        } else {
+            Value::Array(content)
+        };
+        let mut message = serde_json::json!({"role":role,"content":content});
+        if !calls.is_empty() {
+            message["tool_calls"] = Value::Array(calls);
+        }
+        if !reasoning.is_empty() {
+            message["reasoning_content"] = Value::String(reasoning);
+        }
+        output.push(message);
+    }
+    output.extend(results);
+    Ok(())
+}
+
+fn anthropic_tool_result_text(
+    content: AnthropicToolResultContent,
+) -> Result<String, AnthropicError> {
+    match content {
+        AnthropicToolResultContent::Text(text) => Ok(text),
+        AnthropicToolResultContent::Blocks(blocks) => {
+            blocks
+                .into_iter()
+                .try_fold(String::new(), |mut text, block| {
+                    validate_cache_control(block.cache_control.as_ref())?;
+                    if block.kind != "text" {
+                        return Err(anthropic_invalid("tool_result content type is unsupported"));
+                    }
+                    text.push_str(&block.text);
+                    Ok(text)
+                })
+        }
+    }
+}
+
+fn validate_chat_options(object: &serde_json::Map<String, Value>) -> Result<(), OpenAiError> {
+    const ALLOWED: &[&str] = &[
+        "model",
+        "messages",
+        "frequency_penalty",
+        "logit_bias",
+        "logprobs",
+        "top_logprobs",
+        "max_completion_tokens",
+        "max_tokens",
+        "n",
+        "presence_penalty",
+        "response_format",
+        "seed",
+        "service_tier",
+        "stop",
+        "stream",
+        "stream_options",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "parallel_tool_calls",
+        "top_p",
+        "user",
+        "metadata",
+        "reasoning_effort",
+        "verbosity",
+        "prompt_cache_key",
+        "safety_identifier",
+    ];
+    if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+        return Err(invalid_request("request contains an unknown field"));
+    }
+    if object.get("tools").is_some_and(|tools| {
+        tools.as_array().is_none_or(|tools| {
+            tools
+                .iter()
+                .any(|tool| tool["type"].as_str() != Some("function"))
+        })
+    }) {
+        return Err(OpenAiError {
+            code: "unsupported_tool",
+            message: "hosted tools are not available on this gateway",
+        });
+    }
+    if ["max_tokens", "max_completion_tokens"].iter().any(|key| {
+        object
+            .get(*key)
+            .is_some_and(|value| value.as_u64().is_none_or(|value| value > MAX_OUTPUT_TOKENS))
+    }) {
+        return Err(invalid_request("output token limit is invalid"));
+    }
+    Ok(())
+}
+
+pub fn rewrite_chat_response(bytes: &[u8], public_model: &str) -> Result<Value, OpenAiError> {
+    let mut value: Value = serde_json::from_slice(bytes)
+        .map_err(|_| invalid_request("upstream response is invalid"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| invalid_request("upstream response is invalid"))?;
+    if !object.get("choices").is_some_and(Value::is_array) {
+        return Err(invalid_request("upstream chat choices are invalid"));
+    }
+    object.insert("model".into(), Value::String(public_model.into()));
+    Ok(value)
+}
+
+pub fn chat_stream_document(event: GenerationEvent, id: &str, model: &str) -> Option<Value> {
+    let (choices, usage) = match event {
+        GenerationEvent::ReasoningDelta { text } => (
+            serde_json::json!([{"index":0,"delta":{"reasoning_content":text},"finish_reason":null}]),
+            Value::Null,
+        ),
+        GenerationEvent::TextDelta { text } => (
+            serde_json::json!([{"index":0,"delta":{"content":text},"finish_reason":null}]),
+            Value::Null,
+        ),
+        GenerationEvent::ToolCallDelta {
+            index,
+            call_id,
+            name,
+            arguments,
+        } => (
+            serde_json::json!([{"index":0,"delta":{"tool_calls":[{
+            "index":index,"id":call_id,"type":"function","function":{"name":name,"arguments":arguments}}]},"finish_reason":null}]),
+            Value::Null,
+        ),
+        GenerationEvent::Finished { finish_reason } => (
+            serde_json::json!([{"index":0,"delta":{},"finish_reason":finish_reason}]),
+            Value::Null,
+        ),
+        GenerationEvent::Usage {
+            prompt_tokens,
+            completion_tokens,
+        } => (
+            serde_json::json!([]),
+            serde_json::json!({
+            "prompt_tokens":prompt_tokens,"completion_tokens":completion_tokens,"total_tokens":prompt_tokens.saturating_add(completion_tokens)}),
+        ),
+        GenerationEvent::Done => return None,
+    };
+    Some(
+        serde_json::json!({"id":id,"object":"chat.completion.chunk","model":model,"choices":choices,"usage":usage}),
+    )
+}
+
+#[cfg(test)]
+pub fn rewrite_responses_request(
+    bytes: &[u8],
+    served_model: &str,
+) -> Result<GenerationRequest, OpenAiError> {
+    rewrite_responses_request_with_profile(bytes, served_model, &GatewayProfile::text())
+}
+
+pub fn rewrite_responses_request_with_profile(
+    bytes: &[u8],
+    served_model: &str,
+    profile: &GatewayProfile,
+) -> Result<GenerationRequest, OpenAiError> {
+    if bytes.len() > MAX_COMPLETION_BODY_BYTES {
+        return Err(invalid_request("request body is too large"));
+    }
+    let request: Value =
+        serde_json::from_slice(bytes).map_err(|_| invalid_request("request JSON is invalid"))?;
+    let object = request
+        .as_object()
+        .ok_or_else(|| invalid_request("request must be an object"))?;
+    validate_response_options(object)?;
+    let (tools, custom_tools) = response_tools(object.get("tools"))?;
+    let mut messages = response_messages(object.get("input"), profile.vision.as_ref())?;
+    if let Some(instructions) = object.get("instructions").and_then(Value::as_str) {
+        messages.insert(
+            0,
+            serde_json::json!({"role": "system", "content": instructions}),
+        );
+    }
+    let messages = merge_system_messages(messages);
+    if !messages.iter().any(|message| message["role"] == "user") {
+        return Err(invalid_request("stateless input must contain a user query"));
+    }
+    let max_tokens = response_max_tokens(object.get("max_output_tokens"))?;
+    let tool_choice = response_tool_choice(object.get("tool_choice"))?;
+    let reasoning_effort = object
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(Value::as_str)
+        .map(|effort| {
+            profile
+                .sampling
+                .reasoning_effort_map
+                .get(effort)
+                .map_or_else(|| effort.to_owned(), Clone::clone)
+        });
+    let disable_thinking = reasoning_effort.as_deref() == Some("none");
+    let stream = object
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut body = serde_json::json!({
+        "model": served_model, "messages": messages,
+        "stream": true, "stream_options": {"include_usage": true},
+        "temperature":object.get("temperature").cloned().unwrap_or(Value::Null),
+        "top_p":object.get("top_p").cloned().unwrap_or(Value::Null)
+    });
+    if let Some(max_tokens) = max_tokens {
+        body["max_tokens"] = Value::from(max_tokens);
+    }
+    if !tools.is_empty() {
+        let body = body
+            .as_object_mut()
+            .ok_or_else(|| invalid_request("request cannot be encoded"))?;
+        body.insert("tools".into(), Value::Array(tools));
+        body.insert("tool_choice".into(), tool_choice);
+        body.insert(
+            "parallel_tool_calls".into(),
+            object
+                .get("parallel_tool_calls")
+                .cloned()
+                .unwrap_or(Value::Bool(true)),
+        );
+    }
+    let body = body
+        .as_object_mut()
+        .ok_or_else(|| invalid_request("request cannot be encoded"))?;
+    if let Some(effort) = reasoning_effort {
+        body.insert("reasoning_effort".into(), effort.into());
+    }
+    if disable_thinking {
+        body.insert(
+            "chat_template_kwargs".into(),
+            serde_json::json!({"enable_thinking":false}),
+        );
+    }
+    apply_sampling_defaults(body, &profile.sampling);
+    if body.contains_key("reasoning_effort") {
+        body.remove("thinking_token_budget");
+    }
+    let body =
+        serde_json::to_vec(&body).map_err(|_| invalid_request("request cannot be encoded"))?;
+    Ok(GenerationRequest {
+        body,
+        stream,
+        custom_tools,
+        omit_reasoning: false,
+    })
+}
+
+pub fn rewrite_native_responses_request_with_profile(
+    bytes: &[u8],
+    public_model: &str,
+    profile: &GatewayProfile,
+) -> Result<NativeResponsesRequest, OpenAiError> {
+    if !profile.native_responses {
+        return Err(invalid_request("native Responses transport is unavailable"));
+    }
+    rewrite_responses_request_with_profile(bytes, public_model, profile)?;
+    let mut value: Value =
+        serde_json::from_slice(bytes).map_err(|_| invalid_request("request JSON is invalid"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| invalid_request("request must be an object"))?;
+    object.insert("model".into(), Value::String(public_model.into()));
+    apply_sampling_defaults(object, &profile.sampling);
+    if let Some(effort) = object
+        .get_mut("reasoning")
+        .and_then(Value::as_object_mut)
+        .and_then(|reasoning| reasoning.get_mut("effort"))
+    {
+        if let Some(mapped) = effort
+            .as_str()
+            .and_then(|value| profile.sampling.reasoning_effort_map.get(value))
+        {
+            *effort = Value::String(mapped.clone());
+        }
+    }
+    let stream = object
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let body =
+        serde_json::to_vec(&value).map_err(|_| invalid_request("request cannot be encoded"))?;
+    Ok(NativeResponsesRequest { body, stream })
+}
+
+/// A single leading system message is accepted across the supported vLLM chat
+/// templates. Public instruction roles therefore converge before native history.
+fn merge_system_messages(messages: Vec<Value>) -> Vec<Value> {
+    let mut system = Vec::new();
+    let mut native = Vec::new();
+    for message in messages {
+        if message["role"] == "system" {
+            if let Some(content) = message["content"].as_str() {
+                system.push(content.to_owned());
+            }
+        } else {
+            native.push(message);
+        }
+    }
+    if !system.is_empty() {
+        native.insert(
+            0,
+            serde_json::json!({"role":"system","content":system.join("\n\n")}),
+        );
+    }
+    native
+}
+
+fn response_tools(value: Option<&Value>) -> Result<(Vec<Value>, BTreeSet<String>), OpenAiError> {
+    let Some(value) = value else {
+        return Ok((Vec::new(), BTreeSet::new()));
+    };
+    let tools = value
+        .as_array()
+        .ok_or_else(|| invalid_request("tools must be an array"))?;
+    if tools.iter().any(|tool| {
+        !matches!(
+            tool["type"].as_str(),
+            Some("function" | "custom" | "namespace")
+        )
+    }) {
+        return Err(OpenAiError {
+            code: "unsupported_tool",
+            message: "only client-side function and custom tools are supported",
+        });
+    }
+    let mut custom = BTreeSet::new();
+    let mut converted = Vec::new();
+    for tool in tools {
+        if tool["type"] == "namespace" {
+            append_namespace_tools(tool, &mut custom, &mut converted)?;
+        } else {
+            converted.push(response_tool(tool, &mut custom)?);
+        }
+    }
+    Ok((converted, custom))
+}
+
+fn response_tool(tool: &Value, custom: &mut BTreeSet<String>) -> Result<Value, OpenAiError> {
+    let name = tool["name"]
+        .as_str()
+        .ok_or_else(|| invalid_request("tool name is required"))?;
+    if name.is_empty() || name.len() > 128 {
+        return Err(invalid_request("tool name is invalid"));
+    }
+    let description = tool["description"].as_str().unwrap_or_default();
+    let parameters = if tool["type"] == "custom" {
+        custom.insert(name.into());
+        serde_json::json!({"type":"object","properties":{"input":{"type":"string"}},"required":["input"]})
+    } else {
+        tool.get("parameters")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({"type":"object"}))
+    };
+    Ok(
+        serde_json::json!({"type":"function","function":{"name":name,"description":description,"parameters":parameters}}),
+    )
+}
+
+fn append_namespace_tools(
+    tool: &Value,
+    custom: &mut BTreeSet<String>,
+    output: &mut Vec<Value>,
+) -> Result<(), OpenAiError> {
+    let namespace = tool["name"]
+        .as_str()
+        .ok_or_else(|| invalid_request("namespace name is required"))?;
+    let tools = tool["tools"]
+        .as_array()
+        .ok_or_else(|| invalid_request("namespace tools are invalid"))?;
+    for child in tools {
+        if child["type"] != "function" {
+            return Err(invalid_request("namespace child is unsupported"));
+        }
+        let mut child = child.clone();
+        let name = child["name"]
+            .as_str()
+            .ok_or_else(|| invalid_request("namespace tool name is required"))?;
+        child["name"] = Value::String(format!("{namespace}.{name}"));
+        output.push(response_tool(&child, custom)?);
+    }
+    Ok(())
+}
+
+fn validate_response_options(object: &serde_json::Map<String, Value>) -> Result<(), OpenAiError> {
+    const KEYS: &[&str] = &[
+        "model",
+        "input",
+        "instructions",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "max_output_tokens",
+        "stream",
+        "store",
+        "include",
+        "reasoning",
+        "text",
+        "temperature",
+        "top_p",
+        "truncation",
+        "metadata",
+        "prompt_cache_key",
+        "client_metadata",
+        "stream_options",
+        "service_tier",
+        "safety_identifier",
+        "previous_response_id",
+        "conversation",
+        "background",
+    ];
+    if object.keys().any(|key| !KEYS.contains(&key.as_str())) {
+        return Err(invalid_request("request contains an unknown field"));
+    }
+    if object.get("store").and_then(Value::as_bool) == Some(true) {
+        return Err(invalid_request(
+            "server-side response storage is unsupported",
+        ));
+    }
+    if object.get("background").and_then(Value::as_bool) == Some(true)
+        || object
+            .get("previous_response_id")
+            .is_some_and(|value| !value.is_null())
+        || object
+            .get("conversation")
+            .is_some_and(|value| !value.is_null())
+    {
+        return Err(invalid_request(
+            "only stateless synchronous responses are supported",
+        ));
+    }
+    Ok(())
+}
+
+fn response_messages(
+    value: Option<&Value>,
+    vision: Option<&VisionPolicy>,
+) -> Result<Vec<Value>, OpenAiError> {
+    let value = value.ok_or_else(|| invalid_request("input is required"))?;
+    if let Some(text) = value.as_str() {
+        return Ok(vec![serde_json::json!({"role": "user", "content": text})]);
+    }
+    let items = value
+        .as_array()
+        .ok_or_else(|| invalid_request("input must be a string or item array"))?;
+    let mut images = ImageBudget::default();
+    // Responses represents one assistant turn as adjacent heterogeneous items;
+    // Qwen's chat template expects those fields on one assistant message.
+    let mut messages: Vec<Value> = Vec::with_capacity(items.len());
+    for item in items {
+        let message = response_input_item(item, vision, &mut images)?;
+        if message["role"] == "assistant"
+            && messages
+                .last()
+                .is_some_and(|previous| previous["role"] == "assistant")
+        {
+            if let Some(previous) = messages.last_mut() {
+                merge_response_assistant(previous, &message);
+            }
+        } else {
+            messages.push(message);
+        }
+    }
+    Ok(messages)
+}
+
+fn merge_response_assistant(target: &mut Value, source: &Value) {
+    let Some(target) = target.as_object_mut() else {
+        return;
+    };
+    for field in ["reasoning_content", "content"] {
+        let Some(incoming) = source.get(field).and_then(response_assistant_text) else {
+            continue;
+        };
+        if incoming.is_empty() {
+            continue;
+        }
+        let mut combined = target
+            .get(field)
+            .and_then(response_assistant_text)
+            .unwrap_or_default();
+        combined.push_str(&incoming);
+        target.insert(field.into(), combined.into());
+    }
+    if let Some(incoming) = source.get("tool_calls").and_then(Value::as_array) {
+        let calls = target
+            .entry("tool_calls")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if let Some(calls) = calls.as_array_mut() {
+            calls.extend(incoming.iter().cloned());
+        }
+    }
+}
+
+fn response_assistant_text(value: &Value) -> Option<String> {
+    match value {
+        Value::Null => Some(String::new()),
+        Value::String(text) => Some(text.clone()),
+        Value::Array(parts) => parts.iter().try_fold(String::new(), |mut text, part| {
+            text.push_str(part.get("text")?.as_str()?);
+            Some(text)
+        }),
+        _ => None,
+    }
+}
+
+fn response_input_item(
+    item: &Value,
+    vision: Option<&VisionPolicy>,
+    images: &mut ImageBudget,
+) -> Result<Value, OpenAiError> {
+    match item["type"].as_str() {
+        Some("message") => response_message(item, vision, images),
+        Some("function_call") => response_tool_call(item, false),
+        Some("custom_tool_call") => response_tool_call(item, true),
+        Some("function_call_output" | "custom_tool_call_output") => response_tool_output(item),
+        Some("reasoning") => response_reasoning(item),
+        Some("computer_call" | "computer_call_output") => Err(OpenAiError {
+            code: "unsupported_tool",
+            message: "hosted computer tools are unsupported",
+        }),
+        _ => Err(invalid_request("input item type is unsupported")),
+    }
+}
+
+fn response_reasoning(item: &Value) -> Result<Value, OpenAiError> {
+    let summary = item["summary"]
+        .as_array()
+        .ok_or_else(|| invalid_request("reasoning summary must be an array"))?;
+    let reasoning = summary.iter().try_fold(String::new(), |mut output, part| {
+        if part["type"] != "summary_text" {
+            return Err(invalid_request("reasoning summary type is unsupported"));
+        }
+        output.push_str(
+            part["text"]
+                .as_str()
+                .ok_or_else(|| invalid_request("reasoning summary text is invalid"))?,
+        );
+        Ok(output)
+    })?;
+    Ok(serde_json::json!({"role":"assistant","content":"",
+        "reasoning_content":reasoning}))
+}
+
+fn response_message(
+    item: &Value,
+    vision: Option<&VisionPolicy>,
+    images: &mut ImageBudget,
+) -> Result<Value, OpenAiError> {
+    let role = item["role"]
+        .as_str()
+        .ok_or_else(|| invalid_request("message role is required"))?;
+    if !matches!(role, "system" | "developer" | "user" | "assistant") {
+        return Err(invalid_request("message role is invalid"));
+    }
+    let content = response_content(&item["content"], role, vision, images)?;
+    let role = if role == "developer" { "system" } else { role };
+    Ok(serde_json::json!({"role": role, "content": content}))
+}
+
+fn response_content(
+    value: &Value,
+    role: &str,
+    vision: Option<&VisionPolicy>,
+    images: &mut ImageBudget,
+) -> Result<Value, OpenAiError> {
+    if let Some(text) = value.as_str() {
+        return Ok(Value::String(text.into()));
+    }
+    let parts = value
+        .as_array()
+        .ok_or_else(|| invalid_request("message content is invalid"))?;
+    let mut content = Vec::new();
+    for part in parts {
+        match part["type"].as_str() {
+            Some("input_text" | "output_text") => content.push(serde_json::json!({
+                "type":"text",
+                "text":part["text"].as_str().ok_or_else(|| invalid_request("text content is invalid"))?
+            })),
+            Some("input_image") => {
+                if role != "user" || part.as_object().is_none_or(|object| {
+                    object.keys().any(|key| !matches!(key.as_str(), "type" | "image_url" | "detail"))
+                }) || part.get("file_id").is_some() {
+                    return Err(invalid_request("image input must be bounded inline user content"));
+                }
+                let url = part["image_url"]
+                    .as_str()
+                    .ok_or_else(|| invalid_request("image_url must be an inline data URI"))?;
+                let (media_type, data) = parse_data_uri(url)?;
+                let image = decode_image(media_type, data, vision, images)?;
+                content.push(canonical_image(&image));
+            }
+            _ => return Err(invalid_request("message content type is unsupported")),
+        }
+    }
+    if content.len() == 1 && content[0]["type"] == "text" {
+        Ok(content.remove(0)["text"].clone())
+    } else {
+        Ok(Value::Array(content))
+    }
+}
+
+fn response_tool_call(item: &Value, custom: bool) -> Result<Value, OpenAiError> {
+    let call_id = item["call_id"]
+        .as_str()
+        .ok_or_else(|| invalid_request("tool call_id is required"))?;
+    let name = item["name"]
+        .as_str()
+        .ok_or_else(|| invalid_request("tool name is required"))?;
+    let arguments = if custom {
+        serde_json::json!({"input": item["input"].as_str().ok_or_else(|| invalid_request("custom tool input is required"))?}).to_string()
+    } else {
+        item["arguments"]
+            .as_str()
+            .ok_or_else(|| invalid_request("function arguments are required"))?
+            .into()
+    };
+    Ok(
+        serde_json::json!({"role":"assistant","content":null,"tool_calls":[{
+        "id":call_id,"type":"function","function":{"name":name,"arguments":arguments}}]}),
+    )
+}
+
+fn response_tool_output(item: &Value) -> Result<Value, OpenAiError> {
+    let call_id = item["call_id"]
+        .as_str()
+        .ok_or_else(|| invalid_request("tool output call_id is required"))?;
+    let output = item
+        .get("output")
+        .ok_or_else(|| invalid_request("tool output is required"))?;
+    let content = output
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| output.to_string());
+    Ok(serde_json::json!({"role": "tool", "tool_call_id": call_id, "content": content}))
+}
+
+fn response_max_tokens(value: Option<&Value>) -> Result<Option<u64>, OpenAiError> {
+    let Some(tokens) = value.and_then(Value::as_u64) else {
+        return Ok(None);
+    };
+    if tokens == 0 || tokens > MAX_OUTPUT_TOKENS {
+        return Err(invalid_request(
+            "max_output_tokens exceeds the configured ceiling",
+        ));
+    }
+    Ok(Some(tokens))
+}
+
+fn response_tool_choice(value: Option<&Value>) -> Result<Value, OpenAiError> {
+    let Some(value) = value else {
+        return Ok(Value::String("auto".into()));
+    };
+    if value
+        .as_str()
+        .is_some_and(|choice| matches!(choice, "auto" | "none" | "required"))
+    {
+        return Ok(value.clone());
+    }
+    let name = value["name"]
+        .as_str()
+        .ok_or_else(|| invalid_request("tool_choice is invalid"))?;
+    if !matches!(value["type"].as_str(), Some("function" | "custom")) {
+        return Err(OpenAiError {
+            code: "unsupported_tool",
+            message: "hosted tool choice is unsupported",
+        });
+    }
+    Ok(serde_json::json!({"type":"function","function":{"name":name}}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn configured_sampling_profile() -> GatewayProfile {
+        let mut profile = GatewayProfile::text();
+        profile.sampling.defaults = BTreeMap::from([
+            (
+                "temperature".into(),
+                serde_json::Number::from_f64(0.6).unwrap(),
+            ),
+            ("top_p".into(), serde_json::Number::from_f64(0.95).unwrap()),
+            ("top_k".into(), 20.into()),
+            ("min_p".into(), serde_json::Number::from_f64(0.0).unwrap()),
+            (
+                "presence_penalty".into(),
+                serde_json::Number::from_f64(0.0).unwrap(),
+            ),
+            (
+                "repetition_penalty".into(),
+                serde_json::Number::from_f64(1.0).unwrap(),
+            ),
+            ("thinking_token_budget".into(), 8192.into()),
+        ]);
+        profile.sampling.chat_template_kwargs =
+            BTreeMap::from([("preserve_thinking".into(), Value::Bool(true))]);
+        profile
+    }
+
+    fn route(generation: u64) -> ObservedRoute {
+        ObservedRoute::new(
+            "i_11111111111111111111111111111111",
+            generation,
+            "172.30.0.2".parse().unwrap(),
+            8000,
+            [("GET", "/v1/models"), ("POST", "/v1/completions")],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn route_is_absent_until_semantic_identity_passes() {
+        let routes = RouteRegistry::default();
+        routes.mark_warming("ornith", 1);
+        assert!(matches!(routes.lookup("ornith"), RouteLookup::Warming));
+        routes.publish(
+            "ornith",
+            "ornith-1.5:9b".into(),
+            "Ornith-1.5-9B".into(),
+            route(1),
+        );
+        assert!(matches!(routes.lookup("ornith"), RouteLookup::Healthy(_)));
+    }
+
+    #[test]
+    fn openai_route_allowlist_exposes_only_implemented_generation_protocols() {
+        for denied in [
+            ("GET", "health"),
+            ("GET", "metrics"),
+            ("POST", "tokenize"),
+            ("GET", "http://169.254.169.254/latest/meta-data"),
+            ("DELETE", "models"),
+        ] {
+            assert_eq!(public_action(denied.0, denied.1), None);
+        }
+        assert_eq!(public_action("GET", "models"), Some(PublicAction::Models));
+        assert_eq!(
+            public_action("POST", "completions"),
+            Some(PublicAction::Completions)
+        );
+        assert_eq!(
+            public_action("POST", "chat/completions"),
+            Some(PublicAction::Chat)
+        );
+        assert_eq!(
+            public_action("POST", "responses"),
+            Some(PublicAction::Responses)
+        );
+    }
+
+    #[test]
+    fn draining_old_generation_cannot_remove_new_route() {
+        let routes = RouteRegistry::default();
+        routes.publish("ornith", "public".into(), "internal".into(), route(2));
+        routes.drain("ornith", 1);
+        assert!(matches!(routes.lookup("ornith"), RouteLookup::Healthy(_)));
+    }
+
+    #[test]
+    fn responses_string_input_translates_to_native_vllm_chat() {
+        let request = rewrite_responses_request(
+            br#"{"model":"ornith","input":"hello","stream":true}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let value: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(value["model"], "Ornith-1.5-9B");
+        assert_eq!(value["messages"][0]["content"], "hello");
+        assert!(value.get("max_tokens").is_none());
+        assert!(request.stream);
+    }
+
+    #[test]
+    fn responses_forwards_an_explicit_output_limit_without_inventing_a_default() {
+        let request = rewrite_responses_request(
+            br#"{"model":"ornith","input":"hello","max_output_tokens":8192}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let value: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(value["max_tokens"], 8192);
+    }
+
+    #[test]
+    fn responses_rejects_hosted_tools_instead_of_forwarding_them() {
+        let error = rewrite_responses_request(
+            br#"{"model":"ornith","input":"hello","tools":[{"type":"web_search_preview"}]}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "unsupported_tool");
+    }
+
+    #[test]
+    fn responses_text_sse_lifecycle_is_exact() {
+        let mut encoder = ResponsesEncoder::new("ornith".into(), BTreeSet::new());
+        encoder
+            .accept(GenerationEvent::TextDelta { text: "hi".into() })
+            .unwrap();
+        encoder
+            .accept(GenerationEvent::Finished {
+                finish_reason: Some("stop".into()),
+            })
+            .unwrap();
+        encoder.accept(GenerationEvent::Done).unwrap();
+        let names = std::iter::from_fn(|| encoder.pop())
+            .map(|event| event.name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "response.created",
+                "response.in_progress",
+                "response.output_item.added",
+                "response.content_part.added",
+                "response.output_text.delta",
+                "response.output_text.done",
+                "response.content_part.done",
+                "response.output_item.done",
+                "response.completed"
+            ]
+        );
+    }
+
+    #[test]
+    fn responses_reasoning_sse_and_final_document_are_native() {
+        let mut encoder = ResponsesEncoder::new("ornith".into(), BTreeSet::new());
+        encoder
+            .accept(GenerationEvent::ReasoningDelta {
+                text: "inspect state".into(),
+            })
+            .unwrap();
+        encoder.accept(GenerationEvent::Done).unwrap();
+        let names = std::iter::from_fn(|| encoder.pop())
+            .map(|event| event.name)
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"response.reasoning_summary_text.delta"));
+        assert_eq!(encoder.final_document()["output"][0]["type"], "reasoning");
+    }
+
+    #[test]
+    fn anthropic_reasoning_sse_and_final_document_are_native() {
+        let mut encoder = AnthropicEncoder::new("ornith".into());
+        encoder
+            .accept(GenerationEvent::ReasoningDelta {
+                text: "inspect state".into(),
+            })
+            .unwrap();
+        encoder.accept(GenerationEvent::Done).unwrap();
+        let deltas = std::iter::from_fn(|| encoder.pop())
+            .filter(|event| event.name == "content_block_delta")
+            .map(|event| event.data["delta"]["type"].clone())
+            .collect::<Vec<_>>();
+        assert!(deltas.contains(&Value::String("thinking_delta".into())));
+        assert_eq!(encoder.final_document()["content"][0]["type"], "thinking");
+    }
+
+    #[test]
+    fn chat_reasoning_delta_stays_separate_from_answer_content() {
+        let document = chat_stream_document(
+            GenerationEvent::ReasoningDelta {
+                text: "inspect state".into(),
+            },
+            "chatcmpl_1",
+            "ornith",
+        )
+        .unwrap();
+        assert_eq!(
+            document["choices"][0]["delta"],
+            serde_json::json!({"reasoning_content":"inspect state"})
+        );
+    }
+
+    #[test]
+    fn chat_completions_rewrites_only_identity_over_the_shared_model() {
+        let request = rewrite_chat_request(
+            br#"{"model":"public","messages":[{"role":"user","content":"hi"}],"stream":true}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let value: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(value["messages"][0]["content"], "hi");
+        assert_eq!(value["model"], "Ornith-1.5-9B");
+        assert!(
+            rewrite_chat_request(br#"{"messages":[],"url":"http://private"}"#, "model").is_err()
+        );
+        assert!(rewrite_chat_request(
+            br#"{"messages":[],"tools":[{"type":"web_search"}]}"#,
+            "model"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn chat_stream_options_are_only_sent_for_streaming_requests() {
+        for (stream, expected) in [(false, false), (true, true)] {
+            let body = format!(r#"{{"messages":[],"stream":{stream}}}"#);
+            let request = rewrite_chat_request(body.as_bytes(), "model").unwrap();
+            let value: Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(value.get("stream_options").is_some(), expected);
+        }
+    }
+
+    #[test]
+    fn configured_chat_sampling_defaults_do_not_override_client_values() {
+        let profile = configured_sampling_profile();
+        let defaults = rewrite_chat_request_with_profile(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}]}"#,
+            "Ornith-1.5-9B",
+            &profile,
+        )
+        .unwrap();
+        let defaults: Value = serde_json::from_slice(&defaults.body).unwrap();
+        assert_eq!(
+            (
+                &defaults["temperature"],
+                &defaults["top_p"],
+                &defaults["top_k"]
+            ),
+            (&Value::from(0.6), &Value::from(0.95), &Value::from(20))
+        );
+
+        let explicit = rewrite_chat_request_with_profile(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"temperature":0.2,"top_p":0.7,"presence_penalty":0.4}"#,
+            "Ornith-1.5-9B",
+            &profile,
+        )
+        .unwrap();
+        let explicit: Value = serde_json::from_slice(&explicit.body).unwrap();
+        assert_eq!(
+            (
+                &explicit["temperature"],
+                &explicit["top_p"],
+                &explicit["presence_penalty"]
+            ),
+            (&Value::from(0.2), &Value::from(0.7), &Value::from(0.4))
+        );
+    }
+
+    #[test]
+    fn configured_template_defaults_do_not_override_existing_values() {
+        let profile = configured_sampling_profile();
+        let mut body = serde_json::json!({
+            "chat_template_kwargs": {"preserve_thinking": false}
+        });
+
+        apply_sampling_defaults(body.as_object_mut().unwrap(), &profile.sampling);
+
+        assert_eq!(body["chat_template_kwargs"]["preserve_thinking"], false);
+    }
+
+    #[test]
+    fn configured_responses_and_anthropic_share_sampling_defaults() {
+        let profile = configured_sampling_profile();
+        let chat = rewrite_chat_request_with_profile(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}]}"#,
+            "Ornith-1.5-9B",
+            &profile,
+        )
+        .unwrap();
+        let chat: Value = serde_json::from_slice(&chat.body).unwrap();
+        let responses = rewrite_responses_request_with_profile(
+            br#"{"model":"ornith","input":"hi"}"#,
+            "Ornith-1.5-9B",
+            &profile,
+        )
+        .unwrap();
+        let responses: Value = serde_json::from_slice(&responses.body).unwrap();
+        let anthropic = rewrite_anthropic_request_with_profile(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"max_tokens":8}"#,
+            "Ornith-1.5-9B",
+            &profile,
+        )
+        .unwrap();
+        let anthropic: Value = serde_json::from_slice(&anthropic.body).unwrap();
+        assert_eq!(
+            (
+                &responses["temperature"],
+                &responses["top_p"],
+                &responses["top_k"]
+            ),
+            (
+                &anthropic["temperature"],
+                &anthropic["top_p"],
+                &anthropic["top_k"]
+            )
+        );
+        assert_eq!(responses["temperature"], 0.6);
+        assert_eq!(chat["thinking_token_budget"], 8192);
+        assert_eq!(responses["thinking_token_budget"], 8192);
+        assert_eq!(anthropic["thinking_token_budget"], 8192);
+        assert_eq!(chat["chat_template_kwargs"]["preserve_thinking"], true);
+        assert_eq!(responses["chat_template_kwargs"]["preserve_thinking"], true);
+        assert_eq!(anthropic["chat_template_kwargs"]["preserve_thinking"], true);
+    }
+
+    #[test]
+    fn native_responses_preserves_wire_items_and_applies_profile_defaults() {
+        let mut profile = configured_sampling_profile();
+        profile.native_responses = true;
+        let request = rewrite_native_responses_request_with_profile(
+            br#"{"model":"client","input":"hi","stream":true}"#,
+            "public-model",
+            &profile,
+        )
+        .unwrap();
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+
+        assert!(request.stream);
+        assert_eq!(body["model"], "public-model");
+        assert_eq!(body["input"], "hi");
+        assert_eq!(body["chat_template_kwargs"]["preserve_thinking"], true);
+    }
+
+    #[test]
+    fn anthropic_explicit_thinking_budget_overrides_profile_default() {
+        let request = rewrite_anthropic_request_with_profile(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"max_tokens":8192,"thinking":{"type":"enabled","budget_tokens":4096}}"#,
+            "Ornith-1.5-9B",
+            &configured_sampling_profile(),
+        )
+        .unwrap();
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+
+        assert_eq!(body["thinking_token_budget"], 4096);
+    }
+
+    #[test]
+    fn anthropic_effort_reaches_openai_upstream() {
+        let request = rewrite_anthropic_request_with_profile(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"max_tokens":8192,"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}}"#,
+            "Ornith-1.5-9B",
+            &configured_sampling_profile(),
+        )
+        .unwrap();
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+
+        assert_eq!(body["reasoning_effort"], "low");
+        assert!(body.get("thinking_token_budget").is_none());
+    }
+
+    #[test]
+    fn anthropic_effort_is_mapped_by_the_engine_profile() {
+        let mut profile = configured_sampling_profile();
+        profile
+            .sampling
+            .reasoning_effort_map
+            .insert("high".into(), "xhigh".into());
+        let request = rewrite_anthropic_request_with_profile(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"max_tokens":8192,"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}"#,
+            "Ornith-1.5-9B",
+            &profile,
+        )
+        .unwrap();
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+
+        assert_eq!(body["reasoning_effort"], "xhigh");
+    }
+
+    #[test]
+    fn responses_effort_controls_reasoning_without_a_fixed_budget() {
+        let request = rewrite_responses_request_with_profile(
+            br#"{"model":"ornith","input":"hi","reasoning":{"effort":"low"}}"#,
+            "Ornith-1.5-9B",
+            &configured_sampling_profile(),
+        )
+        .unwrap();
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+
+        assert_eq!(body["reasoning_effort"], "low");
+        assert!(body.get("thinking_token_budget").is_none());
+    }
+
+    #[test]
+    fn responses_none_effort_disables_thinking_for_one_request() {
+        let request = rewrite_responses_request(
+            br#"{"model":"ornith","input":"hi","reasoning":{"effort":"none"}}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+    }
+
+    #[test]
+    fn responses_without_tools_omit_tool_controls() {
+        let request =
+            rewrite_responses_request(br#"{"model":"ornith","input":"hi"}"#, "Ornith-1.5-9B")
+                .unwrap();
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+
+        assert!(body.get("tools").is_none());
+        assert!(body.get("tool_choice").is_none());
+        assert!(body.get("parallel_tool_calls").is_none());
+    }
+
+    #[test]
+    fn chat_and_anthropic_without_tools_omit_tool_controls() {
+        let chat = rewrite_chat_request(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":true}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let anthropic = rewrite_anthropic_request(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"max_tokens":8}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+
+        for request in [chat, anthropic] {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            assert!(body.get("tools").is_none());
+            assert!(body.get("tool_choice").is_none());
+            assert!(body.get("parallel_tool_calls").is_none());
+        }
+    }
+
+    #[test]
+    fn codex_0_149_payload_metadata_and_namespaces_stay_client_side() {
+        let request = rewrite_responses_request(br#"{"model":"ornith","instructions":"root rules","input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"developer rules"}]},{"type":"message","role":"system","content":"system rules"},{"type":"message","role":"user","content":"run it"},{"type":"function_call","call_id":"call_1","name":"run","arguments":"{}"},{"type":"function_call_output","call_id":"call_1","output":"done"}],"tools":[{"type":"namespace","name":"multi","tools":[{"type":"function","name":"run","parameters":{"type":"object"}}]}],"store":false,"stream":true,"client_metadata":{"thread_id":"fixture"}}"#,
+            "Ornith-1.5-9B").unwrap();
+        let value: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(value["tools"][0]["function"]["name"], "multi.run");
+        assert!(value.get("client_metadata").is_none());
+        let roles = value["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|message| message["role"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(roles, ["system", "user", "assistant", "tool"]);
+        let system = value["messages"][0]["content"].as_str().unwrap();
+        assert!(
+            system.contains("root rules")
+                && system.contains("developer rules")
+                && system.contains("system rules")
+        );
+    }
+
+    #[test]
+    fn responses_follow_up_preserves_local_reasoning_summary_in_model_history() {
+        let request = rewrite_responses_request(
+            br#"{"model":"ornith","input":[{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"inspect state"}]},{"type":"message","role":"user","content":"continue"}]}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let request: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(request["messages"][0]["reasoning_content"], "inspect state");
+    }
+
+    #[test]
+    fn responses_coalesces_one_assistant_turn_for_qwen_history() {
+        let request = rewrite_responses_request(
+            br#"{"model":"ornith","input":[{"type":"message","role":"user","content":"start"},{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"inspect state"}]},{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"I will inspect."}]},{"type":"function_call","call_id":"call_1","name":"run","arguments":"{}"},{"type":"function_call","call_id":"call_2","name":"read","arguments":"{\"path\":\"README.md\"}"},{"type":"function_call_output","call_id":"call_1","output":"done"},{"type":"function_call_output","call_id":"call_2","output":"contents"}]}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let request: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(
+            request["messages"],
+            serde_json::json!([
+                {"role":"user","content":"start"},
+                {"role":"assistant","content":"I will inspect.","reasoning_content":"inspect state","tool_calls":[
+                    {"id":"call_1","type":"function","function":{"name":"run","arguments":"{}"}},
+                    {"id":"call_2","type":"function","function":{"name":"read","arguments":"{\"path\":\"README.md\"}"}}
+                ]},
+                {"role":"tool","tool_call_id":"call_1","content":"done"},
+                {"role":"tool","tool_call_id":"call_2","content":"contents"}
+            ])
+        );
+    }
+
+    #[test]
+    fn anthropic_and_openai_adapters_share_events_not_json() {
+        let events = [
+            GenerationEvent::TextDelta { text: "hi".into() },
+            GenerationEvent::Usage {
+                prompt_tokens: 2,
+                completion_tokens: 1,
+            },
+            GenerationEvent::Finished {
+                finish_reason: Some("stop".into()),
+            },
+            GenerationEvent::Done,
+        ];
+        let mut openai = ResponsesEncoder::new("ornith".into(), BTreeSet::new());
+        let mut anthropic = AnthropicEncoder::new("ornith".into());
+        for event in events {
+            openai.accept(event.clone()).unwrap();
+            anthropic.accept(event).unwrap();
+        }
+        assert_eq!(openai.final_document()["object"], "response");
+        assert_eq!(anthropic.final_document()["type"], "message");
+    }
+
+    #[test]
+    fn anthropic_hosted_tools_beta_and_unknown_routes_reject() {
+        for body in [
+            br#"{"model":"ornith","messages":[{"role":"user","content":"x"}],"max_tokens":8,"tools":[{"type":"web_search_20250305","name":"web","input_schema":{}}]}"#.as_slice(),
+            br#"{"model":"ornith","messages":[{"role":"user","content":"x"}],"max_tokens":8,"container":{"id":"hosted"}}"#.as_slice(),
+            br#"{"model":"ornith","messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example"}}]}],"max_tokens":8}"#.as_slice(),
+        ] {
+            assert!(rewrite_anthropic_request(body, "Ornith-1.5-9B").is_err());
+        }
+    }
+
+    #[test]
+    fn anthropic_preserves_verified_local_thinking_in_follow_up_history() {
+        let reasoning = "inspect state";
+        let signature = local_reasoning_signature(reasoning);
+        let request = serde_json::json!({
+            "model":"ornith","max_tokens":8,
+            "messages":[
+                {"role":"user","content":"start"},
+                {"role":"assistant","content":[
+                    {"type":"thinking","thinking":reasoning,"signature":signature},
+                    {"type":"text","text":"done"}
+                ]},
+                {"role":"user","content":"continue"}
+            ]
+        });
+        let rewritten =
+            rewrite_anthropic_request(&serde_json::to_vec(&request).unwrap(), "Ornith-1.5-9B")
+                .unwrap();
+        let rewritten: Value = serde_json::from_slice(&rewritten.body).unwrap();
+        assert_eq!(rewritten["messages"][1]["reasoning_content"], reasoning);
+    }
+
+    #[test]
+    fn anthropic_accepts_its_omitted_thinking_block_on_the_next_turn() {
+        let signature = local_reasoning_signature("hidden summary");
+        let request = serde_json::json!({"model":"claude-sonnet-4-5","max_tokens":8,
+            "messages":[{"role":"user","content":"start"},{"role":"assistant","content":[
+                {"type":"thinking","thinking":"","signature":signature},
+                {"type":"text","text":"answer"}]},{"role":"user","content":"continue"}]});
+        assert!(
+            rewrite_anthropic_request(&serde_json::to_vec(&request).unwrap(), "Ornith-1.5-9B")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn anthropic_disabled_thinking_reaches_the_ornith_template() {
+        let rewritten = rewrite_anthropic_request(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"max_tokens":8,"thinking":{"type":"disabled"}}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let rewritten: Value = serde_json::from_slice(&rewritten.body).unwrap();
+        assert_eq!(rewritten["chat_template_kwargs"]["enable_thinking"], false);
+    }
+
+    #[test]
+    fn anthropic_manual_thinking_used_by_claude_cli_is_accepted() {
+        let rewritten = rewrite_anthropic_request(
+            br#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"max_tokens":32000,"thinking":{"type":"enabled","budget_tokens":31999}}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let rewritten: Value = serde_json::from_slice(&rewritten.body).unwrap();
+        assert_eq!(rewritten["chat_template_kwargs"]["enable_thinking"], true);
+    }
+
+    #[test]
+    fn anthropic_count_tokens_ignores_output_only_manual_thinking_budget() {
+        let rewritten = rewrite_anthropic_count_request(
+            br#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"thinking":{"type":"enabled","budget_tokens":31999}}"#,
+            "Ornith-1.5-9B",
+        );
+        assert!(rewritten.is_ok());
+    }
+
+    #[test]
+    fn anthropic_count_response_accepts_native_shape() {
+        assert_eq!(
+            rewrite_anthropic_count_response(br#"{"input_tokens":7}"#).unwrap(),
+            7
+        );
+    }
+
+    #[test]
+    fn anthropic_native_count_rewrites_only_model_identity() {
+        let rewritten = rewrite_anthropic_native_count_request(
+            br#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"thinking":{"type":"enabled","budget_tokens":32}}"#,
+            "served-model",
+        )
+        .unwrap();
+        let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+        assert_eq!(rewritten["model"], "served-model");
+        assert_eq!(rewritten["messages"][0]["content"], "hi");
+        assert_eq!(rewritten["thinking"]["type"], "enabled");
+    }
+
+    #[test]
+    fn anthropic_omitted_thinking_streams_only_its_signature() {
+        let rewritten = rewrite_anthropic_request(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"max_tokens":8,"thinking":{"type":"adaptive","display":"omitted"}}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        assert!(rewritten.omit_reasoning);
+        let mut encoder = AnthropicEncoder::with_omitted_reasoning("ornith".into());
+        encoder
+            .accept(GenerationEvent::ReasoningDelta { text: "why".into() })
+            .unwrap();
+        encoder.accept(GenerationEvent::Done).unwrap();
+        let deltas = std::iter::from_fn(|| encoder.pop())
+            .filter(|event| event.name == "content_block_delta")
+            .map(|event| event.data["delta"]["type"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(deltas, [Value::String("signature_delta".into())]);
+        assert_eq!(encoder.final_document()["content"][0]["thinking"], "");
+    }
+
+    #[test]
+    fn responses_reasoning_text_and_tool_indices_are_unique_and_ordered() {
+        let mut encoder = ResponsesEncoder::new("ornith".into(), BTreeSet::new());
+        for event in [
+            GenerationEvent::ReasoningDelta { text: "why".into() },
+            GenerationEvent::TextDelta {
+                text: "answer".into(),
+            },
+            GenerationEvent::ToolCallDelta {
+                index: 0,
+                call_id: Some("call_1".into()),
+                name: Some("shell".into()),
+                arguments: "{}".into(),
+            },
+            GenerationEvent::Done,
+        ] {
+            encoder.accept(event).unwrap();
+        }
+        let indices = std::iter::from_fn(|| encoder.pop())
+            .filter(|event| event.name == "response.output_item.added")
+            .map(|event| event.data["output_index"].as_u64().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(indices, [0, 1, 2]);
+    }
+
+    #[test]
+    fn responses_marks_tool_preamble_as_commentary() {
+        let mut encoder = ResponsesEncoder::new("ornith".into(), BTreeSet::new());
+        for event in [
+            GenerationEvent::TextDelta {
+                text: "checking".into(),
+            },
+            GenerationEvent::ToolCallDelta {
+                index: 0,
+                call_id: Some("call_1".into()),
+                name: Some("shell".into()),
+                arguments: "{}".into(),
+            },
+            GenerationEvent::Done,
+        ] {
+            encoder.accept(event).unwrap();
+        }
+        let message = std::iter::from_fn(|| encoder.pop())
+            .find(|event| {
+                event.name == "response.output_item.done" && event.data["item"]["type"] == "message"
+            })
+            .unwrap();
+        assert_eq!(message.data["item"]["phase"], "commentary");
+        assert_eq!(encoder.final_document()["output"][0]["phase"], "commentary");
+    }
+
+    #[test]
+    fn responses_marks_terminal_text_as_final_answer() {
+        let mut encoder = ResponsesEncoder::new("ornith".into(), BTreeSet::new());
+        encoder
+            .accept(GenerationEvent::TextDelta {
+                text: "done".into(),
+            })
+            .unwrap();
+        encoder.accept(GenerationEvent::Done).unwrap();
+        let message = std::iter::from_fn(|| encoder.pop())
+            .find(|event| event.name == "response.output_item.done")
+            .unwrap();
+        assert_eq!(message.data["item"]["phase"], "final_answer");
+        assert_eq!(
+            encoder.final_document()["output"][0]["phase"],
+            "final_answer"
+        );
+    }
+
+    #[test]
+    fn responses_bounds_reasoning_text_and_tools_as_one_output() {
+        let mut encoder = ResponsesEncoder::new("ornith".into(), BTreeSet::new());
+        encoder
+            .accept(GenerationEvent::ReasoningDelta {
+                text: "r".repeat(MAX_COMPLETION_BODY_BYTES / 2 + 1),
+            })
+            .unwrap();
+        let result = encoder.accept(GenerationEvent::TextDelta {
+            text: "t".repeat(MAX_COMPLETION_BODY_BYTES / 2),
+        });
+        assert!(result.is_err());
+    }
+}

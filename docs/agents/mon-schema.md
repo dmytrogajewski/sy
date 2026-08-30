@@ -1,14 +1,16 @@
-# `sy mon` schema reference
+# `sy mon` snapshot schema
 
-This is the wire-shape reference for the `sy mon` aggregator's JSON
-output — the same payload backs `sy mon snapshot --json`, the
-`system.mon.snapshot` IPC op, and the MCP tools of the same name.
+Who this is for: agents and scripts that parse
+`sy mon snapshot --json`, the `system.mon.snapshot` IPC method, or
+the MCP tools of the same name.
 
-Source of truth for field names and types:
+This is the field list. Humans who just want the popup can press
+`Super+m` or run `sy mon`.
+
+Source of truth:
 [`crates/sy-core/src/mon/snapshot.rs`](../../crates/sy-core/src/mon/snapshot.rs).
-A canonical populated example lives at
-[`crates/sy-core/tests/snapshots/mon/spec-example.json`](../../crates/sy-core/tests/snapshots/mon/spec-example.json)
-and is checked-in as the snapshot golden so any drift fails CI.
+A filled example lives at
+[`crates/sy-core/tests/snapshots/mon/spec-example.json`](../../crates/sy-core/tests/snapshots/mon/spec-example.json).
 
 ## `SystemSnapshot`
 
@@ -28,7 +30,6 @@ aggregator publishes one snapshot per 1 Hz tick.
 | `aiplane`        | `AiplanePanel`                | Per-workload-kind queue / warm pool / latency. |
 | `knowledge`      | `KnowledgePanel`              | Collections, docs indexed, embed throughput, search QPS. |
 | `agents`         | `AgentsPanel`                 | Running count, RSS total, recent policy denials. |
-| `power`          | `PowerPanel`                  | Current arm, dwell fractions, cumulative regret. |
 | `supervisor`     | `SupervisorPanel`             | One row per supervised plane. |
 | `errors`         | `Vec<MonError>`               | Per-source errors observed during the tick. Empty on a fully-healthy tick. |
 
@@ -68,8 +69,7 @@ for the authoritative field list.
 
 ## MCP tool surface
 
-The `sy mon mcp` stdio JSON-RPC server (ROADMAP Step 14) advertises
-two tools:
+The `sy mon mcp` stdio JSON-RPC server advertises two tools:
 
 ### `system.mon.snapshot`
 
@@ -113,5 +113,6 @@ semantics:
   is higher than they know. The wire shape is documented per-version;
   cross-version compatibility is not promised.
 
-Current version: `1`. See `SCHEMA_VERSION` in
+Current version: `2`. Version 2 removes the retired experimental power
+panel. See `SCHEMA_VERSION` in
 `crates/sy-core/src/mon/snapshot.rs`.

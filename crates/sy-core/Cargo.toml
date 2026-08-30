@@ -70,7 +70,7 @@ nix = { workspace = true, features = ["fs"] }
 # `Arc<ArcSwap<SystemSnapshot>>` so the aggregator's tick task can
 # publish a fresh snapshot lock-free while the IPC handlers
 # (`system.mon.snapshot` / `subscribe`) read it. Already a workspace
-# dep (sy-power Step 24 hot-swap path); declaring it here only pins
+# dep used by sy-mon and Spark; declaring it here only pins
 # the dep to this crate's compile graph.
 arc-swap.workspace = true
 # sy-mon Step 9 (SPEC §3 SCOPE item 1 "`mon-exporter` feature on

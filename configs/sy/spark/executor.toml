@@ -1,0 +1,14 @@
+schema = "sy.spark.executor/v1"
+socket = "/run/sy-spark/executor.sock"
+agent_uid = 996
+engine_catalog = "/etc/sy/spark/engines"
+resources_policy = "/etc/sy/spark-agent.toml"
+
+[host]
+architecture = "aarch64"
+gpu_model = "NVIDIA GB10"
+compute_capability = "12.1"
+dgx_build = "7.5.0"
+driver_version = "580.159.03"
+toolkit_version = "1.19.0"
+protected_fingerprint = "sha256:7e42b88250e762400e91b902cfa1fcda6b4d1cc118eb6b91fd50716b41cf8510"

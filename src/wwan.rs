@@ -268,7 +268,11 @@ fn probe_modem() -> Option<ModemInfo> {
     // A line like: `/org/freedesktop/ModemManager1/Modem/0 [Fibocom] …`
     let idx: String = list
         .lines()
-        .find_map(|l| l.rsplit('/').next().and_then(|t| t.split_whitespace().next()))
+        .find_map(|l| {
+            l.rsplit('/')
+                .next()
+                .and_then(|t| t.split_whitespace().next())
+        })
         .filter(|t| t.chars().all(|c| c.is_ascii_digit()))
         .map(|t| t.to_string())?;
     let out = Command::new("mmcli").args(["-m", &idx]).output().ok()?;
@@ -434,9 +438,9 @@ fn modeswitch(yes: bool) -> Result<()> {
             "modem present ({} {}) but identity unchanged — re-check with `sy wwan status`",
             m.manufacturer, m.model
         ),
-        None => println!(
-            "modem not visible yet; give it a few more seconds and run `sy wwan status`"
-        ),
+        None => {
+            println!("modem not visible yet; give it a few more seconds and run `sy wwan status`")
+        }
     }
     Ok(())
 }
@@ -578,8 +582,12 @@ mod tests {
 
     #[test]
     fn field_extracts_mmcli_block_values() {
-        let block = "  Status   |         state: connected\n           | signal quality: 41% (recent)";
+        let block =
+            "  Status   |         state: connected\n           | signal quality: 41% (recent)";
         assert_eq!(field(block, "state").as_deref(), Some("connected"));
-        assert_eq!(field(block, "signal quality").as_deref(), Some("41% (recent)"));
+        assert_eq!(
+            field(block, "signal quality").as_deref(),
+            Some("41% (recent)")
+        );
     }
 }

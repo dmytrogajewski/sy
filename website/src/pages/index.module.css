@@ -1,0 +1,146 @@
+.hero {
+  min-height: calc(100vh - var(--ifm-navbar-height));
+  display: flex;
+  align-items: flex-start;
+  padding: 3rem 0 4rem;
+}
+
+.frame {
+  width: min(920px, 100%);
+  margin: 0 auto;
+  border: 1px solid var(--sy-border);
+  background: #101010;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+
+.frameHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.85rem;
+  border-bottom: 1px solid var(--sy-border);
+  background: #0a0a0a;
+  color: var(--sy-fg-dim);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+}
+
+.dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: #3a3a3a;
+}
+
+.dot:nth-child(1) {
+  background: #ea6962;
+}
+
+.dot:nth-child(2) {
+  background: #d8a657;
+}
+
+.dot:nth-child(3) {
+  background: #a9b665;
+}
+
+.title {
+  margin-left: 0.4rem;
+}
+
+.frameBody {
+  padding: 1.5rem 1.5rem 1.75rem;
+  font-size: 0.92rem;
+  line-height: 1.65;
+}
+
+.lede {
+  margin: 0 0 1rem;
+  color: var(--sy-fg);
+  font-size: 1.02rem;
+  line-height: 1.7;
+}
+
+.ledeDim {
+  margin: 0 0 1.35rem;
+  color: var(--sy-fg-dim);
+  line-height: 1.7;
+}
+
+.line {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.85rem;
+}
+
+.prompt {
+  color: var(--sy-green);
+  flex: 0 0 auto;
+}
+
+.cmd {
+  color: var(--sy-fg);
+}
+
+.comment {
+  color: var(--sy-fg-dim);
+}
+
+.output {
+  margin: 0 0 1.25rem;
+  padding: 0;
+  color: var(--sy-fg-dim);
+  white-space: pre-wrap;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.schema {
+  display: block;
+  width: min(920px, 100%);
+  height: auto;
+  aspect-ratio: 840 / 500;
+  margin: 2.5rem auto 0;
+  border: 1px solid var(--sy-border);
+  background: #101010;
+}
+
+.planes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.75rem;
+  margin-top: 2.5rem;
+}
+
+.plane {
+  border: 1px solid var(--sy-border);
+  padding: 1rem 1.05rem;
+  background: #0c0c0c;
+  color: inherit;
+  text-decoration: none;
+}
+
+.plane:hover {
+  border-color: var(--sy-aqua);
+  text-decoration: none;
+}
+
+.planeName {
+  display: block;
+  color: var(--sy-aqua);
+  font-size: 0.85rem;
+  margin-bottom: 0.25rem;
+}
+
+.planeDesc {
+  display: block;
+  color: var(--sy-fg-dim);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}

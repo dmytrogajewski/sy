@@ -2,6 +2,9 @@
 
 - Status: accepted
 
+Who this is for: contributors who need a short "why we picked this"
+page instead of re-reading a long SPEC.
+
 > Template: [MADR 4.0](https://adr.github.io/madr/).
 
 ## Context and Problem Statement

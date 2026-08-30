@@ -2,20 +2,41 @@
 
 > An Agentic OS layer for Fedora 43 — a single Rust binary plus declarative configs that turn a stock Fedora laptop into an agent-first workstation, with no snowflake state outside the repo.
 
-`sy` is one repo, one binary, one source of truth. A fresh machine plus `cargo build --release && ./target/release/sy apply` reproduces the entire system. The binary hosts every plane — `aiplane` (on-device NPU inference via ONNX Runtime + AMD VitisAI EP), `agt` (sandboxed agent runner), `knowledge` (semantic search backed by qdrant), `power` (adaptive power governor), `stack` (layer-shell waybar replacement), `syauth` (phone-as-key sudo), and the niri/wayland rice — all supervised by the user-level `sy.target` and reachable over the same CLIG + JSON-over-stdio surface, so an agent drives any plane the same way a human does.
+`sy` is one repo, one binary, one source of truth. A fresh machine plus `cargo build --release && ./target/release/sy apply` reproduces the entire system. The binary hosts every plane — `aiplane` (on-device NPU inference), `agt` (sandboxed agent runner), `knowledge` (semantic search), `file` (native file manager), `mon` (health popup), `spark` (remote DGX Spark serving), `stack` (layer-shell bar), `syauth` (phone-as-key sudo), and the niri session — all supervised by `sy.target` and reachable over the same CLI + JSON surface, so an agent drives any plane the same way a human does.
 
 This file follows the [llms.txt proposal](https://llmstxt.org/). Paths are repository-relative.
 
 ## Docs
 
 - [README](README.md): project entry point — what `sy` is, the planes it hosts, the install command, and the usage examples.
+- [Start here](docs/intro.md): product story in short, then the map of tutorials, how-tos, reference, and explanation.
+- [Explanation: What sy is](docs/explanation/what-sy-is.md): why it exists, a day using it, what is required vs optional, why the rules are strict.
 - [Tutorial: Getting started](docs/tutorials/getting-started.md): bring up `sy` end-to-end on a fresh Fedora 43 laptop.
-- [How-to: Add a knowledge source](docs/how-to/add-a-knowledge-source.md): register a directory with the `knowledge` plane and run the first search.
-- [How-to: Troubleshoot syauth](docs/how-to/troubleshoot-syauth.md): diagnose phone-as-key sudo failures (BlueZ pairing, PAM, Android companion).
-- [Reference: CLI](docs/reference/cli.md): every `sy` subcommand — synopsis, options, exit codes, environment variables, examples.
-- [Reference: Glossary](docs/reference/glossary.md): one-line definitions for `sy`-specific terms (plane, aiplane, re-exec dance, snowflake, VitisAI EP, sy.target, …).
-- [Reference: pam_syauth.so](docs/reference/syauth-pam-module.md): PAM module reference for the syauth phone-as-key flow.
-- [Explanation: How the planes fit together](docs/explanation/architecture.md): the mental model — why one binary hosts every plane, how IPC threads the seams, the trade-offs we accepted.
+- [Tutorial: Search your local files](docs/tutorials/search-your-files.md): register a folder, index, search, fetch a chunk.
+- [Tutorial: Browse files with sy file](docs/tutorials/browse-your-files.md): open the window, confirm doctor, hover markdown.
+- [Tutorial: Drive sy from an agent](docs/tutorials/drive-sy-from-an-agent.md): `sy auto` MCP plumbing into Claude / Cursor / Codex / Gemini.
+- [Tutorial: Unlock sudo with your phone](docs/tutorials/syauth-setup.md): PAM + BLE + Android companion.
+- [How-to: Add a knowledge source](docs/how-to/add-a-knowledge-source.md): register a directory with the `knowledge` plane and run a search.
+- [How-to: Set up the NPU](docs/how-to/set-up-npu.md): Ryzen AI runtime, compile cache, confirm `vitisai`.
+- [How-to: Wire MCP into agents](docs/how-to/wire-mcp-into-agents.md): apply MCP detectors without hand-editing client configs.
+- [How-to: Install the Spark agent](docs/how-to/install-spark.md): OpenSSH dry-run, signed ARM64 install, status and doctor.
+- [How-to: Serve a model on Spark](docs/how-to/serve-a-model-on-spark.md): dry-run admission, fixture recipe, stop.
+- [How-to: Apply a theme](docs/how-to/apply-a-theme.md): render `configs/` with a named palette and reload the session.
+- [How-to: Run sy doctor](docs/how-to/run-doctor.md): cross-plane health probes.
+- [How-to: Run sy file](docs/how-to/run-sy-file.md): doctor and IPC from a shell.
+- [How-to: Troubleshoot sy file](docs/how-to/troubleshoot-sy-file.md): daemon socket, refused IPC, empty preview, niri binds.
+- [How-to: Write a sy plugin](docs/how-to/write-a-sy-plugin.md): minimum previewer in Rust, Python, or Bash.
+- [How-to: Troubleshoot a sy plugin](docs/how-to/troubleshoot-sy-plugin.md): manifest, binary, capability routing, crash logs.
+- [How-to: Troubleshoot syauth](docs/how-to/troubleshoot-syauth.md): diagnose phone-as-key sudo failures.
+- [Reference: CLI](docs/reference/cli.md): planes and applets — synopsis, options, exit codes, environment variables, examples.
+- [Reference: Configuration](docs/reference/config.md): `sy.toml`, `configs/`, `SY_*`, apply destinations.
+- [Reference: Spark](docs/reference/spark.md): install / serve / ps / stop / client-config, admission reserves, gateway paths.
+- [Reference: Glossary](docs/reference/glossary.md): one-line definitions for `sy`-specific terms.
+- [Reference: pam_syauth.so](docs/reference/syauth-pam-module.md): PAM module flags and arguments.
+- [Explanation: How the planes fit together](docs/explanation/architecture.md): why one binary hosts every plane.
+- [Explanation: No snowflakes](docs/explanation/no-snowflakes.md): why the repo is the source of truth.
+- [Explanation: Agent-first CLI](docs/explanation/agent-first-cli.md): `--json`, dry-run, exit codes.
+- [Explanation: NPU not GPU](docs/explanation/why-npu-not-gpu.md): why embeddings use VitisAI EP and not CUDA.
 
 ## Optional
 
@@ -23,4 +44,5 @@ This file follows the [llms.txt proposal](https://llmstxt.org/). Paths are repos
 - [ADR 0001 — Use Architecture Decision Records](docs/adr/0001-use-adrs.md): why `sy` records decisions as MADR-shaped ADRs under `docs/adr/`.
 - [ADR 0002 — Virtual workspace with a sy-core vocabulary crate](docs/adr/0002-virtual-workspace-with-sy-core-vocabulary.md): why the workspace is split with a shared vocabulary crate instead of one monolithic crate.
 - [ADR 0003 — VitisAI EP, not CUDA, for on-device embedding](docs/adr/0003-vitisai-ep-not-cuda-for-on-device-embedding.md): why the `aiplane` embed workload runs on the AMD XDNA2 NPU via VitisAI EP rather than CUDA.
-- [SPEC: Architecture refactor](specs/research/architecture-refactor/SPEC.md): the umbrella spec for the six-zone architectural hardening pass driving current refactors.
+- [ADR 0004 — publish = false](docs/adr/0004-publish-policy.md): why the root package is not published to crates.io.
+- [SPEC: Architecture refactor](specs/research/architecture-refactor/SPEC.md): the umbrella spec for the architectural hardening pass.

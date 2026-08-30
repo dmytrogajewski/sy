@@ -172,9 +172,7 @@ pub fn menu() -> Result<()> {
             // A gsm device stays `unavailable` while the wwan radio is off, so
             // the activation would fail with "no suitable device". Flip it on
             // first (idempotent) before dialling.
-            let _ = Command::new("nmcli")
-                .args(["radio", "wwan", "on"])
-                .status();
+            let _ = Command::new("nmcli").args(["radio", "wwan", "on"]).status();
             let ok = Command::new("nmcli")
                 .args(["connection", "up", "id", &name])
                 .status()?

@@ -22,8 +22,8 @@ highest-risk coupling between `aiplane` and `knowledge`.
 A workspace split is the obvious answer, but Rust workspaces have
 non-obvious failure modes: a "hub" crate that every other crate
 depends on becomes a rebuild bottleneck, and per-crate `publish`
-discipline is heavy ceremony for a single-maintainer rice that
-nobody installs from crates.io. The decision is the *shape* of
+discipline is heavy ceremony for a single-maintainer desktop layer
+that nobody installs from crates.io. The decision is the *shape* of
 the workspace: how many crates, who depends on whom, what is
 versioned how.
 
@@ -162,7 +162,7 @@ Discipline:
 
 - Good: each crate is independently versionable and
   publishable.
-- Bad: over-engineered for a single-maintainer rice that
+- Bad: over-engineered for a single-maintainer desktop layer that
   nobody installs from crates.io. Per-crate semver implies
   API stability guarantees `sy` has not committed to and does
   not need.

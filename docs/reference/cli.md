@@ -1,19 +1,17 @@
 # `sy` CLI reference
 
-Encyclopaedic reference for every `sy` subcommand: synopsis, options,
-exit codes, environment variables, examples. Generated from
-`src/main.rs` and the per-plane CLI modules; the source code is the
-source of truth.
+Flags, exit codes, environment variables, and examples for the `sy`
+planes and applets. The clap `--help` text in the binary is the
+source of truth if this page and the code disagree.
 
-For task-oriented walkthroughs, see [tutorials](../tutorials/) and
-[how-to guides](../how-to/). For the cross-cutting CLI contract
-(`--json` / `--dry-run` / exit codes / `NO_COLOR` / `SY_*` env vars),
-start with the [global conventions](#global-conventions) section
-below.
+For walkthroughs, see [tutorials](../tutorials/) and
+[how-to guides](../how-to/). For the cross-cutting contract
+(`--json` / `--dry-run` / exit codes / `NO_COLOR` / `SY_*`), start
+with [global conventions](#global-conventions) below.
 
 > Template: Good Docs Project reference. Source attribution and the
 > Diátaxis reference quadrant are described in
-> [`/home/dmitriy/sources/sy/.agents/skills/documenter/SKILL.md`](../../.agents/skills/documenter/SKILL.md).
+> [`.agents/skills/documenter/SKILL.md`](../../.agents/skills/documenter/SKILL.md).
 
 ## Global conventions
 
@@ -54,7 +52,6 @@ source):
 - **`sy aiplane`** — `status`, `list`, `run`, `cancel`.
 - **`sy knowledge`** — `list`, `index`, `search`, `manifests`, `status`,
   `bench`, `mcp-enable`, `mcp-disable`, `mcp-status`.
-- **`sy power`** — `status`, `log`, `explain`, `show`, `list-profiles`.
 - **`sy doctor`** — emits the SPEC §4.6 `sy.doctor/v1` schema.
 - **`sy crash`** — `list`, `show`.
 - **`sy ipc`** — `ping`, `describe` (default for `describe`).
@@ -64,6 +61,14 @@ source):
 - **`sy agt`** — `list`, `diag`.
 - **`sy auto`** — `configure`, `list-detectors`.
 - **`sy stack`** — `push --json`, `list --json`.
+- **`sy spark`** — `install`, `status`, `doctor`, `operations`, `token`,
+  `download`, `serve`, `launch`, `ps`, `logs`, `stop`, `ls`, `show`,
+  `rm`, `client-config`, `cert status`.
+- **`sy file`** — `doctor`. `sy file ipc <op>` prints the JSON
+  response envelope by default.
+- **`sy plugin`** — `list`, `doctor`.
+- **`sy mon`** — `snapshot`, `doctor`.
+- **`sy wwan`** — `status`.
 
 Subcommands not listed above do not currently accept `--json`. Adding
 the flag to them is a backwards-compatible extension.
@@ -74,11 +79,14 @@ State-changing subcommands honour `--dry-run` by printing the planned
 diff without applying. Honoured by:
 
 - `sy apply` (and the `--diff` alias).
-- `sy power apply`.
 - `sy auto configure` (dry-run is the **default**; `--apply` opts in).
 - `sy knowledge mcp-enable` / `sy knowledge mcp-disable` (dry-run is
   the default; `--apply` opts in).
 - `sy stack push` (`--dry-run` prints the planned push).
+- `sy spark <host> install` (inspect without installing).
+- `sy spark <host> serve` / `download` / `stop` / `rm` / `token` /
+  `operations cancel` (admission or mutation preview; no Docker or
+  GPU side effects on serve dry-run).
 
 Knowledge `mcp-enable` / `mcp-disable` and `auto configure` invert the
 usual default: they refuse to mutate disk unless `--apply` is set, so
@@ -89,19 +97,17 @@ agent callers cannot accidentally rewrite an agent's MCP config.
 `sy` uses **stable, documented** exit codes per SPEC §4.7. The
 constants live in the source under each plane's `exit` module
 (`src/doctor/mod.rs`, `src/knowledge/mod.rs`, `src/supervision/service.rs`,
-`src/power/mod.rs`, `src/ipc_cli.rs`, `src/crash/mod.rs`,
+`src/ipc_cli.rs`, `src/crash/mod.rs`,
 `src/agt/protocol.rs`).
 
 | Code | Meaning                  | Source of truth                                                           |
 |------|--------------------------|---------------------------------------------------------------------------|
 | `0`  | success                  | every plane                                                               |
 | `1`  | generic failure          | every plane                                                               |
-| `2`  | usage error              | clap (`ErrorKind::ValueValidation`), `policy`, `power`, `service`, `crash`|
-| `3`  | drift / warn-only / lint-fail | `doctor` (warn-only), `ipc` (degraded), `service` (status drift), `power` (ADWIN drift alarm), `policy lint` |
-| `4`  | not-ready / daemon-unreachable / not-found | `ipc` (starting/failed), `service` (not-ready), `power` (daemon-unreachable), `crash` (record not found), `agt` (daemon unavailable), `knowledge` (qdrant-unreachable) |
-| `5`  | embedding-failed / polkit-denied | `knowledge`, `power`                                                |
-| `6`  | unsupported hardware     | `power`                                                                   |
-| `7`  | onboarding-not-complete  | `power` (`sy power show` with insufficient audit window)                  |
+| `2`  | usage error              | clap (`ErrorKind::ValueValidation`), `policy`, `service`, `crash`         |
+| `3`  | warn-only / lint-fail    | `doctor` (warn-only), `ipc` (degraded), `service` (status drift), `policy lint`, `spark` (remote policy/state rejection), `mon snapshot` (aggregator unreachable), `file ipc` (daemon unreachable) |
+| `4`  | not-ready / daemon-unreachable / not-found | `ipc` (starting/failed), `service` (not-ready), `crash` (record not found), `agt` (daemon unavailable), `knowledge` (qdrant-unreachable), `spark` (OpenSSH/TLS/auth unreachable), `file ipc` (op refused) |
+| `5`  | embedding-failed / plugin-error | `knowledge`, `file ipc` (plugin error)                             |
 
 Each subcommand's reference entry lists the codes it can return.
 Codes not listed for a subcommand are not emitted by that subcommand.
@@ -115,9 +121,9 @@ load-bearing globals are:
 
 - `SY_ROOT` — global; same as `--root`.
 - `XDG_CONFIG_HOME` — read by `sy apply` to compute the default target.
-- `XDG_STATE_HOME` — read by `sy crash`, `sy knowledge`, `sy power`
-  for per-plane state directories.
-- `XDG_RUNTIME_DIR` — read by `sy agt`, `sy ipc`, `sy power` to locate
+- `XDG_STATE_HOME` — read by `sy crash` and `sy knowledge` for
+  per-plane state directories.
+- `XDG_RUNTIME_DIR` — read by `sy agt` and `sy ipc` to locate
   daemon Unix sockets.
 - `SY_PRIORITY` — QoS class for aiplane scheduler admission
   (`Realtime | Interactive | Background | Batch`).
@@ -126,8 +132,14 @@ load-bearing globals are:
 - `SY_DISK_THRESHOLD_GIB` — override the `sy disk` low-space threshold.
 - `SY_AGT_CWD`, `SY_AGT_AGENT`, `SY_AGT_SANDBOX_PROFILE`,
   `SY_AGT_REQUEST_ID` — `sy agt` sandbox + launcher overrides.
-- `SY_SYSFS_ROOT` — `sy power status` sysfs probe root override (test
-  hermeticity).
+- `SY_SPARK_*` — Spark client flags (`JSON`, `DRY_RUN`, `YES`,
+  `CONFIG_DIR`, `PROBE`, `LISTEN_ADDRESS`, `LISTEN_PORT`,
+  `RELEASE_SIGNATURE`, `RELEASE_PUBLIC_KEY`, and per-command
+  `REVISION` / `ALIAS` / `INSTANCE_NAME` / …). See [`sy spark`](#sy-spark).
+- `SY_FILE_SOCK` — override `$XDG_RUNTIME_DIR/sy-file.sock` for
+  `sy file ipc`.
+- `SY_MON_HISTORY_SIZE`, `SY_MON_TICK_MS`, `SY_MON_BIND`,
+  `SY_MON_HISTORY_PATH` — aggregator ring and socket for `sy mon collect`.
 - `NO_COLOR` and `TERM=dumb` — honoured by the tracing subscriber on
   stderr; agent stdout output is plain text regardless.
 
@@ -140,16 +152,15 @@ stdin is not a TTY, per CLIG. The pairs that ship today:
   `--token-from-stdin --yes` is paired and the UUID is on stdin.
 - `sy policy trust --confirm` — refuses without a TTY unless `--yes`
   is paired and `TRUST THIS PROFILE\n` is on stdin.
-- `sy power show` — only spawns `xdg-open` on the resulting PDF when
-  stdin is a TTY; `--no-open` skips the spawn unconditionally.
-
 ### Aliases and overloaded flags
 
 - `sy apply --diff` is a documented alias for `sy apply --dry-run --json`.
 - The bar-tile applets (`sy bat`, `sy bright`, `sy bt`, `sy gpu`,
-  `sy npu`, `sy disk`, `sy pwr`, `sy silent`, `sy syauth`, `sy vol`)
+  `sy npu`, `sy disk`, `sy profile`, `sy silent`, `sy syauth`, `sy vol`)
   take `--waybar` instead of `--json` for the single-JSON-line
   waybar `custom/*` schema.
+- `sy pwr` is the visible short alias for `sy profile`; neither command
+  starts a daemon or applies its own power policy.
 
 ---
 
@@ -460,117 +471,6 @@ sy knowledge sync --yes        # destructive — drops the collection
 
 - [how-to: add a knowledge source](../how-to/add-a-knowledge-source.md)
 - [reference: aiplane](#sy-aiplane)
-
----
-
-## `sy power`
-
-Adaptive power orchestrator. Source: `src/power/mod.rs`, `src/power/cli.rs`.
-
-### Subcommands
-
-| Subcommand                   | Purpose                                                                  |
-|------------------------------|--------------------------------------------------------------------------|
-| `status`                     | Current state, profile, shield, reason.                                  |
-| `daemon`                     | `sy-powerd` entrypoint (systemd user unit).                              |
-| `apply`                      | Install polkit action, udev rule, systemd unit, waybar tile.             |
-| `log`                        | Tail the NDJSON telemetry log.                                           |
-| `profile <NAME>` / `--auto`  | Manual profile override; `--auto` clears it.                             |
-| `explain`                    | Audit replay: which bandit arm fired and why.                            |
-| `train`                      | Offline GRU retrain — reads telemetry, writes ONNX.                      |
-| `show`                       | Render the offline `sy power` PDF report.                                |
-| `list-profiles`              | Enumerate the bandit arm table from `configs/sy/power.toml`.             |
-| `mcp`                        | MCP server entrypoint (stdio JSON-RPC).                                  |
-
-### Options per subcommand
-
-#### `sy power status`
-
-| Name        | Type | Default | Env | Description                                                                                          |
-|-------------|------|---------|-----|------------------------------------------------------------------------------------------------------|
-| `--json`    | bool | `false` | —   | Emit the SPEC §4 `sy.power.status/v1` schema. Mutually exclusive with `--waybar`.                    |
-| `--waybar`  | bool | `false` | —   | Emit the SPEC §5 waybar pill JSON (`{text, tooltip, class}`). Daemon-down renders as the `error` class and exits 0 so waybar keeps polling. |
-
-#### `sy power apply`
-
-| Name         | Type | Default | Env | Description                                                                                                              |
-|--------------|------|---------|-----|--------------------------------------------------------------------------------------------------------------------------|
-| `--dry-run`  | bool | `false` | —   | Print the planned changes without touching disk.                                                                         |
-| `--yes`      | bool | `false` | —   | Gate destructive actions — currently the `systemctl --user mask power-profiles-daemon.service` path.                     |
-| `--with-ppd` | bool | `false` | —   | Keep `power-profiles-daemon` active; run the `sy power` shim alongside it without binding `net.hadess.PowerProfiles`.    |
-
-#### `sy power log`
-
-| Name       | Type     | Default                       | Env | Description                                              |
-|------------|----------|-------------------------------|-----|----------------------------------------------------------|
-| `--since`  | duration | `DEFAULT_TAIL_WINDOW`         | —   | Filter to entries newer than this duration (`1h`, `30m`, `7d`). Bad value exits 2. |
-| `--json`   | bool     | `false`                       | —   | Emit raw NDJSON (one JSON per line).                     |
-
-#### `sy power profile`
-
-| Name      | Type   | Default | Env | Description                                                                  |
-|-----------|--------|---------|-----|------------------------------------------------------------------------------|
-| `<NAME>`  | string | none    | —   | Profile name from the bandit arm table. Mutually exclusive with `--auto`.    |
-| `--auto`  | bool   | `false` | —   | Clear any manual override and restore bandit control.                        |
-
-#### `sy power explain`
-
-| Name      | Type  | Default | Env | Description                                                                  |
-|-----------|-------|---------|-----|------------------------------------------------------------------------------|
-| `--last`  | usize | `10`    | —   | Show the last N decisions.                                                   |
-| `--json`  | bool  | `false` | —   | Emit machine-readable JSON instead of a human summary.                       |
-
-#### `sy power train`
-
-| Name    | Type | Default                                                                | Env | Description                  |
-|---------|------|------------------------------------------------------------------------|-----|------------------------------|
-| `--in`  | path | `<state>/telemetry-<today>.ndjson`                                     | —   | Input NDJSON path.           |
-| `--out` | path | `<state>/forecaster.onnx`                                              | —   | Output ONNX path.            |
-
-#### `sy power show`
-
-| Name           | Type     | Default                                                  | Env | Description                                                                                                  |
-|----------------|----------|----------------------------------------------------------|-----|--------------------------------------------------------------------------------------------------------------|
-| `--since`      | duration | `7d`                                                     | —   | Audit-log window. Bad value exits 2.                                                                         |
-| `--out`        | path     | `<state>/reports/sy-power-<rfc3339>.pdf`                 | —   | PDF output path. Ignored with `--json`.                                                                      |
-| `--no-open`    | bool     | `false`                                                  | —   | Do not invoke `xdg-open` on the PDF (set implicitly when stdin is not a TTY).                                |
-| `--allow-thin` | bool     | `false`                                                  | —   | Skip the 24 h "thin window" gate (exit 7 by default).                                                        |
-| `--json`       | bool     | `false`                                                  | —   | Emit JSON; skip PDF generation.                                                                              |
-
-#### `sy power list-profiles`
-
-| Name     | Type | Default | Env | Description                                          |
-|----------|------|---------|-----|------------------------------------------------------|
-| `--json` | bool | `false` | —   | Emit the SPEC §4 `sy.power.profiles/v1` schema.      |
-
-### Exit codes
-
-- `0` — success.
-- `1` — generic failure.
-- `2` — usage error (bad `--since`, unknown profile name, conflicting flags).
-- `3` — `EXIT_DRIFT_ACTIVE` — ADWIN drift alarm reported by the daemon.
-- `4` — `EXIT_DAEMON_UNREACHABLE` — socket missing or refused.
-- `7` — `EXIT_ONBOARDING_NOT_COMPLETE` — `sy power show` window has fewer than 24 h of audit entries and `--allow-thin` was not set.
-
-(Defined in `src/power/mod.rs` and `src/power/cli.rs`.)
-
-### Examples
-
-```bash
-sy power status                          # human summary
-sy power status --json                   # sy.power.status/v1 schema
-sy power apply --dry-run                 # preview installer changes
-sy power profile performance             # pin a profile
-sy power profile --auto                  # release the pin
-sy power log --since=1h --json
-sy power explain --last=1 --json
-sy power show --since=24h --no-open      # CI / headless
-sy power show --json --since=1d          # agent path
-```
-
-### See also
-
-- [reference: aiplane](#sy-aiplane) — power consumes the aiplane intent channel.
 
 ---
 
@@ -922,7 +822,7 @@ Wrapper for `systemctl --user` / `journalctl --user` per SPEC §4.7
 (arch-supervision Step 3). Source: `src/supervision/service.rs`.
 
 Canonical short names: `aiplane`, `knowledge`, `qdrant`, `stack-bar`,
-`agentd`, `powerd`. Each resolves to `sy-<name>.service`. Full
+`agentd`. Each resolves to `sy-<name>.service`. Full
 `sy-<name>.service` / `sy-<name>.socket` / `sy-<name>.target` /
 `sy.target` names are passed through verbatim. Anything else exits 2.
 
@@ -1093,6 +993,303 @@ sy stack toggle
 
 ---
 
+## `sy spark`
+
+Inspect, install, and drive one configured DGX Spark appliance.
+`<HOST>` is passed to OpenSSH as a single argument; there is no
+arbitrary-command escape hatch. OpenSSH owns `known_hosts`, agents,
+hardware tokens, and password prompts. Credentials are never accepted
+as `sy` arguments and are never stored by `sy`.
+
+Source: `src/spark/cli.rs`. Hidden unit entrypoints (`run-agent`,
+`run-executor`, `activate`, `inspect`) are not part of the laptop
+CLI.
+
+### Synopsis
+
+```text
+sy spark <HOST> <COMMAND>
+```
+
+### Subcommands
+
+| Subcommand | Purpose |
+|------------|---------|
+| `install` | Inspect the appliance (`--dry-run`) or apply the signed ARM64 install (`--yes`). |
+| `upgrade` | Stage and verify a signed side-by-side release, preserve engines, and automatically roll back failed semantic health. |
+| `rollback` | SSH-only exact rollback to the verified preceding control-plane release. |
+| `status` | Compact authenticated agent/executor health over pinned HTTPS. |
+| `doctor` | Authenticated, read-only compatibility and security checks. |
+| `operations` | Inspect, `--follow`, or `cancel` durable operations. |
+| `token` | `create` / `list` / `revoke` scoped bearer tokens. Create returns the secret once on stdout. |
+| `download` | Acquire and verify one immutable Hugging Face model snapshot. |
+| `serve` | Start a verified model with the root-configured engine after fail-closed admission. |
+| `launch` | Run Codex, Claude Code, or OpenCode locally against an exact managed Spark model. |
+| `ps` | Compact active model-process table. Absent and failed historical instances are omitted from human and JSON output. |
+| `logs` | Bounded, redacted logs for one instance. |
+| `stop` | Persist stopped intent, drain, and remove one instance. An already-absent instance is an idempotent success. |
+| `ls` | Compact table of verified local models available to run; `--json` returns the complete inventory document. |
+| `show` | Immutable identity, provenance, aliases, and references for one model. |
+| `rm` | Preview or remove only unreferenced native-cache model data. |
+| `client-config` | Render a user-level Codex or Claude Code projection. Names the token env var; does not read or write it. |
+| `cert status` | Authenticated leaf-certificate identity. |
+| `cert rotate` | SSH-only leaf rotation with overlap; `--ca` rotates and atomically re-pins the local CA. |
+
+### Options (`install`)
+
+| Name | Type | Default | Env | Description |
+|------|------|---------|-----|-------------|
+| `--dry-run` | bool | `false` | `SY_SPARK_DRY_RUN` | Upload a content-addressed probe, run `spark bootstrap inspect`, verify the hash, remove the probe. No install. |
+| `--yes` | bool | `false` | `SY_SPARK_YES` | Apply the reviewed manifest. Requires `--release-signature` and `--release-public-key`. |
+| `--json` | bool | `false` | `SY_SPARK_JSON` | Emit `sy.spark.install-manifest/v1`. |
+| `--probe` | path | `$XDG_DATA_HOME/sy/spark-release/sy-aarch64` | `SY_SPARK_PROBE` | ARM64 feature-minimal probe artefact. |
+| `--release-manifest` | path | `SHA256SUMS` beside `--probe` | `SY_SPARK_RELEASE_MANIFEST` | Signed inventory for the binary and separate catalog TOMLs. |
+| `--listen-address` | IP | none | `SY_SPARK_LISTEN_ADDRESS` | Explicit LAN address for the HTTPS listener. |
+| `--listen-port` | u16 | `9843` | `SY_SPARK_LISTEN_PORT` | HTTPS listener port. |
+| `--release-signature` | path | none | `SY_SPARK_RELEASE_SIGNATURE` | Minisign signature for `SHA256SUMS` (required with `--yes`). |
+| `--release-public-key` | path | none | `SY_SPARK_RELEASE_PUBLIC_KEY` | Pinned minisign public key (required with `--yes`). |
+| `--config-dir` | path | Spark config root | `SY_SPARK_CONFIG_DIR` | Local Spark configuration root. |
+
+`upgrade` accepts the same options. `rollback` and `cert rotate` accept
+`--dry-run`, `--yes`, `--json`, and `--config-dir`; exactly one of `--dry-run`
+and `--yes` is required. `cert rotate --ca` explicitly replaces the local CA.
+
+### Options (`launch`)
+
+```text
+sy spark <HOST> launch <codex|claude|opencode> [OPTIONS] [-- <AGENT_ARGS>...]
+```
+
+| Name | Type | Env | Description |
+|------|------|-----|-------------|
+| `--model` | string | `SY_SPARK_LAUNCH_MODEL` | Exact installed model identity or alias. |
+| `--config` | bool | `SY_SPARK_LAUNCH_CONFIG` | Configure launch-owned state and exit. |
+| `--restore` | bool | `SY_SPARK_LAUNCH_RESTORE` | Remove only sy-owned Codex launch files. |
+| `-y`, `--yes` | bool | `SY_SPARK_YES` | Approve a fixed missing-client installer. |
+| `--dry-run` | bool | `SY_SPARK_DRY_RUN` | Resolve/reuse/admit without mutation. |
+| `--json` | bool | `SY_SPARK_JSON` | Emit `sy.spark.launch-plan/v1`; requires `--dry-run` or `--config`. |
+| `--config-dir` | path | `SY_SPARK_CONFIG_DIR` | Protected Spark configuration root. |
+
+Arguments are accepted only after `--` and are passed directly without a
+shell. The agent runs in the current directory with inherited terminal I/O and
+receives a separate inference-only token. The Spark administrator credential is
+never exposed. Exit codes `1..125` from the child are propagated.
+
+### Token scopes (`token create --scope`)
+
+`models:read`, `models:write`, `instances:read`, `instances:write`,
+`inference`, `logs:read`, `operations:read`, `operations:cancel`,
+`benchmarks:read`, `benchmarks:write`. Repeat `--scope` for each. The benchmark
+scopes remain wire-compatible for pre-policy clients; the normal CLI has no
+recipe, benchmark, or tuning commands.
+
+### Exit codes
+
+- `0` — success.
+- `1` — unexpected failure.
+- `2` — usage or local configuration.
+- `3` — remote policy or state rejection (admission denied, invalid model
+  intent, and similar).
+- `4` — OpenSSH/SFTP/agent unreachable, TLS identity mismatch, or
+  authentication failure.
+
+### Examples
+
+```bash
+sy spark dgx-spark install --dry-run --json
+sy spark dgx-spark install --yes --release-signature sy-aarch64.minisig \
+  --release-public-key sy-release.pub
+sy spark dgx-spark upgrade --dry-run --json
+sy spark dgx-spark rollback --dry-run --json
+sy spark dgx-spark cert rotate --dry-run --json
+sy spark dgx-spark status --json
+sy spark dgx-spark doctor --json
+sy spark dgx-spark serve ornith-1.5:9b --dry-run --json
+sy spark dgx-spark ps --json
+sy spark dgx-spark token create --name reader --scope models:read \
+  --scope operations:read --detach --json
+sy spark dgx-spark client-config ornith --client codex
+sy spark dgx-spark launch codex --model ornith-1.5:9b
+sy spark dgx-spark launch claude --model ornith-1.5:9b -- --permission-mode plan
+sy spark dgx-spark launch opencode --model ornith-1.5:9b
+```
+
+### See also
+
+- [How to install the Spark agent](../how-to/install-spark.md)
+- [How to serve a model on Spark](../how-to/serve-a-model-on-spark.md)
+- [Spark reference](spark.md)
+
+---
+
+## `sy file`
+
+Native niri-tiled file manager (iced). Bare `sy file [PATH]` opens
+the window (prints `scaffold` then enters the GUI when stdout is a
+TTY and `gui-iced` is on). Source: `src/file/cli.rs`.
+
+### Synopsis
+
+```text
+sy file [PATH]
+sy file doctor [--json]
+sy file ipc <OP> …
+sy file mcp
+sy file waybar
+```
+
+### Subcommands
+
+| Subcommand | Purpose |
+|------------|---------|
+| *(none)* | Open the manager on `PATH` (default: launch cwd / `$HOME` via niri binds). |
+| `doctor` | Six health probes. Emits `sy.file.doctor/v1` with `--json`. |
+| `ipc serve` | Run the daemon in-process on `$XDG_RUNTIME_DIR/sy-file.sock` (or `SY_FILE_SOCK` / `--sock`). |
+| `ipc open` / `cd` / `select` / `copy` / `move` / `trash` / `restore` / `search` / `preview` / `ops-list` / `op-cancel` / `state` | One-shot JSON ops against the running daemon. |
+| `mcp` | Stdio JSON-RPC MCP server for the `file_*` tools. |
+| `waybar` | One-shot waybar custom-module tile (running-op count). Exits 0 even if the daemon is down. |
+
+Doctor probes: `file.daemon.reachable`, `file.fonts.jetbrainsmono_nerd`,
+`file.niri.binds`, `file.systemd.unit_installed`,
+`file.bookmarks.writable`, `file.plugins.registry`.
+
+### Exit codes (`ipc`)
+
+- `0` — success.
+- `1` — generic failure.
+- `2` — usage error.
+- `3` — daemon unreachable.
+- `4` — op cancelled or refused.
+- `5` — plugin error.
+
+`sy file doctor` exits `0` when every probe passed, `1` when any
+probe failed, and `2` when there are warnings only (not `3` — that
+code is top-level `sy doctor` warn-only).
+
+### Examples
+
+```bash
+sy file ~
+sy file doctor --json
+sy file ipc state
+sy file mcp
+sy file waybar
+```
+
+### See also
+
+- [How to run sy file](../how-to/run-sy-file.md)
+- [How to troubleshoot sy file](../how-to/troubleshoot-sy-file.md)
+- [sy file doctor](sy-file-doctor.md)
+- [sy file MCP](sy-file-mcp.md)
+
+---
+
+## `sy plugin`
+
+Discover, install, and inspect previewer plugins for `sy file`.
+Source: `src/plugin/cli.rs`.
+
+### Synopsis
+
+```text
+sy plugin list [--json]
+sy plugin doctor [--json]
+sy plugin install <SOURCE> [--unsigned] [--rev <REF>]
+sy plugin uninstall <ID>
+sy plugin enable <ID>
+sy plugin disable <ID>
+sy plugin exec <ID> <METHOD> [--params <JSON>]
+sy plugin cat-manifest <ID>
+sy plugin validate <PATH>
+sy plugin reload
+```
+
+`<SOURCE>` for `install` is a directory that contains `plugin.toml`,
+or a git URL prefixed `git+`. Signature verification is on unless
+you pass `--unsigned` (local development only).
+
+### Exit codes
+
+- `0` — success.
+- `1` — generic failure.
+- `2` — usage or validation (bad args, bad glob, malformed TOML).
+- `6` — manifest invalid at install.
+- `7` — signature mismatch at install.
+- `8` — plugin unreachable or unhealthy (`doctor` uses this when any
+  check fails).
+
+### Examples
+
+```bash
+sy plugin list --json
+sy plugin doctor --json
+sy plugin install ./crates/sy-plugin-md
+sy plugin exec sy-plugin-md preview --params '{"path":"README.md"}'
+```
+
+### See also
+
+- [How to write a sy plugin](../how-to/write-a-sy-plugin.md)
+- [sy file doctor](sy-file-doctor.md)
+
+---
+
+## `sy mon`
+
+On-demand Wayland layer-shell health dashboard plus a 1 Hz
+aggregator. Bare `sy mon` toggles the popup (`Mod+M` / `Super+m`).
+Without `gui-iced`, bare `sy mon` falls back to `snapshot --json`.
+Source: `src/mon/cli.rs`.
+
+### Synopsis
+
+```text
+sy mon
+sy mon collect [--history-size N] [--tick-ms MS] [--bind PATH] [--history-path PATH]
+sy mon snapshot [--json]
+sy mon mcp
+sy mon open
+sy mon close
+sy mon doctor [--json]
+sy mon waybar
+```
+
+### Subcommands
+
+| Subcommand | Purpose |
+|------------|---------|
+| *(none)* / `open` / `close` | Toggle, open, or close the iced layer-shell popup. `close` is idempotent. |
+| `collect` | Long-lived aggregator (`sy-mon-collect.service`). Ring default 600 s, tick 1000 ms. Socket `$XDG_RUNTIME_DIR/sy/mon.sock`. |
+| `snapshot` | Latest `SystemSnapshot`. `--json` is the machine document. |
+| `mcp` | Stdio JSON-RPC: `system.mon.snapshot` and `system.mon.history`. |
+| `doctor` | Plumbing checks (`mon.collect.running`, per-plane sockets, history writable). |
+| `waybar` | One-shot `ok` / `degraded` / `down` tile. Missing aggregator → `down`, not an error exit. |
+
+### Exit codes (`snapshot`)
+
+- `0` — success.
+- `3` — aggregator unreachable after the connect-retry budget
+  (same code as doctor warn-only / power drift, so agents dispatch
+  identically).
+
+### Examples
+
+```bash
+sy mon
+sy mon snapshot --json
+sy mon doctor --json
+sy mon mcp
+sy mon waybar
+```
+
+### See also
+
+- [mon schema](../agents/mon-schema.md)
+- [mon remote scrape](../admin/mon-remote.md)
+
+---
+
 ## `sy syauth`
 
 Phone-as-key sudo applet. Wraps upstream `syauth`. Source:
@@ -1201,14 +1398,31 @@ Notification watcher/counter.
 
 AMD Ryzen AI NPU applet — bar tile showing active/idle + holders.
 
+### `sy profile` (`sy pwr`)
+
+Thin frontend for Fedora's `tuned-ppd`. It does not run a policy daemon or
+write sysfs controls. With no action it opens a Fuzzel picker.
+
+| Name         | Type | Default | Env                 | Description                                                        |
+|--------------|------|---------|---------------------|--------------------------------------------------------------------|
+| `<ACTION>`   | enum | `menu`  | `SY_PROFILE_ACTION` | `menu | status | next | power-saver | balanced | performance`.       |
+| `--waybar`   | bool | `false` | —                   | Emit the active profile for the `custom/sy-profile` panel tile.    |
+| `--json`     | bool | `false` | —                   | Emit the selected profile and `tuned-ppd` backend as JSON.         |
+
+```bash
+sy profile                    # picker
+sy profile next               # cycle profiles
+sy profile performance        # select directly
+sy pwr balanced               # short compatibility alias
+sy profile status --json
+```
+
+On the panel, left-click cycles, middle-click restores `balanced`, and
+right-click opens the picker.
+
 ### `sy popup <KEY>`
 
 Toggle a named popup window. `KEY` is one of `agents | cal | nmtui`.
-
-### `sy pwr`
-
-Power menu: tuned profile + lock/suspend/reboot/shutdown/logout
-(`--waybar` for bar JSON).
 
 ### `sy silent`
 
@@ -1247,6 +1461,12 @@ Set the desktop wallpaper (`swaybg`).
 
 Fuzzel-based wifi picker via `nmcli`. No args.
 
+### `sy wwan`
+
+Mobile broadband (USB 4G modem). Subcommands:
+`enable | disable | up | down | status | modeswitch`.
+`status` accepts `--json`. `modeswitch` requires `--yes`.
+
 ### `sy cal`
 
 Interactive terminal calendar (`h/l` prev/next month, `j/k` year,
@@ -1266,6 +1486,7 @@ Open the rendered Telegram palette in Telegram Desktop to apply it.
 ## See also
 
 - [`sy apply`](#sy-apply) — the bootstrap entry point.
+- [`sy spark`](#sy-spark), [`sy file`](#sy-file), [`sy plugin`](#sy-plugin), [`sy mon`](#sy-mon)
 - [tutorial: getting started](../tutorials/getting-started.md)
 - [how-to: add a knowledge source](../how-to/add-a-knowledge-source.md)
 - [`CLAUDE.md`](../../CLAUDE.md) — the CLIG + agent-friendly CLI contract.

@@ -17,6 +17,47 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 use crate::codec::{RequestCodec, ResponseCodec};
 use crate::envelope::{Request, Response};
 
+/// Kernel-authenticated identity attached to one accepted Unix peer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerCredentials {
+    pid: Option<i32>,
+    uid: u32,
+    gid: u32,
+}
+
+impl PeerCredentials {
+    pub const fn new(pid: Option<i32>, uid: u32, gid: u32) -> Self {
+        Self { pid, uid, gid }
+    }
+
+    pub const fn pid(self) -> Option<i32> {
+        self.pid
+    }
+
+    pub const fn uid(self) -> u32 {
+        self.uid
+    }
+
+    pub const fn gid(self) -> u32 {
+        self.gid
+    }
+}
+
+/// Admission policy evaluated only against credentials supplied by the kernel.
+pub trait PeerAuthorizer: Send + Sync + 'static {
+    fn authorize(&self, credentials: Option<PeerCredentials>) -> bool;
+}
+
+/// Backward-compatible policy used by [`Server::new`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SameEuidAuthorizer;
+
+impl PeerAuthorizer for SameEuidAuthorizer {
+    fn authorize(&self, credentials: Option<PeerCredentials>) -> bool {
+        credentials.is_some_and(|peer| peer.uid == rustix::process::geteuid().as_raw())
+    }
+}
+
 /// Async request handler. One instance is shared across every
 /// connection the `Server` accepts (`Send + Sync + 'static`), so
 /// per-connection state lives behind interior-mutability locks
@@ -29,13 +70,27 @@ pub trait Handler: Send + Sync + 'static {
 /// `SO_PEERCRED`, dispatches each frame to `H::handle`.
 pub struct Server<H: Handler> {
     handler: Arc<H>,
+    authorizer: Arc<dyn PeerAuthorizer>,
+    max_request_frame_length: Option<usize>,
 }
 
 impl<H: Handler> Server<H> {
     pub fn new(handler: H) -> Self {
+        Self::with_authorizer(handler, SameEuidAuthorizer)
+    }
+
+    pub fn with_authorizer(handler: H, authorizer: impl PeerAuthorizer) -> Self {
         Self {
             handler: Arc::new(handler),
+            authorizer: Arc::new(authorizer),
+            max_request_frame_length: None,
         }
+    }
+
+    /// Bound request payloads for a protocol whose closed wire shape is small.
+    pub fn with_max_request_frame_length(mut self, max: usize) -> Self {
+        self.max_request_frame_length = Some(max);
+        self
     }
 
     /// Accept-loop. Returns only on listener error; per-connection
@@ -44,7 +99,7 @@ impl<H: Handler> Server<H> {
     pub async fn serve(self, listener: UnixListener) -> io::Result<()> {
         loop {
             let (stream, _addr) = listener.accept().await?;
-            if !is_peer_self(&stream) {
+            if !self.authorizer.authorize(peer_credentials(&stream)) {
                 // SPEC §4.2 origin check: reject anything that isn't
                 // the same uid as the daemon. Silently drop the
                 // connection — no error response, since the wire
@@ -54,7 +109,8 @@ impl<H: Handler> Server<H> {
                 continue;
             }
             let handler = Arc::clone(&self.handler);
-            tokio::spawn(serve_connection(stream, handler));
+            let max_request_frame_length = self.max_request_frame_length;
+            tokio::spawn(serve_connection(stream, handler, max_request_frame_length));
         }
     }
 }
@@ -63,16 +119,23 @@ impl<H: Handler> Server<H> {
 /// returns the kernel-verified credentials of the connected peer;
 /// `rustix::process::geteuid()` returns this process's effective UID.
 /// Equality is the SPEC §4.2 admission rule on a single-user host.
-fn is_peer_self(stream: &UnixStream) -> bool {
-    let Ok(cred) = stream.peer_cred() else {
-        return false;
-    };
-    cred.uid() == rustix::process::geteuid().as_raw()
+fn peer_credentials(stream: &UnixStream) -> Option<PeerCredentials> {
+    stream
+        .peer_cred()
+        .ok()
+        .map(|cred| PeerCredentials::new(cred.pid(), cred.uid(), cred.gid()))
 }
 
-async fn serve_connection<H: Handler>(stream: UnixStream, handler: Arc<H>) {
+async fn serve_connection<H: Handler>(
+    stream: UnixStream,
+    handler: Arc<H>,
+    max_request_frame_length: Option<usize>,
+) {
     let (reader, writer) = stream.into_split();
-    let mut req_stream = FramedRead::new(reader, RequestCodec::default());
+    let codec = max_request_frame_length
+        .map(RequestCodec::with_max_frame_length)
+        .unwrap_or_default();
+    let mut req_stream = FramedRead::new(reader, codec);
     let mut resp_sink = FramedWrite::new(writer, ResponseCodec::default());
     while let Some(decoded) = req_stream.next().await {
         let req = match decoded {
@@ -157,6 +220,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn default_authorizer_still_accepts_only_same_euid() {
+        let authorizer = SameEuidAuthorizer;
+        let own_uid = rustix::process::geteuid().as_raw();
+        assert!(authorizer.authorize(Some(PeerCredentials::new(
+            Some(std::process::id() as i32),
+            own_uid,
+            rustix::process::getegid().as_raw(),
+        ))));
+        assert!(!authorizer.authorize(Some(PeerCredentials::new(
+            Some(std::process::id() as i32),
+            own_uid.wrapping_add(1),
+            rustix::process::getegid().as_raw(),
+        ))));
+        assert!(!authorizer.authorize(None));
+    }
+
     #[tokio::test]
     async fn client_server_round_trip() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -194,6 +274,35 @@ mod tests {
             }
             other => panic!("expected Ok, got {other:?}"),
         }
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn injected_authorizer_sees_kernel_peer_credentials() {
+        #[derive(Clone)]
+        struct RecordingAuthorizer(StdArc<Mutex<Option<PeerCredentials>>>);
+        impl PeerAuthorizer for RecordingAuthorizer {
+            fn authorize(&self, credentials: Option<PeerCredentials>) -> bool {
+                *self.0.lock().expect("mutex") = credentials;
+                credentials.is_some()
+            }
+        }
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sock = tmp.path().join("ipc.sock");
+        let listener = UnixListener::bind(&sock).expect("bind");
+        let observed = StdArc::new(Mutex::new(None));
+        let server = Server::with_authorizer(Echo, RecordingAuthorizer(observed.clone()));
+        let server_handle = tokio::spawn(async move {
+            let _ = server.serve(listener).await;
+        });
+        let mut client = Client::connect(&sock).await.expect("connect");
+        client
+            .call("system.health", serde_json::json!({}), CallOpts::default())
+            .await
+            .expect("call");
+        let peer = observed.lock().expect("mutex").expect("kernel credentials");
+        assert_eq!(peer.uid(), rustix::process::geteuid().as_raw());
         server_handle.abort();
     }
 

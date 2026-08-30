@@ -1,0 +1,53 @@
+#include <tunables/global>
+
+profile sy-spark-agent /opt/sy-spark/current/sy flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  /opt/sy-spark/releases/*/sy mr,
+  /opt/sy-spark/hf-http-fallback/*/venv/bin/python* ixr,
+  /opt/sy-spark/hf-http-fallback/*/venv/bin/huggingface-cli ixr,
+  /opt/sy-spark/hf-http-fallback/*/venv/bin/ r,
+  /opt/sy-spark/hf-http-fallback/*/venv/pyvenv.cfg r,
+  /opt/sy-spark/hf-http-fallback/*/venv/lib/** mr,
+  /etc/sy/spark-agent.toml r,
+  /etc/sy/spark/models.toml r,
+  /etc/sy/spark/engines/ r,
+  /etc/sy/spark/engines/*.toml r,
+  deny /etc/sy/spark/** wklx,
+  /var/lib/sy-spark/ r,
+  /var/lib/sy-spark/state.sqlite3* rwk,
+  /var/lib/sy-spark/backups/ rw,
+  /var/lib/sy-spark/backups/** rwk,
+  /var/lib/sy-spark/huggingface/ rw,
+  /var/lib/sy-spark/huggingface/** rwk,
+  /var/lib/sy-spark/tls/ r,
+  /var/lib/sy-spark/tls/** r,
+  /run/credentials/sy-spark-agent.service/ r,
+  /run/credentials/sy-spark-agent.service/bootstrap-token r,
+  /run/credentials/sy-spark-agent.service/hf-token r,
+  /run/systemd/notify w,
+  /run/sy-spark/executor.sock rw,
+  /proc/meminfo r,
+  /proc/*/cgroup r,
+  /proc/pressure/ r,
+  /proc/pressure/** r,
+  /proc/self/ r,
+  /proc/self/** r,
+  /sys/fs/cgroup/** r,
+  /tmp/ rw,
+  /tmp/** rwkl,
+  /dev/shm/sem.* rwkl,
+
+  network inet stream,
+  network inet6 stream,
+  network unix stream,
+  network unix dgram,
+
+  deny /var/run/docker.sock rw,
+  deny /run/docker.sock rw,
+  deny /var/lib/sy-spark/ca/** rwklx,
+  deny /var/lib/sy-spark/executor/** rwklx,
+  deny /var/lib/sy-spark/compile-cache/** rwklx,
+  deny /home/** rwklx,
+}

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="500" viewBox="0 0 840 500" role="img" aria-labelledby="t d">
+  <title id="t">sy sits on Fedora; you and an agent drive the same binary</title>
+  <desc id="d">You in a terminal and an agent over MCP both talk to one sy binary. That binary plus configs and sy.target sit on Fedora 43. An NPU, a Spark, and a phone are optional.</desc>
+  <rect width="840" height="500" fill="#101010"/>
+  <g font-family="ui-monospace, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace" font-size="14">
+    <rect x="120" y="28" width="220" height="72" fill="#0c0c0c" stroke="#89b482" stroke-width="1.25"/>
+    <text x="230" y="58" text-anchor="middle" fill="#e8e4d4">you</text>
+    <text x="230" y="80" text-anchor="middle" fill="#9a9584" font-size="12">terminal / Super+E</text>
+    <rect x="500" y="28" width="220" height="72" fill="#0c0c0c" stroke="#89b482" stroke-width="1.25"/>
+    <text x="610" y="58" text-anchor="middle" fill="#e8e4d4">agent</text>
+    <text x="610" y="80" text-anchor="middle" fill="#9a9584" font-size="12">MCP / --json</text>
+    <path d="M230 100 L230 138" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <path d="M610 100 L610 138" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <path d="M230 138 L610 138" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <path d="M420 138 L420 168" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <polygon points="420,174 415,164 425,164" fill="#89b482"/>
+    <rect x="80" y="174" width="680" height="112" fill="#0c0c0c" stroke="#89b482" stroke-width="1.5"/>
+    <text x="420" y="214" text-anchor="middle" fill="#89b482" font-size="16">sy</text>
+    <text x="420" y="240" text-anchor="middle" fill="#e8e4d4">one Rust binary / configs/ / sy.target</text>
+    <text x="420" y="264" text-anchor="middle" fill="#9a9584" font-size="12">search / files / power / health / agents</text>
+    <path d="M420 286 L420 312" fill="none" stroke="#9a9584" stroke-width="1.25"/>
+    <polygon points="420,318 415,308 425,308" fill="#9a9584"/>
+    <rect x="80" y="320" width="680" height="52" fill="#0c0c0c" stroke="#2a2a2a" stroke-width="1.25"/>
+    <text x="420" y="352" text-anchor="middle" fill="#9a9584">Fedora 43</text>
+    <text x="420" y="404" text-anchor="middle" fill="#9a9584" font-size="12">optional hardware - skip any of these</text>
+    <rect x="80" y="418" width="200" height="52" fill="#0c0c0c" stroke="#9a9584" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="180" y="449" text-anchor="middle" fill="#9a9584" font-size="13">NPU</text>
+    <rect x="320" y="418" width="200" height="52" fill="#0c0c0c" stroke="#9a9584" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="420" y="449" text-anchor="middle" fill="#9a9584" font-size="13">DGX Spark</text>
+    <rect x="560" y="418" width="200" height="52" fill="#0c0c0c" stroke="#9a9584" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="660" y="449" text-anchor="middle" fill="#9a9584" font-size="13">phone</text>
+  </g>
+</svg>

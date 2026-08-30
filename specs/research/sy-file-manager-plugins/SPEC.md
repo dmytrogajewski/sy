@@ -35,7 +35,7 @@ sandboxing, and the `sy plugin` CLI surface.
 - **MCP** ([Model Context Protocol][mcp]) — adopted the LSP shape
   almost verbatim (JSON-RPC 2.0, stdio or HTTP transport),
   optimised for AI-agent ↔ tool plumbing. sy already ships MCP
-  endpoints for `sy knowledge`, `sy power`, etc., so plugin authors
+  endpoints for `sy knowledge`, `sy mon`, etc., so plugin authors
   who write MCP servers can reuse the same framing.
 - **Yazi** ([plugin-arch][yazi-pi]) — embedded Lua via mlua. Six
   globally accessible namespaces, `peek`/`seek`/`preload` hooks,
@@ -138,8 +138,8 @@ sandboxing, and the `sy plugin` CLI surface.
   ~33 % vs. binary; for a 600×900 preview that's ~50 KB; well below
   the 10k-ops/sec stdio ceiling.
 - **Why TOML manifests, not JSON?** Consistent with the rest of
-  sy (`configs/sy/*.toml`, `sy.toml`, `power.toml`,
-  `agents.toml`). Comments + multi-line strings are useful in
+  sy (`configs/sy/*.toml`, `sy.toml`, and `agents.toml`). Comments
+  + multi-line strings are useful in
   manifests. JSON is reserved for the wire.
 - **Why long-running, not on-demand subprocess?** Two reasons:
   spawn cost (above) and warm-cache state (a syntax-highlighter

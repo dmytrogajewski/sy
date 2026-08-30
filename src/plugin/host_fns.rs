@@ -699,7 +699,7 @@ fn validate_cache_name(name: &str) -> Result<(), HostFnError> {
                 return Err(HostFnError::invalid_path(
                     "cache name must be a single relative file",
                     name,
-                ))
+                ));
             }
         }
     }

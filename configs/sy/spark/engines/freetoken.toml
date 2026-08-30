@@ -1,0 +1,126 @@
+schema = "sy.spark.engine/v3"
+id = "freetoken-cu130-sm121-arm64"
+priority = 200
+family = "freetoken"
+version = "0.1.2-9ef3651-cu130-sm121"
+image_transport = "local"
+image_repository = "sy-spark/freetoken"
+image_digest = "sha256:d2b52ac045b612c9b47b3fbd5d5970a980063314fdf97b770184688a4a3991fd"
+image_architecture = "arm64"
+entrypoint = ["/opt/freetoken/venv/bin/ft", "serve"]
+arguments = [
+  "--model", "{model_snapshot}",
+  "--served-model-name", "{served_model}",
+  "--host", "0.0.0.0",
+  "--port", "{port}",
+]
+environment = [
+  "HOME=/tmp",
+  "HF_HUB_OFFLINE=1",
+  "TRANSFORMERS_OFFLINE=1",
+  "HF_DATASETS_OFFLINE=1",
+  "CUDA_MODULE_LOADING=LAZY",
+  "PYTORCH_ALLOC_CONF=expandable_segments:True",
+  "CUDA_CACHE_PATH=/compile-cache/cuda",
+  "TORCHINDUCTOR_CACHE_DIR=/compile-cache/torchinductor",
+  "TRITON_CACHE_DIR=/compile-cache/triton",
+  "FLASHINFER_WORKSPACE_BASE=/compile-cache/flashinfer",
+  "TVM_FFI_CACHE_DIR=/compile-cache/tvm-ffi",
+  "XDG_CACHE_HOME=/compile-cache/xdg",
+  "TOKENIZERS_PARALLELISM=false",
+  "UMASK=0027",
+]
+default_profile = "qwen3.6-nvfp4"
+model_cache_root = "/var/lib/sy-spark/huggingface"
+compile_cache_root = "/var/lib/sy-spark/compile-cache"
+network = "sy-spark-internal"
+port = 8000
+run_as_uid = 65534
+pid_limit = 2048
+seccomp = "default"
+ipc_mode = "host"
+shm_size_bytes = 17179869184
+tmpfs = ["/tmp"]
+startup_deadline_seconds = 1800
+health_method = "GET"
+health_path = "/health"
+health_body = { json_pointer = "/status", equals = "ok" }
+semantic_prompt = "Reply with the single lowercase word green."
+semantic_max_tokens = 8
+model_mount = "snapshot"
+
+[matcher]
+formats = ["safetensors"]
+quantizations = ["NVFP4"]
+engine_profiles = ["qwen3.6-nvfp4"]
+required_capabilities = ["text_generation"]
+
+[artifact_arguments]
+primary = []
+bindings = []
+ignored_roles = ["weight_shard"]
+
+[resources]
+image_bytes = 10462318841
+startup_peak_bytes = 100000000000
+steady_peak_bytes = 100000000000
+compile_cache_bytes = 12884901888
+
+[[routes]]
+method = "GET"
+path = "/v1/models"
+
+[[routes]]
+method = "POST"
+path = "/v1/completions"
+
+[[routes]]
+method = "POST"
+path = "/v1/chat/completions"
+
+[[routes]]
+method = "POST"
+path = "/v1/responses"
+
+[[routes]]
+method = "POST"
+path = "/v1/messages"
+
+[[routes]]
+method = "POST"
+path = "/v1/messages/count_tokens"
+
+[[routes]]
+method = "GET"
+path = "/v1/stats"
+
+[[routes]]
+method = "GET"
+path = "/v1/requests"
+
+[[profiles]]
+id = "qwen3.6-nvfp4"
+model_types = []
+context_window = 262144
+native_responses = true
+native_response_timeout_seconds = 1800
+arguments = [
+  "--max-running-requests", "8",
+  "--max-output-tokens", "32768",
+  "--memory-ratio", "0.85",
+  "--num-tokenizer", "1",
+  "--max-prefill-length", "8192",
+  "--num-tokens", "262144",
+  "--cache-type", "radix",
+  "--enable-cache-report",
+  "--sampling-defaults", "model",
+  "--tool-call-parser", "auto",
+  "--reasoning-parser", "auto",
+  "--moe-backend", "auto",
+  "--nvfp4-backend", "auto",
+  "--expert-load", "auto",
+  "--enable-special-token-ckpt",
+]
+capabilities = ["text_generation", "tool_calling"]
+startup_protocol_probe = true
+sampling = { temperature = 0.6, top_p = 0.95, top_k = 20, min_p = 0.0, presence_penalty = 0.0, repetition_penalty = 1.0, chat_template_kwargs = { preserve_thinking = true } }

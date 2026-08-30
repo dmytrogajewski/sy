@@ -1,0 +1,5 @@
+# Generated Docusaurus output — do not commit.
+node_modules/
+build/
+.docusaurus/
+.cache-loader/

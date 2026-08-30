@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 /// Breaking field renames or removals bump this; additive fields do
 /// not. Consumers MAY refuse to parse a snapshot with a higher
 /// version than they know.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// One coherent slice of the machine's state at a single instant.
 ///
@@ -49,7 +49,6 @@ pub struct SystemSnapshot {
     pub aiplane: AiplanePanel,
     pub knowledge: KnowledgePanel,
     pub agents: AgentsPanel,
-    pub power: PowerPanel,
     pub supervisor: SupervisorPanel,
     /// Per-source errors observed by the aggregator during the tick
     /// (sensor read failure, plane socket missing, scrape timeout).
@@ -75,7 +74,6 @@ impl Default for SystemSnapshot {
             aiplane: AiplanePanel::default(),
             knowledge: KnowledgePanel::default(),
             agents: AgentsPanel::default(),
-            power: PowerPanel::default(),
             supervisor: SupervisorPanel::default(),
             errors: Vec::new(),
         }
@@ -185,17 +183,6 @@ pub struct AgentsPanel {
     pub policy_denials_recent: u32,
 }
 
-/// Power-governor panel.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct PowerPanel {
-    pub current_arm: String,
-    /// Fraction (0.0..=1.0) of the recent window spent in each arm.
-    /// Sums to ~1.0 modulo float error. `BTreeMap` so the golden file
-    /// has a stable key order.
-    pub dwell_pct: BTreeMap<String, f32>,
-    pub regret_cum: f32,
-}
-
 /// Supervisor panel: one row per plane.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SupervisorPanel {
@@ -286,11 +273,6 @@ mod tests {
         let mut latency_p99_ms = BTreeMap::new();
         latency_p99_ms.insert("embed".to_string(), 18.4);
         latency_p99_ms.insert("rerank".to_string(), 41.0);
-        let mut dwell_pct = BTreeMap::new();
-        dwell_pct.insert("balanced".to_string(), 0.71);
-        dwell_pct.insert("perf".to_string(), 0.18);
-        dwell_pct.insert("save".to_string(), 0.11);
-
         SystemSnapshot {
             schema_version: SCHEMA_VERSION,
             captured_at_ms: 1_747_900_000_000,
@@ -350,11 +332,6 @@ mod tests {
                 rss_total_mib: 412,
                 policy_denials_recent: 0,
             },
-            power: PowerPanel {
-                current_arm: "balanced".to_string(),
-                dwell_pct,
-                regret_cum: 0.034,
-            },
             supervisor: SupervisorPanel {
                 planes: vec![PlanePanel {
                     name: "aiplane".to_string(),
@@ -372,9 +349,9 @@ mod tests {
     const GOLDEN_SPEC_EXAMPLE: &str = include_str!("../../tests/snapshots/mon/spec-example.json");
 
     #[test]
-    fn schema_version_is_one() {
-        assert_eq!(SCHEMA_VERSION, 1);
-        assert_eq!(SystemSnapshot::default().schema_version, 1);
+    fn schema_version_is_two() {
+        assert_eq!(SCHEMA_VERSION, 2);
+        assert_eq!(SystemSnapshot::default().schema_version, 2);
     }
 
     #[test]

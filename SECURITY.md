@@ -12,10 +12,11 @@ real privilege on the host. The current surface includes:
   (see [`AGENTS.md`](AGENTS.md), "Cap grants live in the systemd unit").
 - The `syauth` PAM module (`pam_syauth.so`) wired into `/etc/pam.d/sudo`
   by `sy syauth install-pam` (see [README §`syauth`](README.md)).
-- SELinux policy under [`configs/selinux/`](configs/selinux/) and a
-  polkit rule at [`configs/policy/10-sy-power.rules`](configs/policy/10-sy-power.rules).
+- SELinux policy under [`configs/selinux/`](configs/selinux/).
 - Sole owner of `/dev/accel/accel0` from the `aiplane` daemon
   ("one process per NPU" — see [`AGENTS.md`](AGENTS.md)).
+- The Spark HTTPS agent and root Docker executor on a DGX Spark
+  (`sy spark`, `sy-spark-agent.service`, `sy-spark-executor.service`).
 
 Treat vulnerabilities in any of the above as in scope.
 

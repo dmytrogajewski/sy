@@ -7,13 +7,11 @@
      Voice anchored on README.md, AGENTS.md, SECURITY.md,
      CONTRIBUTING.md, CODE_OF_CONDUCT.md, SUPPORT.md, GOVERNANCE.md. -->
 
-`sy` tracks the [OpenSSF Best Practices Badge — passing tier](https://www.bestpractices.dev/en/criteria/0)
-as the external check on its open-source documentation surface. This
-page maps each passing-tier clause that the audit named in scope
-(`basics_documentation`, `security_vulnerability_report_process`,
-`quality_build_status`, `analysis_static_analysis`, `code_of_conduct`)
-to the file in this repository that satisfies it, plus a handful of
-other clauses the project trivially meets.
+`sy` maps a subset of the [OpenSSF Best Practices Badge — passing
+tier](https://www.bestpractices.dev/en/criteria/0) to files in this
+repo. If you are filling in the public badge, this is the evidence
+index. If you are a new contributor, start at
+[CONTRIBUTING.md](../../CONTRIBUTING.md) instead.
 
 Status values:
 

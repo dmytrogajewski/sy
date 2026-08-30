@@ -1,0 +1,124 @@
+schema = "sy.spark.engine/v3"
+id = "sglang-qwen38-mmap-arm64"
+priority = 190
+family = "sglang"
+version = "d91c3682-recipe-04d0735-persist-v5-pagecache-replayssm5-warmflush1-hybrid1"
+image_transport = "local"
+image_repository = "sy-spark/sglang-qwen38-mmap"
+image_digest = "sha256:b09ca2c158b46ccb9690069aa2fd77ab7761df01cb279a13249f00cdd5cea197"
+image_architecture = "arm64"
+entrypoint = ["python3", "-m", "sglang.launch_server"]
+arguments = [
+  "--model-path", "{model_snapshot}",
+  "--served-model-name", "{served_model}",
+  "--host", "0.0.0.0",
+  "--port", "{port}",
+  "--load-format", "auto",
+  "--tp-size", "1",
+]
+environment = [
+  "HOME=/tmp",
+  "HF_HUB_OFFLINE=1",
+  "TRANSFORMERS_OFFLINE=1",
+  "HF_DATASETS_OFFLINE=1",
+  "SGLANG_QWEN4_PLE_MMAP_DIR=/compile-cache/ple",
+  "SGLANG_ENABLE_QWEN4_PLE_FUSION=1",
+  "CUDA_CACHE_PATH=/compile-cache/cuda",
+  "TORCHINDUCTOR_CACHE_DIR=/compile-cache/torchinductor",
+  "TRITON_CACHE_DIR=/compile-cache/triton",
+  "FLASHINFER_WORKSPACE_BASE=/compile-cache/flashinfer",
+  "XDG_CACHE_HOME=/compile-cache/xdg",
+  "SGLANG_CACHE_DIR=/compile-cache/sglang",
+  "SGLANG_JIT_CACHE_DIR=/compile-cache/sglang/jit",
+  "TMPDIR=/compile-cache",
+  "TOKENIZERS_PARALLELISM=false",
+  "UMASK=0027",
+]
+executable_cache_environment = ["SGLANG_CACHE_DIR", "SGLANG_JIT_CACHE_DIR", "TMPDIR"]
+default_profile = "qwen3.8-flash-next-nvfp4"
+model_cache_root = "/var/lib/sy-spark/huggingface"
+compile_cache_root = "/var/lib/sy-spark/compile-cache"
+network = "sy-spark-internal"
+port = 30000
+run_as_uid = 65534
+pid_limit = 2048
+seccomp = "default"
+ipc_mode = "host"
+shm_size_bytes = 17179869184
+tmpfs = ["/tmp"]
+startup_deadline_seconds = 1800
+health_method = "GET"
+health_path = "/health"
+semantic_prompt = "Generate one completion token."
+semantic_max_tokens = 1
+model_mount = "snapshot"
+
+[matcher]
+formats = ["safetensors"]
+quantizations = ["NVFP4"]
+engine_profiles = ["qwen3.8-flash-next-nvfp4"]
+required_capabilities = ["text_generation"]
+
+[artifact_arguments]
+primary = []
+bindings = []
+ignored_roles = ["weight_shard"]
+
+[resources]
+image_bytes = 14946517403
+startup_peak_bytes = 115068534784
+steady_peak_bytes = 115137425408
+compile_cache_bytes = 51506778112
+
+[[routes]]
+method = "GET"
+path = "/v1/models"
+
+[[routes]]
+method = "POST"
+path = "/v1/completions"
+
+[[routes]]
+method = "POST"
+path = "/v1/chat/completions"
+
+[[routes]]
+method = "POST"
+path = "/tokenize"
+
+[[profiles]]
+id = "qwen3.8-flash-next-nvfp4"
+model_types = ["qwen4_exp"]
+context_window = 262144
+arguments = [
+  "--prefill-attention-backend", "triton",
+  "--decode-attention-backend", "trtllm_mha",
+  "--quantization", "modelopt_fp4",
+  "--ple-offload-embedding",
+  "--mamba-radix-cache-strategy", "extra_buffer",
+  "--mamba-track-interval", "64",
+  "--mamba-ssm-dtype", "float32",
+  "--mem-fraction-static", "0.79",
+  "--context-length", "262144",
+  "--chunked-prefill-size", "4096",
+  "--max-running-requests", "1",
+  "--max-mamba-cache-size", "5",
+  "--max-total-tokens", "262144",
+  "--weight-loader-drop-cache-after-load",
+  "--warmups", "prefill_shapes,flush_transient_allocator",
+  "--reasoning-parser", "qwen3",
+  "--tool-call-parser", "qwen3_coder",
+  "--speculative-algorithm", "NEXTN",
+  "--speculative-num-steps", "3",
+  "--speculative-eagle-topk", "1",
+  "--speculative-num-draft-tokens", "4",
+  "--speculative-draft-model-quantization", "unquant",
+  "--enable-linear-replayssm-spec",
+  "--disable-prefill-cuda-graph",
+  "--disable-flashinfer-autotune",
+  "--enable-metrics",
+  "--enable-cache-report",
+]
+capabilities = ["text_generation", "tool_calling"]
+startup_protocol_probe = true
+sampling = { temperature = 0.6, top_p = 0.95, top_k = 20, min_p = 0.0, presence_penalty = 0.0, repetition_penalty = 1.0, thinking_token_budget = 8192, reasoning_effort_map = { low = "low", medium = "medium", high = "xhigh", max = "xhigh" } }

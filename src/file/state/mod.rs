@@ -13,11 +13,15 @@ pub mod panes;
 pub mod preview;
 pub mod selection;
 
-pub use commandbar::{CommandBar, CommandMode};
+pub use commandbar::CommandBar;
+#[cfg(feature = "gui-iced")]
+pub use commandbar::CommandMode;
 pub use knowledge::KnowledgeState;
 pub use ops::{ConflictPolicy, OpEvent, Operation};
 pub use panes::{Entry, EntryKind, Pane, PaneId, Panes};
-pub use preview::{HighlightedLine, HighlightedSpan, PreviewPayload, PreviewState};
+pub use preview::PreviewState;
+#[cfg(feature = "gui-iced")]
+pub use preview::{HighlightedLine, HighlightedSpan, PreviewPayload};
 pub use selection::{EntryId, SelectionSet};
 
 // `ClipboardMode` and the new `State::clipboard` / `State::range_anchor`

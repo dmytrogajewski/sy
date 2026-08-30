@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="360" viewBox="0 0 840 360" role="img" aria-labelledby="t d">
+  <title id="t">One binary, many planes, JSON over sockets</title>
+  <desc id="d">systemd starts the same sy binary as separate planes. Planes talk over Unix sockets with JSON. The aiplane is the only process that opens the NPU.</desc>
+  <rect width="840" height="360" fill="#101010"/>
+  <g font-family="ui-monospace, 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace" font-size="13">
+    <rect x="180" y="20" width="480" height="56" fill="#0c0c0c" stroke="#89b482" stroke-width="1.5"/>
+    <text x="420" y="42" text-anchor="middle" fill="#89b482" font-size="15">one sy binary</text>
+    <text x="420" y="62" text-anchor="middle" fill="#9a9584" font-size="12">subcommand picks the plane / sy.target supervises</text>
+    <path d="M420 76 L420 100" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <polygon points="420,106 415,96 425,96" fill="#89b482"/>
+    <rect x="16" y="112" width="118" height="52" fill="#0c0c0c" stroke="#2a2a2a"/>
+    <text x="75" y="143" text-anchor="middle" fill="#e8e4d4" font-size="12">knowledge</text>
+    <rect x="146" y="112" width="118" height="52" fill="#0c0c0c" stroke="#2a2a2a"/>
+    <text x="205" y="143" text-anchor="middle" fill="#e8e4d4" font-size="12">power</text>
+    <rect x="276" y="112" width="118" height="52" fill="#0c0c0c" stroke="#2a2a2a"/>
+    <text x="335" y="143" text-anchor="middle" fill="#e8e4d4" font-size="12">file</text>
+    <rect x="406" y="112" width="118" height="52" fill="#0c0c0c" stroke="#2a2a2a"/>
+    <text x="465" y="143" text-anchor="middle" fill="#e8e4d4" font-size="12">mon</text>
+    <rect x="536" y="112" width="118" height="52" fill="#0c0c0c" stroke="#2a2a2a"/>
+    <text x="595" y="143" text-anchor="middle" fill="#e8e4d4" font-size="12">agt</text>
+    <rect x="666" y="112" width="158" height="52" fill="#0c0c0c" stroke="#89b482"/>
+    <text x="745" y="135" text-anchor="middle" fill="#e8e4d4" font-size="12">aiplane</text>
+    <text x="745" y="153" text-anchor="middle" fill="#9a9584" font-size="11">owns the NPU</text>
+    <rect x="120" y="200" width="600" height="52" fill="#0c0c0c" stroke="#2a2a2a" stroke-dasharray="4 3"/>
+    <text x="420" y="232" text-anchor="middle" fill="#9a9584">JSON over Unix sockets in $XDG_RUNTIME_DIR</text>
+    <path d="M75 164 L75 200" fill="none" stroke="#9a9584" stroke-width="1"/>
+    <path d="M205 164 L205 200" fill="none" stroke="#9a9584" stroke-width="1"/>
+    <path d="M335 164 L335 200" fill="none" stroke="#9a9584" stroke-width="1"/>
+    <path d="M465 164 L465 200" fill="none" stroke="#9a9584" stroke-width="1"/>
+    <path d="M595 164 L595 200" fill="none" stroke="#9a9584" stroke-width="1"/>
+    <path d="M745 164 L745 226 L720 226" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <path d="M420 252 L420 280" fill="none" stroke="#89b482" stroke-width="1.25"/>
+    <polygon points="420,286 415,276 425,276" fill="#89b482"/>
+    <rect x="270" y="288" width="300" height="48" fill="#0c0c0c" stroke="#9a9584" stroke-dasharray="4 3"/>
+    <text x="420" y="318" text-anchor="middle" fill="#9a9584" font-size="12">/dev/accel/accel0 - one owner</text>
+  </g>
+</svg>

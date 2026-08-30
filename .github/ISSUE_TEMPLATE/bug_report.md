@@ -48,7 +48,6 @@ assignees: ''
 - [ ] `aiplane` (NPU inference, `/dev/accel/accel0`, workloads)
 - [ ] `agt` (sandboxed agent runner)
 - [ ] `knowledge` (qdrant + semantic search)
-- [ ] `power` (governor, `sy-powerd`)
 - [ ] `stack` (layer-shell bar, waybar integration)
 - [ ] `syauth` (phone-as-key sudo, PAM)
 - [ ] `supervision` (`sy.target`, systemd units under `configs/systemd/`)

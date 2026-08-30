@@ -15,8 +15,8 @@
 plus declarative configs that turn a stock Fedora laptop into an
 agent-first workstation. The same binary hosts every plane — the
 NPU inference plane (`aiplane`), the sandboxed agent runner (`agt`),
-the semantic knowledge plane (`knowledge`), the adaptive power
-governor (`power`), the layer-shell bar (`stack`), `syauth`, and the
+the semantic knowledge plane (`knowledge`), the layer-shell bar
+(`stack`), `syauth`, and the
 niri/wayland rice — all supervised by the user-level `sy.target`.
 
 Every plane is reachable over the same CLIG + JSON-over-stdio

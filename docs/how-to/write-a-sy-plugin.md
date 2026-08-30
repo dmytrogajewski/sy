@@ -1,42 +1,36 @@
 <!-- Template source: Good Docs Project how-to template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/how-to. Diátaxis quadrant: how-to. -->
 
-# How to write a `sy file` previewer plugin
+# How to write a sy file previewer plugin
 
 ## Goal
 
-Ship a minimum-viable previewer plugin for `sy file` in your language
-of choice. A previewer plugin reads a file path off stdin, returns a
-preview body, and shuts down. The host supervises the process under
-SPEC §4.3 (signal ladder, capability negotiation, resource limits)
-and routes preview requests to it based on the manifest's
-`[[capability]]` rows. Three language examples ship below; pick one,
-copy the manifest, and `sy plugin install` the result.
-
-The wire protocol is JSON-RPC over line-delimited stdio with an LSP
-framing prelude (per
-[plugin SPEC §4.2](../../specs/research/sy-file-manager-plugins/SPEC.md)).
-The Rust PDK (`sy-plugin-pdk`) hides the framing so a Rust author can
-write a 20-line previewer; the Python and Bash examples speak the
-framing directly because there is no out-of-tree PDK yet for those
-runtimes.
+Ship a small previewer for `sy file` in Rust, Python, or Bash. A
+previewer reads a file path, returns a preview body, and exits. The
+host starts and stops the process, applies resource limits, and
+routes requests based on the MIME types in `plugin.toml`.
 
 ## Prerequisites
 
 - `sy` is installed and `sy plugin doctor` exits `0`. See
-  [`docs/reference/sy-file-doctor.md`](../reference/sy-file-doctor.md)
-  for the `sy.plugin.doctor/v1` envelope.
-- For the Rust example: `cargo` and the workspace cloned at
-  `~/sources/sy` so `crates/sy-plugin-pdk` is on disk.
-- For the Python example: Python 3.11+ on `$PATH`.
-- For the Bash example: a POSIX `sh` and `jq` on `$PATH`.
+  [sy file doctor](../reference/sy-file-doctor.md) for the
+  `sy.plugin.doctor/v1` envelope.
+- Rust example: `cargo` and this repo cloned so
+  `crates/sy-plugin-pdk` is on disk.
+- Python example: Python 3.11+ on `$PATH`.
+- Bash example: a POSIX `sh` and `jq` on `$PATH`.
+
+The wire format is JSON-RPC on stdin/stdout (one JSON object per
+line, with an LSP-style length header). The Rust PDK hides that
+framing. Python and Bash speak it directly. The full contract lives
+in the [plugin SPEC](../../specs/research/sy-file-manager-plugins/SPEC.md)
+if you need every field.
 
 ## Steps
 
 ### Rust — via the in-tree PDK
 
-The canonical 20-line previewer lives in the workspace at
-[`crates/sy-plugin-pdk/examples/echo_previewer.rs`](../../crates/sy-plugin-pdk/examples/echo_previewer.rs).
-The body is small enough to quote in full:
+The 20-line example is
+[`crates/sy-plugin-pdk/examples/echo_previewer.rs`](../../crates/sy-plugin-pdk/examples/echo_previewer.rs):
 
 ```rust
 use sy_plugin_pdk::prelude::*;
@@ -53,14 +47,9 @@ define_plugin! {
 }
 ```
 
-`define_plugin!` registers the `initialize` / `ping` / `shutdown` /
-`exit` lifecycle (SPEC §4.2.3), advertises the previewer capability
-for `text/plain` files, and dispatches incoming `preview` requests to
-your typed closure. The macro shape mirrors
-[`crates/sy-plugin-md`](../../crates/sy-plugin-md) — the in-tree
-markdown previewer canary — so cargo will compile your plugin against
-the same workspace-pinned `serde` / `serde_json` / `tokio` / `anyhow`
-versions. Pair the binary with a manifest at the same prefix:
+`define_plugin!` registers `initialize` / `ping` / `shutdown` /
+`exit`, advertises a `text/plain` previewer, and dispatches
+`preview` to your closure. Pair the binary with this manifest:
 
 ```toml
 api = "1"
@@ -95,8 +84,7 @@ spawn_timeout_ms = 500
 shutdown_timeout_ms = 500
 ```
 
-Build, install, then verify the plugin shows up under
-`sy plugin doctor`:
+Build, install, then check doctor:
 
 ```bash {.no-test}
 cargo build --release --example echo_previewer
@@ -106,10 +94,8 @@ sy plugin doctor --json
 
 ### Python — speaking the wire format directly
 
-The minimum loop reads one JSON-RPC frame per line, dispatches on the
-`method` field, and writes one JSON-RPC frame per line back. This
-implementation handles the three mandatory lifecycle methods and
-`preview`:
+The minimum loop reads one JSON-RPC object per line, dispatches on
+`method`, and writes one object per line back:
 
 ```python
 #!/usr/bin/env python3
@@ -143,15 +129,12 @@ for line in sys.stdin:
         break
 ```
 
-Save as `echo_previewer.py`, chmod `+x`, and pair with a manifest
-identical to the Rust one above but with `exec = "./echo_previewer.py"`
-and `id = "sy-plugin-pyecho"`. `sy plugin install` copies both files
-to `$SY_PLUGIN_DIR/<id>/` and registers the capability.
+Save as `echo_previewer.py`, `chmod +x`, and use a manifest like the
+Rust one with `exec = "./echo_previewer.py"` and
+`id = "sy-plugin-pyecho"`. `sy plugin install` copies both files
+into the plugin directory.
 
 ### Bash — speaking the wire format directly
-
-The shell variant is the smallest illustration of the protocol. It
-uses `jq` for JSON parsing so the loop body stays under 20 lines:
 
 ```bash
 #!/usr/bin/env bash
@@ -172,13 +155,12 @@ while IFS= read -r line; do
 done
 ```
 
-Save as `echo_previewer.sh`, chmod `+x`, pair with a manifest using
+Save as `echo_previewer.sh`, `chmod +x`, pair with
 `exec = "./echo_previewer.sh"` and `id = "sy-plugin-bashecho"`, then
-`sy plugin install` the directory. The host's `proc::Supervisor`
-treats the bash script the same as the Rust binary: stdin/stdout
-pipes, signal ladder on shutdown, and the SPEC §4.4 resource limits.
+`sy plugin install` the directory. The host treats the script like
+any other plugin binary: pipes, shutdown signals, resource limits.
 
-## Verify
+## Result
 
 After `sy plugin install` finishes, run:
 
@@ -186,26 +168,18 @@ After `sy plugin install` finishes, run:
 sy plugin doctor --json
 ```
 
-Each installed plugin contributes three rows to the `checks[]` array:
-`manifest.valid`, `binary.reachable`, and `capability.routes`. All
-three rows must be `"ok": true` for your plugin (the row's `plugin`
-field carries your `id`). If `capability.routes` is `false`, another
-installed plugin shadows your previewer for `text/plain` — pick a
-distinct MIME or raise the `priority` field on your `[[capability]]`
-row.
+Each installed plugin contributes three rows: `manifest.valid`,
+`binary.reachable`, and `capability.routes`. All three must be
+`"ok": true` for your id. If `capability.routes` is false, another
+plugin already owns `text/plain` — pick a different MIME or raise
+`priority` on your `[[capability]]` row.
 
-## Troubleshooting
+If a row stays false, see
+[How to troubleshoot a sy file plugin](troubleshoot-sy-plugin.md).
 
-- **`manifest.valid: false`** — re-read the SPEC §4.1 schema. Common
-  failures: missing `api`, missing `[plugin]` table, or a
-  `[[capability]]` row with an unknown `kind`.
-- **`binary.reachable: false`** — the `exec` path in your manifest
-  doesn't resolve relative to the manifest directory, or the binary
-  doesn't have the execute bit. Add it with `chmod +x`.
-- **`capability.routes: false`** — another plugin claims the same
-  `(kind, mime)` tuple. Run `sy plugin list --json` to find the
-  conflicting id, and either uninstall it or differentiate your MIME.
-- **Plugin process crashes mid-preview** — the host's supervisor
-  retries with exponential backoff (100 ms → 200 ms → 400 ms) and
-  then marks the plugin `Unhealthy`. Tail
-  `journalctl --user -t sy-file` for the crash reason.
+## See also
+
+- [How to troubleshoot a sy file plugin](troubleshoot-sy-plugin.md)
+- [How to run sy file](run-sy-file.md)
+- [CLI: `sy plugin`](../reference/cli.md#sy-plugin)
+- [sy file doctor](../reference/sy-file-doctor.md)

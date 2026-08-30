@@ -1,37 +1,23 @@
-# `sy file doctor` + `sy plugin doctor` — JSON schema reference
+# `sy file doctor` and `sy plugin doctor`
 
-Encyclopaedic reference for the wire-stable `sy.file.doctor/v1` and
-`sy.plugin.doctor/v1` envelopes. Source of truth:
-[`src/file/doctor.rs`](../../src/file/doctor.rs),
-[`src/plugin/cli.rs`](../../src/plugin/cli.rs),
-SPEC §3.3 item 19 (`specs/research/sy-file-manager/SPEC.md`), and
-plugin SPEC §3.3 item 12
-(`specs/research/sy-file-manager-plugins/SPEC.md`).
+JSON envelopes for `sy file doctor --json` and
+`sy plugin doctor --json`. Use this page when you are parsing those
+documents. For the first-time window, see
+[browse files with sy file](../tutorials/browse-your-files.md).
 
-For the cross-cutting CLI contract (`--json`, exit codes, env vars),
-see [the CLI reference](cli.md).
+Source of truth: `src/file/doctor.rs` and `src/plugin/cli.rs`.
 
-> Template: Good Docs Project reference. Diátaxis reference quadrant.
-> Each check below is one H3 section: name → wire ID → conditions →
-> typical fix-hint.
+For `--json`, exit codes, and env vars in general, see
+[the CLI reference](cli.md).
 
 ## Overview
 
-`sy file doctor` and `sy plugin doctor` are the journey-J1 pre-flight
-surface. If doctor lies, the user's first `Mod+E` silently breaks (or
-the first markdown hover preview surfaces nothing). Both commands run
-a fixed list of probes against the host's productivised state, then
-print:
+Both commands run a fixed list of probes, then print a human summary
+(on a TTY) or the JSON envelope with `--json`.
 
-* a human-readable summary on a TTY (`sy file doctor` → stdout), or
-* the machine-readable JSON envelope on `--json` (suitable for an MCP
-  agent or a shell `jq` pipeline).
-
-Exit codes follow [SPEC §4.7][spec]: **0** all green, **1** any check
-failed, **2** warn-only. Mirrors the
-[`syauth doctor_exit_code`](../../src/syauth.rs) convention.
-
-[spec]: ../../specs/research/architecture-refactor/SPEC.md#47-exit-codes
+`sy file doctor` exit codes: **0** all passed, **1** any failed,
+**2** warnings only. That `2` is not the same as top-level
+`sy doctor`, which uses **3** for warn-only.
 
 ## `sy file doctor`
 
@@ -85,16 +71,15 @@ Field shape:
 
 #### `file.niri.binds`
 
-* **Status `ok`**: the journey-J1 binds (`Mod+E`, `Mod+Shift+E`,
-  `Mod+Slash`) all dispatch to `sy file`. Niri config is read from
-  `opts.niri_config` or `$XDG_CONFIG_HOME/niri/config.kdl`.
+* **Status `ok`**: `Mod+E`, `Mod+Shift+E`, and `Mod+/` all start
+  `sy file`. Niri config is read from `opts.niri_config` or
+  `$XDG_CONFIG_HOME/niri/config.kdl`.
 * **Status `fail`**:
   * any required bind is absent, **or**
-  * any required bind dispatches to a non-`sy file` target (the
-    collision case — Step 33 detects e.g. `Mod+E` rebound to
-    `swaylock`). The `detail` field names the conflicting target.
-* **Typical fix-hint**: `sy apply` (re-renders the productivised
-  binds — Step 34).
+  * any required bind starts something else (for example `Mod+E`
+    rebound to `swaylock`). The `detail` field names the target.
+* **Typical fix-hint**: `sy apply` (rewrites the niri binds from
+  `configs/`).
 
 #### `file.systemd.unit_installed`
 
@@ -117,7 +102,7 @@ Field shape:
 * **Status `ok`**: `crate::plugin::registry::discover()` returns at
   least one plugin AND the canary `sy-plugin-md` is in the list.
 * **Status `warn`**: registry discovers plugins but the canary is
-  absent (the Step 12 markdown previewer isn't installed).
+  absent (the markdown previewer is not installed).
 * **Status `fail`**: registry discover returned an error OR no
   plugins were discovered at all.
 * **Typical fix-hint**: `sy plugin install ./crates/sy-plugin-md`.
@@ -186,9 +171,8 @@ chokepoint.
 #### `capability.routes`
 
 * **`ok = true`**: every `[[capability]]` row in the manifest routes
-  back to its own plugin via the dispatch index. Catches a class of
-  bugs the journey-J3 hover path would otherwise hit silently — a
-  predicate that compiles but matches nothing.
+  back to its own plugin. Catches a predicate that compiles but
+  matches nothing.
 * **`ok = false`**: the registry's `select_for(kind, mime, url)`
   resolved to a different plugin (or `None`) for the probe.
 
@@ -211,7 +195,6 @@ that test in lockstep.
 
 ## See also
 
-* [`sy file mcp`](sy-file-mcp.md) — MCP tool reference.
-* [CLI reference](cli.md) — global `--json` / exit-code contract.
-* SPEC §3.3 item 19 (file plane health probes).
-* SPEC §3.3 item 12 (plugin plane health probes).
+* [sy file mcp](sy-file-mcp.md) — MCP tool list.
+* [CLI reference](cli.md) — `--json` and exit codes.
+* [How to troubleshoot sy file](../how-to/troubleshoot-sy-file.md)

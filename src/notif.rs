@@ -411,7 +411,7 @@ fn refresh_waybar() {
 
 // -- fuzzel menu ------------------------------------------------------------
 //
-// One overlay, one click — same UX shape as `sy bt`, `sy pwr`, `sy net`.
+// One overlay, one click — same UX shape as `sy bt` and `sy net`.
 // Each notification row carries app, summary and a one-line body preview;
 // selecting a row marks it as read. A `clear all` header marks every
 // recent record as read in one shot.

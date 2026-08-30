@@ -2,6 +2,8 @@
 
 - Status: accepted
 
+Who this is for: people wondering why `sy` is not on crates.io.
+
 > Template: [MADR 4.0](https://adr.github.io/madr/).
 
 ## Context and Problem Statement
@@ -27,7 +29,8 @@ crate. The binary expects:
 - a user-level systemd graph rooted at `sy.target` with `Type=notify`
   units, journald, polkit, and SELinux file contexts shipped by
   `sy apply`;
-- niri / waybar / yazi configs from `configs/` to render the rice.
+- niri / waybar / `sy file` configs from `configs/` to render the
+  desktop.
 
 None of those preconditions can be satisfied by a `cargo install
 sy` from a generic Rust toolchain. Publishing the binary would

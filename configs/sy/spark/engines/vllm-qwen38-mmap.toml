@@ -1,0 +1,109 @@
+schema = "sy.spark.engine/v3"
+id = "vllm-qwen38-mmap-arm64"
+priority = 200
+family = "vllm"
+version = "qwen38-flash-next-d2854b-nonroot"
+image_transport = "local"
+image_repository = "sy-spark/vllm-qwen38-mmap"
+image_digest = "sha256:ae03e2a6feecd27520d2598f28dde37c0f7c85c59631d8c488b5803331a6753d"
+image_architecture = "arm64"
+entrypoint = ["vllm", "serve"]
+arguments = [
+  "{model_snapshot}",
+  "--served-model-name", "{served_model}",
+  "--host", "0.0.0.0",
+  "--port", "{port}",
+  "--load-format", "safetensors",
+]
+environment = [
+  "HOME=/tmp",
+  "HF_HUB_OFFLINE=1",
+  "TRANSFORMERS_OFFLINE=1",
+  "HF_DATASETS_OFFLINE=1",
+  "VLLM_PLE_MMAP=1",
+  "VLLM_PLE_MMAP_WORKERS=32",
+  "VLLM_PLE_MMAP_PREWARM=0",
+  "VLLM_USE_FLASHINFER_SAMPLER=1",
+  "VLLM_ALLOW_LONG_MAX_MODEL_LEN=0",
+  "VLLM_CACHE_ROOT=/compile-cache/vllm",
+  "TORCHINDUCTOR_CACHE_DIR=/compile-cache/torchinductor",
+  "TRITON_CACHE_DIR=/compile-cache/triton",
+  "CUDA_CACHE_PATH=/compile-cache/cuda",
+  "XDG_CACHE_HOME=/compile-cache/xdg",
+  "UMASK=0027",
+]
+default_profile = "qwen3.8-flash-next-nvfp4"
+model_cache_root = "/var/lib/sy-spark/huggingface"
+compile_cache_root = "/var/lib/sy-spark/compile-cache"
+network = "sy-spark-internal"
+port = 8000
+run_as_uid = 65534
+pid_limit = 2048
+seccomp = "default"
+ipc_mode = "host"
+shm_size_bytes = 17179869184
+tmpfs = ["/tmp"]
+startup_deadline_seconds = 1800
+health_method = "GET"
+health_path = "/health"
+semantic_prompt = "Generate one completion token."
+semantic_max_tokens = 1
+model_mount = "snapshot"
+
+[matcher]
+formats = ["safetensors"]
+quantizations = ["NVFP4"]
+engine_profiles = ["qwen3.8-flash-next-nvfp4"]
+required_capabilities = ["text_generation"]
+
+[artifact_arguments]
+primary = []
+bindings = []
+ignored_roles = ["weight_shard"]
+
+[resources]
+image_bytes = 9702948670
+startup_peak_bytes = 114000000000
+steady_peak_bytes = 114000000000
+compile_cache_bytes = 1073741824
+
+[[routes]]
+method = "GET"
+path = "/v1/models"
+
+[[routes]]
+method = "POST"
+path = "/v1/completions"
+
+[[routes]]
+method = "POST"
+path = "/v1/chat/completions"
+
+[[routes]]
+method = "POST"
+path = "/tokenize"
+
+[[profiles]]
+id = "qwen3.8-flash-next-nvfp4"
+model_types = ["qwen4_exp"]
+context_window = 262144
+stream_idle_timeout_seconds = 600
+arguments = [
+  "--max-model-len", "262144",
+  "--max-num-seqs", "8",
+  "--kv-cache-memory", "12884901888",
+  "--no-enable-prefix-caching",
+  "--enable-chunked-prefill",
+  "--max-num-batched-tokens", "8192",
+  "-cc.cudagraph_mode=PIECEWISE",
+  "-cc.splitting_ops=[\"vllm::unified_attention_with_output\",\"vllm::unified_mla_attention_with_output\",\"vllm::mamba_mixer2\",\"vllm::mamba_mixer\",\"vllm::short_conv\",\"vllm::qwen3_8_flash_next_ple_short_conv\",\"vllm::qwen3_8_flash_next_qsa_with_output\",\"vllm::linear_attention\",\"vllm::qwen_gdn_attention_core\",\"vllm::qwen_gdn_attention_core_fused_norm_packed\",\"vllm::sparse_attn_indexer\",\"vllm::ple_mmap_lookup\"]",
+  "--no-enable-flashinfer-autotune",
+  "--kv-cache-dtype", "auto",
+  "--enable-auto-tool-choice",
+  "--tool-call-parser", "qwen3_coder",
+  "--reasoning-parser", "qwen3",
+  "--speculative-config", "{\"method\":\"mtp\",\"num_speculative_tokens\":2}",
+]
+capabilities = ["text_generation", "tool_calling"]
+startup_protocol_probe = true
+sampling = { temperature = 1.0, top_p = 0.95, top_k = 20, min_p = 0.0, presence_penalty = 0.0, repetition_penalty = 1.0, thinking_token_budget = 8192, reasoning_effort_map = { low = "low", medium = "medium", high = "xhigh", max = "xhigh" } }

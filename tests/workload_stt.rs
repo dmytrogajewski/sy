@@ -91,8 +91,11 @@ fn whisper_medium_transcribes_amd_sample() {
     // The PCM is far larger than ARG_MAX, so hand it to the CLI via a
     // file rather than an argv literal.
     let in_path = std::env::temp_dir().join("sy_stt_test_input.json");
-    std::fs::write(&in_path, serde_json::to_vec(&input).expect("serialize input"))
-        .expect("write input file");
+    std::fs::write(
+        &in_path,
+        serde_json::to_vec(&input).expect("serialize input"),
+    )
+    .expect("write input file");
 
     let bin = env!("CARGO_BIN_EXE_sy");
     let out = Command::new(bin)

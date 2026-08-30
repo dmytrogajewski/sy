@@ -4,42 +4,35 @@
 
 ## Introduction
 
-In this tutorial you turn a stock Fedora 43 install into an
-agent-first workstation by building and applying `sy`. You clone
-the repo, install the Fedora prerequisites the rice depends on,
-build the single Rust binary, render every config under `configs/`
-into your home directory with `sy apply`, hand control of the
-planes to your user systemd manager via `sy.target`, and finally
-confirm the bring-up with `sy doctor` and `sy aiplane status`.
+In this tutorial you turn a stock Fedora 43 install into a `sy`
+workstation: clone the repo, install the Fedora packages the niri
+session needs, build the binary, apply every config, and start the
+user-level supervisor.
 
-When you finish, your user systemd manager supervises every `sy`
-plane (aiplane, knowledge, qdrant, agentd, powerd, stack-bar),
-`sy doctor` returns exit code `0`, and `sy aiplane status` reports
-the NPU plane as up.
+When you finish, `sy.target` is active, `sy doctor` is green (or
+warn-only on optional hardware), and `sy --help` lists the planes.
+You have a desktop that matches this git repo, search and a file
+manager ready to use, and a CLI an agent can call. You have not
+been required to own an NPU, a Spark, or a phone.
 
-A *plane* is one of the long-running services `sy` ships — for
-example the NPU inference daemon (`aiplane`), the semantic
-search index (`knowledge`), or the adaptive power governor
-(`power`). Every plane is a child unit of `sy.target` and speaks
-the same JSON-over-stdio surface, so an agent can drive any plane
-the same way you do.
+What you are installing is described in
+[What sy is](../explanation/what-sy-is.md). This page is only the
+bring-up.
 
-`sy apply` is the single command that renders the templates under
-`configs/` into the right paths on disk (`~/.config/`,
-`~/.local/share/`, `~/.config/systemd/user/`, plus the few
-system-level units), reloads systemd, and converges your machine
-on the contents of the repo.
+A *plane* is one long-running service the `sy` binary hosts — search
+(`knowledge`), power, the file manager, and so on. `sy apply` is the
+command that renders `configs/` onto disk and reloads systemd so the
+machine matches the repo.
+
+You do **not** need an AMD NPU or a DGX Spark for this tutorial.
 
 ## Prerequisites
 
-- Fedora 43 Workstation, freshly installed, fully updated
-  (`sudo dnf upgrade --refresh`).
-- An x86_64 CPU. AMD Ryzen AI hardware is optional for this
-  tutorial — the NPU one-time setup is covered in a separate
-  how-to and is not required for the planes to come up.
+- Fedora 43 Workstation, fully updated (`sudo dnf upgrade --refresh`).
+- An x86_64 CPU.
 - A working network connection.
 - `git`, `curl`, `unzip`, `make`, `gcc`, and the Rust toolchain
-  available through `rustup` (stable channel). Install with:
+  (`rustup`, stable channel):
 
   ```bash
   sudo dnf install -y git curl unzip make gcc
@@ -47,19 +40,12 @@ on the contents of the repo.
   source "$HOME/.cargo/env"
   ```
 
-- Your shell has `~/.local/bin` and `~/.cargo/bin` on `$PATH`. Add
-  the following to `~/.bashrc` if it is not already there:
-
-  ```bash
-  export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-  ```
-
-- `sudo` privileges on the host.
+- `sudo` on the host.
 
 ## Step 1 — Clone the repository
 
-Clone `sy` into `~/sources/sy`. The rest of the tutorial assumes
-that path because the repo's own scripts reference it.
+The rest of this tutorial (and several how-tos) assume
+`~/sources/sy`:
 
 ```bash
 mkdir -p ~/sources
@@ -69,9 +55,8 @@ cd ~/sources/sy
 
 ## Step 2 — Enable the Fedora COPR repositories sy depends on
 
-The rice pulls `niri` (the Wayland compositor `sy` targets) and
-`i3status-rust` (the waybar status backend) from two COPR
-repositories. Enable both:
+The session uses `niri` (Wayland compositor) and `i3status-rust`
+(status backend) from two COPRs:
 
 ```bash
 sudo dnf copr enable -y avengemedia/dms
@@ -79,9 +64,6 @@ sudo dnf copr enable -y atim/i3status-rust
 ```
 
 ## Step 3 — Install the Fedora package prerequisites
-
-Install `niri`, the waybar stack, and every package the rendered
-configs under `configs/` reference:
 
 ```bash
 sudo dnf install -y \
@@ -92,7 +74,7 @@ sudo dnf install -y \
   i3status-rust
 ```
 
-Install JetBrainsMono Nerd Font so the bar glyphs render:
+Install JetBrainsMono Nerd Font so bar glyphs render:
 
 ```bash
 mkdir -p ~/.local/share/fonts/JetBrainsMono
@@ -103,80 +85,75 @@ rm /tmp/JBM.zip
 fc-cache -f
 ```
 
-Install the two helpers that `sy` shells out to:
+Install the clipboard helper. The file manager is `sy file` (built
+with the rest of the binary); do not install yazi.
 
 ```bash
-cargo install --locked --force yazi-build
-rm -f ~/.cargo/bin/yazi-build
 sudo dnf install -y golang
 GOBIN=~/.local/bin go install go.senan.xyz/cliphist@latest
 ```
 
 ## Step 4 — Build the sy binary
 
-Build a release binary in-tree and copy it onto your `$PATH`. The
-project's `make install` target does both, plus a SELinux
-`restorecon` pass when the system is in enforcing mode:
+`make install` builds a release binary, copies it to `~/.local/bin`,
+and runs `restorecon` when SELinux is enforcing:
 
 ```bash
 make install
 ```
 
-Confirm the binary runs:
+If `sy` is not found, add `~/.local/bin` for this shell:
 
 ```bash
+export PATH="$HOME/.local/bin:$PATH"
 sy --help
 ```
 
-You see the top-level command list (`apply`, `aiplane`,
-`knowledge`, `power`, `doctor`, and the others).
+You see the top-level command list (`apply`, `aiplane`, `knowledge`,
+`power`, `file`, `doctor`, and the others). Persist PATH the way
+your distro already does (a login-shell profile), or log out and
+back in if `~/.local/bin` is already on PATH via systemd user
+environment. Do not treat a one-off `~/.bashrc` edit as the source
+of truth for the rest of `sy` — that is what `sy apply` is for.
 
 ## Step 5 — Apply the sy configs
 
-Run `sy apply`. The command renders every template under
-`configs/` to its destination on disk (the directory layout
-mirrors `~/.config/`), symlinks user-level systemd units into
-`~/.config/systemd/user/`, and runs `systemctl --user
-daemon-reload`:
+`sy apply` renders every template under `configs/` to its
+destination, symlinks user units into `~/.config/systemd/user/`, and
+runs `systemctl --user daemon-reload`:
 
 ```bash
 cd ~/sources/sy
-sy apply
-```
-
-If you want to preview the changes before they land, prepend a
-dry run on a separate invocation:
-
-```bash
 sy apply --dry-run
+sy apply
 ```
 
 ## Step 6 — Bring up sy.target
 
-`sy.target` is the user-level systemd target that supervises every
-`sy` plane. Enable it so it starts at every login, and start it
-now:
+`sy.target` is the user-level systemd target that starts the planes
+at login:
 
 ```bash
 systemctl --user enable --now sy.target
 ```
 
-Behind the scenes systemd starts the user-level units `sy.target`
-pulls in: `sy-agentd.service`, `sy-knowledge.service`,
-`sy-qdrant.service`, `sy-powerd.service`, and
-`sy-stack-bar.service`. The NPU inference plane (`aiplane`) joins
-the same group; the daemon binds `/dev/accel/accel0` on first use.
+That pulls in units such as `sy-agentd.service`,
+`sy-knowledge.service`, `sy-qdrant.service`, and `sy-stack-bar.service`.
+The NPU plane (`aiplane`) joins the same
+group; it binds `/dev/accel/accel0` only if that device exists.
 
 ## Step 7 — Run sy doctor
 
-`sy doctor` runs the cross-plane health probes. On a successful
-bring-up it exits `0`:
-
 ```bash
 sy doctor
+echo $?
 ```
 
-To inspect the structured output, ask for JSON:
+`0` means every check passed. `3` means warn-only (optional probes,
+often missing NPU hardware). `1` means a real failure — read the
+failing row and `journalctl --user -u sy.target`.
+
+Machine-readable:
 
 ```bash
 sy doctor --json
@@ -184,47 +161,45 @@ sy doctor --json
 
 ## Verify
 
-Confirm three things, in order:
-
 1. `sy.target` is active:
 
    ```bash
    systemctl --user is-active sy.target
    ```
 
-   The command prints `active` on success.
+   The command prints `active`.
 
-2. `sy doctor` exits `0`:
+2. `sy doctor` exits `0` or `3`:
 
    ```bash
    sy doctor
    echo $?
    ```
 
-   The exit code is `0` (all checks pass). Exit code `3` means
-   warn-only drift and is acceptable for the optional probes, but
-   the canonical success state is `0`.
+   Treat `3` as success for this tutorial if the warnings are about
+   hardware you do not have (NPU, Spark, phone). Treat `1` as a
+   failure to fix before you continue.
 
-3. `sy aiplane status` reports the NPU plane as up:
+3. The binary answers:
 
    ```bash
-   sy aiplane status
+   sy --help
    ```
 
-   The human-readable output names the registered workloads and
-   the active hardware backend. `sy aiplane status --json` gives
-   you the same data on stdout for scripting.
-
-When all three checks pass, the planes are up under your user
-systemd manager and `sy` is ready to drive.
+When those three hold, the planes are up and you can use `sy`.
 
 ## Next steps
 
-- To run on-device NPU inference on AMD Ryzen AI hardware, see
-  [how to set up the NPU](../how-to/set-up-npu.md).
-- To wire up phone-as-key sudo with `syauth`, see
-  [the syauth tutorial](syauth-setup.md).
-- For the full CLI surface, see
-  [the CLI reference](../reference/cli.md).
-- For the mental model of how the planes fit together, see
-  [the architecture explanation](../explanation/architecture.md).
+- [Start here](../intro.md) — map of the rest of the docs.
+- [What sy is](../explanation/what-sy-is.md) — the product story.
+- [Search your local files](search-your-files.md)
+- [Browse files with sy file](browse-your-files.md)
+- [Drive sy from an agent](drive-sy-from-an-agent.md)
+- [Set up the NPU](../how-to/set-up-npu.md) — only if you have Ryzen AI
+  hardware.
+- [Install the Spark agent](../how-to/install-spark.md) — only if you
+  have a DGX Spark.
+- [Unlock sudo with your phone](syauth-setup.md) — only if you have
+  an Android phone.
+- [CLI reference](../reference/cli.md)
+- [How the planes fit together](../explanation/architecture.md)

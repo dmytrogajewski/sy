@@ -295,10 +295,30 @@ fn looks_like_raw_question(query: &str) -> bool {
     // Interrogative / imperative-ask openers that signal a question aimed at
     // an assistant rather than keywords aimed at a corpus.
     const LEADS: &[&str] = &[
-        "what ", "who ", "whom ", "whose ", "where ", "when ", "why ", "how ",
-        "which ", "should ", "could ", "would ", "can i", "can you", "do i",
-        "do you", "does ", "is there", "are there", "tell me", "find out",
-        "help me", "i want to know", "i need to know",
+        "what ",
+        "who ",
+        "whom ",
+        "whose ",
+        "where ",
+        "when ",
+        "why ",
+        "how ",
+        "which ",
+        "should ",
+        "could ",
+        "would ",
+        "can i",
+        "can you",
+        "do i",
+        "do you",
+        "does ",
+        "is there",
+        "are there",
+        "tell me",
+        "find out",
+        "help me",
+        "i want to know",
+        "i need to know",
     ];
     LEADS.iter().any(|p| lower.starts_with(p))
 }
@@ -529,7 +549,9 @@ mod tests {
             "explicit kind:agent-history must override its default exclude"
         );
         assert!(
-            filter.exclude_kinds.contains(&"claude-transcripts".to_string()),
+            filter
+                .exclude_kinds
+                .contains(&"claude-transcripts".to_string()),
             "other self-poisoning kinds stay excluded"
         );
     }
@@ -581,7 +603,9 @@ mod tests {
         // Content-descriptive search phrases must NOT be flagged.
         assert!(!looks_like_raw_question("wife birthday gift wishlist"));
         assert!(!looks_like_raw_question("apartment lease renewal deadline"));
-        assert!(!looks_like_raw_question("flight booking confirmation Lisbon"));
+        assert!(!looks_like_raw_question(
+            "flight booking confirmation Lisbon"
+        ));
         assert!(!looks_like_raw_question(""));
     }
 

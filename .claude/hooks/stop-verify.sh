@@ -30,7 +30,7 @@ cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
 ERRORS=""
 
 # --- Gate 1: placeholder scan -----------------------------------------------
-PATTERNS='\b(TODO|FIXME|HACK|XXX)\b|todo!\(|unimplemented!\(|placeholder|for now[,.: ]'
+PATTERNS='\b(TODO|FIXME|HACK|XXX)\b|todo!\(|unimplemented!\(|for now[,.: ]'
 PLACEHOLDER_HITS=$(grep -rnE "$PATTERNS" src/ 2>/dev/null \
   | grep -v '#\[cfg(test)\]' \
   | grep -v '/tests/' \

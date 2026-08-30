@@ -1,0 +1,111 @@
+schema = "sy.spark.recipe/v1"
+
+[identity]
+id = "spark-fixture-http-echo-1.0.0"
+version = 1
+status = "upstream-verified"
+maintainer = "sy project"
+source_url = "https://github.com/hashicorp/http-echo/tree/866d8f8313e92d96f940c2f0cf807abe934ab145"
+source_commit = "866d8f8313e92d96f940c2f0cf807abe934ab145"
+
+[provenance]
+model_license = "MIT"
+model_license_url = "https://huggingface.co/ornith-ai/Ornith-1.5-9B/blob/489cb97981b8654bcfcf30ce1f94ed1b62e07b53/README.md"
+engine_license = "MPL-2.0"
+engine_license_url = "https://github.com/hashicorp/http-echo/blob/866d8f8313e92d96f940c2f0cf807abe934ab145/LICENSE"
+image_license = "MPL-2.0"
+image_source_url = "https://hub.docker.com/r/hashicorp/http-echo"
+artifact_source_url = "https://huggingface.co/ornith-ai/Ornith-1.5-9B/tree/489cb97981b8654bcfcf30ce1f94ed1b62e07b53"
+redistribution = "fixture engine and model licenses permit redistribution; preserve notices"
+acceptance_required = false
+
+[host]
+architecture = "aarch64"
+gpu_model = "NVIDIA GB10"
+compute_capability = "12.1"
+dgx_builds = ["7.5.0"]
+driver_min = "580.0.0"
+driver_max_exclusive = "581.0.0"
+toolkit_min = "1.19.0"
+toolkit_max_exclusive = "1.20.0"
+
+[model]
+repository = "ornith-ai/Ornith-1.5-9B"
+commits = ["489cb97981b8654bcfcf30ce1f94ed1b62e07b53"]
+format = "safetensors"
+precision = "bf16"
+tokenizer_sha256 = "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+parser = "fixture:static_text"
+parser_sha256 = "9dd2fbd270feaa1fbef2d4f634d7887c9c506e3bde140f8e7351c8944e8fd235"
+
+[model.remote_code]
+allowed = false
+vendored_sha256 = []
+
+[[model.files]]
+path = "config.json"
+sha256 = "1f1b3751c38f16a63340df90a55e870bef0f0b2968d833825a605b7cf930a313"
+
+[engine]
+name = "fixture-http-echo"
+version = "1.0.0"
+accelerator = "cpu"
+image_repository = "hashicorp/http-echo"
+image_digest = "sha256:3f5c9a5a28daf63a712bbf45f2fa0741be9cd34339ba598a5c13af02959f108d"
+image_architecture = "arm64"
+entrypoint = ["/http-echo"]
+argv = ["-listen=:8000", "-text=sy-spark-fixture-ok"]
+substitutions = []
+
+[isolation]
+network_policy = "sy-spark-internal-v1"
+writable_tmpfs = []
+capabilities = []
+seccomp = "default"
+pid_limit = 32
+run_as_uid = 65532
+disabled_features = ["gpu", "model_loading", "remote_network"]
+
+[[isolation.mounts]]
+host_root = "/var/lib/sy-spark/huggingface"
+container_path = "/models"
+read_only = true
+purpose = "model"
+
+[resources]
+download_bytes = 20700000000
+image_bytes = 16000000
+startup_peak_bytes = 67108864
+steady_peak_bytes = 33554432
+kv_cache_policy = "none"
+context_ceiling = 1
+concurrency_ceiling = 8
+compile_cache_bytes = 0
+
+[health]
+startup_deadline_seconds = 30
+method = "GET"
+path = "/health"
+semantic_prompt = "Return the signed fixture marker."
+semantic_max_tokens = 1
+served_model = "sy-spark-fixture"
+
+[gateway]
+port = 8000
+capabilities = ["fixture_health"]
+
+[[gateway.methods]]
+method = "GET"
+path = "/fixture"
+
+[evidence]
+host_fingerprint = "sha256:7e42b88250e762400e91b902cfa1fcda6b4d1cc118eb6b91fd50716b41cf8510"
+image_run_as_uid = 65532
+upstream_recipe_commit = "866d8f8313e92d96f940c2f0cf807abe934ab145"
+corpus = "sy.spark.fixture-http-echo/v1"
+objective = "fixture"
+quality = "upstream ARM64 image metadata and fixed static-marker contract"
+stability_seconds = 0
+measured_metrics = ["health_marker"]
+verified_at = "2026-08-24T00:00:00Z"
+expires_at = "2027-08-24T00:00:00Z"

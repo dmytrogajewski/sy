@@ -1141,9 +1141,10 @@ pub fn include_opts_into_excluded_kinds(include_sources: &[String]) -> Vec<Strin
     DEFAULT_EXCLUDED_KINDS
         .iter()
         .filter(|dk| {
-            section.sources.iter().any(|s| {
-                s.kind.as_kebab() == **dk && include_sources.iter().any(|n| n == &s.name)
-            })
+            section
+                .sources
+                .iter()
+                .any(|s| s.kind.as_kebab() == **dk && include_sources.iter().any(|n| n == &s.name))
         })
         .map(|dk| (*dk).to_string())
         .collect()

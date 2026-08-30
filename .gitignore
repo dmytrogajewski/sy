@@ -20,6 +20,8 @@
 *.swp
 .idea/
 .vscode/
+__pycache__/
+*.py[cod]
 
 # Docs-lint caches and Vale-managed style packs. The custom Vale
 # vocabulary at .vale/styles/config/vocabularies/ IS checked in;
@@ -33,6 +35,10 @@
 # npm artifacts from local docs-lint invocation (markdownlint-cli2,
 # cspell). Repo doesn't ship a package.json — these only appear when
 # a contributor installs the linters globally and then accidentally
-# initialises one locally.
+# initialises one locally. The Docusaurus site *does* ship
+# website/package-lock.json; ignore only its generated output.
 /node_modules/
 /package-lock.json
+/website/node_modules/
+/website/build/
+/website/.docusaurus/

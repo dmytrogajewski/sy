@@ -9,7 +9,7 @@
 #   - `make lint` is the gate before any commit. The Stop hook
 #     (.claude/hooks/stop-verify.sh) re-runs the lint subset.
 
-.PHONY: build release test test-npu eval lint fmt fmt-check audit bench install install-system-npu install-system-syauth-selinux docs-lint help
+.PHONY: build release test test-npu eval lint fmt fmt-check audit bench install install-system-npu install-system-syauth-selinux docs-lint docs-site help
 
 build:
 	cargo build --workspace
@@ -96,7 +96,8 @@ docs-lint:
 	fi; \
 	if command -v lychee >/dev/null 2>&1; then \
 		echo "==> lychee"; \
-		lychee --config lychee.toml './**/*.md'; \
+		lychee --config lychee.toml --exclude-path target \
+			--exclude-path website/node_modules './**/*.md'; \
 	else \
 		echo "skip: lychee not installed (cargo install lychee)"; \
 	fi; \
@@ -106,6 +107,18 @@ docs-lint:
 	else \
 		echo "skip: vale not installed (see https://vale.sh/docs/vale-cli/installation/)"; \
 	fi
+
+# Production Docusaurus build for the user-facing docs/ tree.
+# Requires Node 18+ and website/package-lock.json.
+docs-site:
+	@set -e; \
+	if ! command -v npm >/dev/null 2>&1; then \
+		echo "docs-site: npm not found (install Node 18+)"; \
+		exit 1; \
+	fi; \
+	echo "==> docusaurus build (website/)"; \
+	npm ci --prefix website; \
+	npm run build --prefix website
 
 help:
 	@echo "Targets:"
@@ -129,3 +142,4 @@ help:
 	@echo "                       from xdm_t (gdm) / sudo_t (one-time per host)"
 	@echo "  docs-lint   — markdownlint + cspell + lychee + vale (advisory);"
 	@echo "                mirror of .github/workflows/docs.yml"
+	@echo "  docs-site   — Docusaurus production build (website/build)"
