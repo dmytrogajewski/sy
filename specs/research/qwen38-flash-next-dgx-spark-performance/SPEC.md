@@ -354,8 +354,8 @@ moving through SGLang pull requests. The candidate therefore cannot track
 Upstream context:
 
 - [Qwen3.8-Flash-Next support PR](https://github.com/sgl-project/sglang/pull/36497)
-- [SGLang attention backend documentation](https://github.com/sgl-project/sglang/blob/main/docs_new/docs/advanced_features/attention_backend.mdx)
-- [SGLang speculative decoding documentation](https://github.com/sgl-project/sglang/blob/main/docs_new/docs/advanced_features/speculative_decoding.mdx)
+- [SGLang attention backend documentation](https://sglang.io/docs/advanced_features/attention_backend)
+- [SGLang speculative decoding documentation](https://sglang.io/docs/advanced_features/speculative_decoding)
 
 ## 8. Proposed sy architecture
 

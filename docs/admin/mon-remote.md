@@ -64,5 +64,3 @@ A TCP listener inside `sy` would force every install to ship firewall
 rules, certificate plumbing, and an authentication story. The single
 documented `socat` recipe above is the lighter, lower-blast-radius
 alternative for the handful of operators who actually need it.
-
-[spec-antigoals]: ../../specs/research/sy-mon/SPEC.md
