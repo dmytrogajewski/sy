@@ -26,8 +26,6 @@ XDG variables.
 | `sy.toml` (repo root, copied into the target) | Active theme, registered knowledge sources, knowledge schedule, and other host knobs `sy` itself owns. |
 | `themes/<name>.toml` | Colour palette injected into every `configs/**` template at render time. |
 | `configs/` | Minijinja templates. Directory layout mirrors `~/.config/`. |
-| `configs/sy/power.toml` | Power-governor profiles, bandit arms, EPP / governor rules. |
-| `configs/sy/intent_whitelist.toml` | Agent-runner intent whitelist; also the `[call].who` substrings for "in a call" detection. |
 | `configs/systemd/user/` | User units grouped by `sy.target`. `sy apply` symlinks them into `~/.config/systemd/user/`. |
 | `configs/systemd/system/` | Rare system-level units (NPU, Spark agent/executor, syauth PAM helpers). |
 
@@ -57,11 +55,9 @@ Load-bearing globals (full per-command list is in
 |------|---------|
 | `SY_ROOT` | Repo root for template rendering. Same as `--root`. |
 | `XDG_CONFIG_HOME` | Default `--target` for `sy apply`. |
-| `XDG_STATE_HOME` | Per-plane state (`crash`, `knowledge`, `power`). |
-| `XDG_RUNTIME_DIR` | Unix sockets (`agt`, `ipc`, `power`, `mon`, `file`). |
+| `XDG_STATE_HOME` | Per-plane state (`crash`, `knowledge`). |
+| `XDG_RUNTIME_DIR` | Unix sockets (`agt`, `ipc`, `mon`, `file`). |
 | `NO_COLOR` | Disable ANSI when set (CLIG). |
-| `SY_POWER_REPORT_TIMESTAMP` | Pin the PDF report clock for byte-identical output. |
-| `SY_POWER_REPORT_MODEL_SHA` | Pin the PDF report model id for byte-identical output. |
 | `SY_KB_*` | Knowledge-search filters; flags override these. |
 
 ## Knowledge sources in `sy.toml`
@@ -74,15 +70,6 @@ tree.
 
 Do not register sources by editing `~/.config/` copies. Edit the
 repo (or use the CLI) and apply.
-
-## Intent whitelist
-
-`~/.config/sy/intent_whitelist.toml` is materialised by the
-installer from `configs/sy/intent_whitelist.toml`. New "in a call"
-triggers go in `[call].who` (case-insensitive substring match on
-the logind inhibitor `Who` field). A missing or malformed file
-falls back to an empty whitelist: call detection goes quiet rather
-than crashing the daemon.
 
 ## Examples
 

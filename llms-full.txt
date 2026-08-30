@@ -22,7 +22,6 @@ The Optional entries in llms.txt that are included here:
 - specs/research/architecture-refactor/SPEC.md
 
 There are no Optional entries from llms.txt that were skipped.
--->
 # README.md
 
 ## sy
@@ -36,8 +35,8 @@ snowflakes: `cargo build --release && ./target/release/sy apply` on a
 fresh machine reproduces the entire system.
 
 You get a desktop that matches this git tree, search over folders
-you register, a file manager on Super+E, a power governor you can
-ask *why*, and the same CLI for a coding agent. An NPU, a DGX
+you register, a file manager on Super+E, and the same CLI for a
+coding agent. An NPU, a DGX
 Spark, and phone-as-key sudo are extras — bring-up does not need
 them. The story is
 [What sy is](docs/explanation/what-sy-is.md); the rest of the docs
@@ -50,12 +49,12 @@ sy apply              # render configs/* → ~/.config/, ~/.local/share/, /etc/*
 sy aiplane daemon     # on-device NPU inference plane (ORT + VitisAI EP)
 sy agt …              # sandboxed agent runner
 sy knowledge daemon   # semantic search over local files (NPU-accelerated)
-sy power status       # adaptive power governor (ppd shim + bandit + MCP)
 sy file               # native iced file manager (Mod+E)
 sy mon                # layer-shell health dashboard (Super+m)
 sy spark HOST …       # remote DGX Spark model appliance
 sy auto               # auto-configure MCP servers across agents (Claude, …)
 sy stack bar          # layer-shell waybar replacement
+sy profile performance # switch Fedora's tuned-ppd profile (alias: sy pwr)
 sy syauth doctor      # phone-as-key sudo (PAM + BlueZ + Android)
 …
 ```
@@ -99,34 +98,97 @@ what to load at start-up.
 
 `sy spark <host>` manages a separately installed, authenticated Spark agent.
 Install it with `sy spark <host> install --dry-run --json`, then
-`--yes` plus the minisign signature and public key; see
+`--yes` plus the signed release inventory and public key; see
 [How to install the Spark agent](docs/how-to/install-spark.md).
 Before an engine lifecycle is authorized, the agent requires one fresh
 executor-owned snapshot and checks aggregate cold-start memory, live
-`MemAvailable`, full-memory PSI, swap-in activity, disk reserve, recipe
-compatibility, and the single high-memory transition lease.
+`MemAvailable`, full-memory PSI, swap-in activity, disk reserve, immutable model
+identity, and the single high-memory start lease. Stops always remain available
+and are not blocked by a start lease.
 
 ```text
 sy spark dgx-spark install --dry-run --json
-sy spark dgx-spark install --yes --release-signature sy-aarch64.minisig --release-public-key sy-release.pub
+sy spark dgx-spark install --yes --release-manifest SHA256SUMS --release-signature SHA256SUMS.minisig --release-public-key sy-release.pub
 sy spark dgx-spark status --json
-sy spark dgx-spark serve ornith-1.5:9b --dry-run --json
-sy spark dgx-spark serve ornith-1.5:9b --recipe spark-fixture-http-echo-1.0.0 --name fixture
-sy spark dgx-spark ps --json
-sy spark dgx-spark logs fixture --limit 100
+sy spark dgx-spark download ornith-1.5:35b
+sy spark dgx-spark download ornith-1.5:35b --dry-run --json
+sy spark dgx-spark download owner/model --revision <commit> --alias model:tag
+sy spark dgx-spark download owner/model --revision <commit> --artifact model.gguf --auxiliary projector=mmproj.gguf --alias model:q4
+sy spark dgx-spark serve ornith-1.5:35b --dry-run --json
+sy spark dgx-spark serve ornith-1.5:35b --name ornith
+sy spark dgx-spark ls                 # compact runnable model inventory
+sy spark dgx-spark ps                 # compact active process list
+sy spark dgx-spark ps --json          # same active set as structured data
+sy spark dgx-spark logs ornith --limit 100
 sy spark dgx-spark client-config ornith --client codex
 sy spark dgx-spark client-config ornith --client claude-code
-sy spark dgx-spark download Qwen/Qwen3-Embedding-0.6B --revision 97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3 --alias qwen3-embedding:0.6b
-sy spark dgx-spark serve qwen3-embedding:0.6b --recipe qwen3-embedding-0.6b-vllm-0.19.1 --name embeddings --allow-unverified
-sy spark dgx-spark stop fixture
+sy spark dgx-spark launch codex --model ornith-1.5:35b
+sy spark dgx-spark launch claude --model ornith-1.5:35b -- --permission-mode plan
+sy spark dgx-spark launch opencode --model ornith-1.5:35b
+sy spark dgx-spark upgrade --dry-run --json
+sy spark dgx-spark rollback --dry-run --json
+sy spark dgx-spark cert rotate --dry-run --json
+sy spark dgx-spark stop ornith
 ```
 
-The named fixture recipe is a signed, digest-pinned ARM64 HTTP engine used to
-verify the complete Docker lifecycle without loading model weights or using the
-GPU. Omitting `--recipe` keeps verified vLLM as the default fallback. Engines
-run only on the internal managed bridge; `ps` exposes desired versus observed
-state without leaking its address, logs are bounded and redacted, and repeated
-`stop` is successful.
+Serving is configuration-driven. `/etc/sy/spark/engines/*.toml` owns each
+digest-pinned engine image, entrypoint, arguments, artifact-role bindings,
+environment, isolation, resource envelope, routes, health probe, sampling
+defaults, and model-type profiles. `/etc/sy/spark/models.toml` provides optional
+recommended aliases and exact immutable artifacts; it is never an install
+allowlist. Unconfigured repositories use deterministic artifact inspection,
+preferring safetensors with vLLM and then Spark's GGUF quantization defaults.
+Explicit `--artifact` and `--auxiliary` selectors override inspection. Rust validates those schemas and
+constructs the locked container; it contains no model catalog, image version,
+digest, or model-specific launch branch. Uncatalogued downloads label each
+auxiliary as `ROLE=PATH`. Roles are validated lowercase identifiers rather than
+a compiled allowlist. An engine must bind a role to confined arguments or
+explicitly ignore it; for example, llama.cpp binds `projector` to `--mmproj` and
+`draft_model` to `--model-draft`, while `weight_shard` remains a verified file
+discovered from the primary model.
+
+##### Add a Spark model without changing Rust
+
+Add an entry to [`configs/sy/spark/models.toml`](configs/sy/spark/models.toml),
+then build and deploy the signed release. The installed catalog is validated as
+`sy.spark.models/v2` before activation and is loaded when the agent starts.
+Repository revisions must be immutable 40-character commits; artifact paths,
+byte sizes, optional SHA-256 values, typed auxiliaries, quantization, and
+capabilities are data, not compiled policy.
+
+```toml
+[[models]]
+aliases = ["example:27b-q4"]
+repository = "owner/example-GGUF"
+revision = "0123456789abcdef0123456789abcdef01234567"
+
+[models.artifact]
+format = "gguf"
+quantization = "Q4_K_XL"
+capabilities = ["text_generation", "tool_calling"]
+
+[models.artifact.primary]
+path = "example-Q4_K_XL.gguf"
+bytes = 17559178144
+sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+```
+
+If an existing engine matcher accepts the declared format, quantization, and
+capabilities, no engine edit is needed. Otherwise add another complete
+`sy.spark.engine/v3` file under [`configs/sy/spark/engines/`](configs/sy/spark/engines/).
+Selection uses only those traits and priority; an unsupported artifact or an
+equal-priority tie fails validation/admission instead of guessing from a model
+name. A signed upgrade replaces the installed catalogs authoritatively.
+
+`launch` runs Codex, Claude Code, or OpenCode in the current workstation
+directory while inference stays on Spark. It reuses or serves the exact verified
+model, creates a separate inference-only credential for the child, and never
+passes the Spark administrator credential or a shell command to the agent.
+
+Engines run only on the internal managed bridge. `ls` renders the verified models
+available to run as an Ollama-style table; `ps` renders only active lifecycle
+instances without leaking bridge addresses. `show`, `logs`, and JSON retain detailed
+identity and state. Logs are bounded and redacted, and repeated `stop` is successful.
 
 After the engine passes both its health check and an exact model-identity
 completion probe, the agent publishes OpenAI-compatible routes at
@@ -136,21 +198,33 @@ completions, protocol-native chat completions, Responses, Messages, and token
 count with bounded SSE and client-side tool continuation. The read-only
 `client-config` output supports Codex's `wire_api = "responses"` provider and a
 Claude Code 2.1.241 projection; both name the protected token and CA environment
-variables without reading, printing, or persisting the token. Health, metrics,
-tokenizer, debug, admin, and engine-native addresses remain private. Warming or
+variables without reading, printing, or persisting the token. Engine-native
+health, metrics, tokenizer, debug, admin, and addresses remain private; the
+control plane exposes only its authenticated, bounded metrics document. Warming or
 recovering generations return protocol-native `503` errors with `Retry-After`
 and never inherit a stale route.
 
-Capabilities are taken only from the selected signed recipe. Ornith accepts
+Ornith reasoning remains separate from answer text throughout the gateway:
+OpenAI Chat receives `reasoning_content`, Responses receives native reasoning
+summary items and SSE lifecycles, and Anthropic Messages receives thinking
+blocks, thinking deltas, and a deterministic local integrity signature that can
+be returned on a later tool turn. Anthropic adaptive, manual-budget,
+omitted-display, and disabled thinking retain their distinct wire semantics,
+including signed omitted-thinking history on later tool turns. Omitted sampling values
+come from the selected profile in `/etc/sy/spark/engines/*.toml`; values explicitly supplied by
+the client win. Context length is likewise an engine argument in that profile; a
+translated-stream idle deadline can be raised there for long prefills while retaining a
+bounded default for other profiles. The gateway has no model-name branch or compiled
+tuning constants.
+
+Capabilities are taken only from the configured engine profile. Ornith accepts
 bounded inline JPEG, PNG, or WebP images through OpenAI Responses and Anthropic
 Messages; the adapters validate the declared media type, file magic, decoded
 bytes, image count, and dimensions before contacting vLLM. Remote URLs, local
 paths, traversal, unsupported media, and images sent to text-only instances are
-rejected. `Qwen/Qwen3-Embedding-0.6B` has its own embedding-only recipe and
-serves strict float vectors at
-`POST /openai/<instance>/v1/embeddings`; it does not expose generation routes.
-Embedding input order, 1024 dimensions, unit normalization, usage, and public
-model identity are checked by the gateway rather than trusted from the engine.
+rejected. A profile exposes only the routes and capabilities declared in
+`/etc/sy/spark/engines/*.toml`; unsupported tasks fail closed rather than selecting another
+runtime.
 
 The admission report exposes the declarative 8 GiB system reserve, 8 GiB
 emergency floor, and 100 GiB disk reserve. Missing or stale telemetry fails
@@ -158,11 +232,28 @@ closed. The root executor independently samples pressure and durably suppresses
 restart before an emergency victim can be stopped; it never selects unlabeled
 work.
 
+Spark application releases are signed, content-addressed bundles installed side by
+side. Signed `SHA256SUMS` covers the ARM binary and the separate model and engine
+TOML files; `scripts/package-spark-release.sh` builds that layout. `upgrade`
+validates active engine identities, the N/N-1 database schema, a verified
+backup, and the protected host fingerprint before switching only the control
+plane; healthy engine containers remain running. Failed semantic health requests
+automatic rollback. `rollback` re-verifies both artifacts and swaps the exact
+`current`/`previous` links. `cert rotate` is SSH-only, preserves overlap material,
+hot-reloads a leaf under the pinned CA, and updates the workstation pin only when
+`--ca` explicitly rotates the CA. Every maintenance mutation requires exactly
+one of `--dry-run` or `--yes`.
+
+These commands never update the DGX OS, kernel, NVIDIA driver, CUDA, firmware,
+Docker, container toolkit, system Python, firewall, swap, clocks, or power
+configuration. Docker restart and host reboot are separate optional operator
+actions and are reported as `not_run` by default.
+
 #### `agt` — sandboxed agent runner
 
-`sy agt` runs coding/inference agents under an intent-whitelisted
-sandbox. The whitelist lives in [`configs/sy/intent_whitelist.toml`](configs/sy/intent_whitelist.toml);
-the runner enforces it before dispatching tool calls. Used by `sy auto`
+`sy agt` runs coding/inference agents under policy-profile sandboxes.
+The profiles live under [`configs/policy/profiles/`](configs/policy/profiles/);
+the runner enforces them before dispatching tool calls. Used by `sy auto`
 to plumb MCP servers into Claude / Cursor / Codex / Gemini configs
 without each tool re-implementing tool-permission policy.
 
@@ -190,12 +281,12 @@ sy knowledge add ~/Documents/notes
 sy knowledge daemon
 sy knowledge search "rust async cancellation"
 
-# Structured pre-search filters (also `SY_KB_*` env; flags > env > default):
+## Structured pre-search filters (also `SY_KB_*` env; flags > env > default):
 sy knowledge search "новый год X5 Магнит" \
     --date-from 2023-12-01 --date-to 2024-02-29 \
     --kind telegram --from "Анна Лу"
-#   --include-source / --exclude-source <name>   scope by registered source
-#   (results carry a stable `chunk_id`; fetch full text with get-chunk)
+##   --include-source / --exclude-source <name>   scope by registered source
+##   (results carry a stable `chunk_id`; fetch full text with get-chunk)
 
 sy knowledge get-chunk <chunk_id>   # full, uncapped text for one result
 sy knowledge eval --json            # recall@1/5, MRR, abstain accuracy vs the golden set
@@ -214,32 +305,6 @@ known aliases (`X5 → Пятёрочка/Перекрёсток/Чижик`) in
 Voice/video notes can be transcribed into the index (Whisper, CPU/iGPU)
 by building with `--features transcribe` (off by default — it vendors
 whisper.cpp and downloads a model).
-
-#### `power` — adaptive power governor
-
-The `sy-powerd` user daemon (under `src/power/`) is a power-profiles-daemon
-shim with an adaptive layer on top: cpufreq governor selection, EPP,
-turbo, and `net.hadess.PowerProfiles` D-Bus name ownership are all
-managed declaratively from [`configs/sy/power.toml`](configs/sy/power.toml).
-A contextual bandit picks profile transitions; every decision is
-journaled and reachable over MCP (`sy power mcp`).
-
-```
-sy power status            # current profile, source, rationale
-sy power apply             # apply config rules
-sy power show --json       # full snapshot (governor, EPP, bandit weights)
-```
-
-`sy power show` renders an offline PDF report over the decision journal:
-an executive summary, the per-arm decision mix, cumulative regret against
-the rules-only baseline, and power/reward plots — so you can audit what
-the bandit actually did over a window. Add `--json` for the
-`sy.power.report/v1` schema instead of a PDF, `--out` to pin the path, and
-`--since` to widen the window. The PDF is byte-identical over the same
-audit window once its two wall-clock inputs are pinned via
-`SY_POWER_REPORT_TIMESTAMP` and `SY_POWER_REPORT_MODEL_SHA`.
-
-<img src="assets/sy-power-report.png" alt="sy power show report — executive summary and methodology page" width="600" />
 
 #### Rice — niri + waybar + …
 
@@ -309,7 +374,6 @@ the PAM module's control flags and arguments are in
 │   ├── aiplane/              # NPU plane: registry, session pool, IPC, daemon
 │   ├── agt/                  # sandboxed agent runner
 │   ├── knowledge/            # qdrant-backed semantic search
-│   ├── power/                # adaptive power governor
 │   ├── supervision/          # sy.target supervisor + unit linker
 │   ├── stack/                # layer-shell waybar replacement
 │   ├── doctor/               # cross-plane health probes
@@ -317,7 +381,6 @@ the PAM module's control flags and arguments are in
 ├── configs/                  # declarative config (rendered by `sy apply`)
 │   ├── systemd/{system,user}/*.service|*.target
 │   ├── niri/ waybar/ mako/ fuzzel/ foot/ swaylock/
-│   ├── sy/{power,intent_whitelist}.toml
 │   ├── dbus-1/ policy/ selinux/ udev/ modprobe.d/ grub/ dracut/
 │   └── …
 ├── scripts/                  # one-shot helpers (prep_npu_workload.py …)
@@ -342,7 +405,7 @@ sudo dnf install -y \
 sudo dnf copr enable -y atim/i3status-rust
 sudo dnf install -y i3status-rust
 
-# JetBrainsMono Nerd Font (icons in waybar / mako)
+## JetBrainsMono Nerd Font (icons in waybar / mako)
 mkdir -p ~/.local/share/fonts/JetBrainsMono
 curl -fL -o /tmp/JBM.zip \
   https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip
@@ -366,7 +429,7 @@ cargo build --release
 ./target/release/sy themes              # list themes
 ./target/release/sy render waybar/style.css   # render single file to stdout
 
-# Reload running session
+## Reload running session
 niri msg action load-config-file
 killall -SIGUSR2 waybar
 makoctl reload
@@ -456,19 +519,19 @@ per-subcommand reference — every flag, default, env var, exit code,
 and example — see [`docs/reference/cli.md`](docs/reference/cli.md).
 
 ```bash
-# apply / preview the whole system
+## apply / preview the whole system
 sy apply [--dry-run] [--theme <name>]
 sy diff                            # pending changes
 sy doctor                          # cross-plane health probes
 sy themes                          # list themes
 sy render <relpath>                # render single template to stdout
 
-# aiplane (NPU)
+## aiplane (NPU)
 sy aiplane daemon                  # supervises /dev/accel/accel0
 sy aiplane run --workload <k>      # one-shot via IPC
 sy aiplane status [--json]
 
-# knowledge (semantic search consumer of aiplane)
+## knowledge (semantic search consumer of aiplane)
 sy knowledge add <path>            # register a tree (respects .gitignore)
 sy knowledge rm <path>             # unregister
 sy knowledge schedule 30m          # rewrite [knowledge].schedule
@@ -486,30 +549,24 @@ sy knowledge mcp                   # MCP server (stdio): knowledge_search,
                                    #   knowledge_get_chunk, knowledge_index,
                                    #   knowledge_list_sources
 
-# power
-sy power status [--json]
-sy power apply
-sy power show --json
-sy power mcp
-
-# mon — system health popup + 1 Hz aggregator
+## mon — system health popup + 1 Hz aggregator
 sy mon                             # toggle the layer-shell popup (Super+m)
 sy mon snapshot [--json]           # one-shot snapshot from the aggregator
 sy mon doctor [--json]             # plumbing checks (folds into sy doctor)
 sy mon mcp                         # MCP stdio server (system.mon.{snapshot,history})
 sy mon waybar                      # waybar custom-module tile (ok/degraded/down)
 
-# agent runner
+## agent runner
 sy agt run <prompt> [--profile <name>]
 
-# auto-configure MCP across agents
-sy auto                            # plumbs sy-knowledge / sy-power into Claude, Cursor, Codex, Gemini
+## auto-configure MCP across agents
+sy auto                            # configures sy MCP servers for Claude, Cursor, Codex, Gemini
 
-# syauth
+## syauth
 sy syauth install-pam --service sudo
 sy syauth doctor
 
-# stack bar (layer-shell waybar replacement)
+## stack bar (layer-shell waybar replacement)
 sy stack bar
 ```
 
@@ -646,8 +703,8 @@ an AI agent can drive the same way.
 
 It is one Rust program and the `configs/` tree in this git repo.
 You build the binary, run `sy apply`, and enable `sy.target`. The
-compositor session, semantic search, file manager, power governor,
-and agent plumbing then match the repo. If the disk dies, a fresh
+compositor session, semantic search, file manager, and agent plumbing
+then match the repo. If the disk dies, a fresh
 Fedora install plus those steps is the same machine. That promise
 is the product.
 
@@ -720,7 +777,6 @@ How-to (you already know the job):
 - [Wire MCP into your agents](./how-to/wire-mcp-into-agents.md)
 - [Apply a theme](./how-to/apply-a-theme.md)
 - [Run sy doctor](./how-to/run-doctor.md)
-- [Read power status](./how-to/read-power-status.md)
 - [Install the Spark agent](./how-to/install-spark.md)
 - [Serve a model on Spark](./how-to/serve-a-model-on-spark.md)
 - [Run sy file from a shell](./how-to/run-sy-file.md)
@@ -783,8 +839,8 @@ Six months later you cannot rebuild the laptop.
 `sy` is one answer to that: an **Agentic OS layer for Fedora 43**.
 One Rust binary plus the `configs/` tree in this repo. You clone,
 you build, you run `sy apply`, you enable `sy.target`. The desktop,
-the search index, the power governor, the file manager, and the
-agent plumbing come from that apply. An agent talks to the same
+the search index, the file manager, and the agent plumbing come from
+that apply. An agent talks to the same
 `sy` commands you do.
 
 The name is short on purpose. `sy` is the orchestrator, not a
@@ -809,10 +865,8 @@ wins the PAM stack with a biometric tap. If the phone is in the
 other room, FIDO or your password still works. syauth is
 `sufficient`, never a lockout.
 
-The power governor has already picked a profile from battery,
-thermal headroom, and whether you are in a call. You can ask
-`sy power status --json` why. Super+M opens a health popup: CPU,
-NPU holders, knowledge queue, agent denials.
+Super+M opens a health popup with CPU, NPU holders, knowledge queue,
+and agent denials.
 
 If a DGX Spark is on the desk, `sy spark dgx-spark serve …` is how
 you start a signed engine. The laptop never holds Docker. Chat
@@ -833,8 +887,7 @@ the whole list for bring-up.
 | Rebuild the machine from git | `sy apply` renders `configs/` and starts `sy.target` |
 | Search folders you own | `sy knowledge` (CLI, MCP, waybar tile) |
 | Browse files in a window | `sy file`, Super+E |
-| Let an agent use the same tools | `sy auto` writes MCP configs; `sy knowledge mcp`, `sy power mcp`, `sy file mcp`, `sy mon mcp` |
-| See why the laptop picked a power profile | `sy power status` |
+| Let an agent use the same tools | `sy auto` writes MCP configs; `sy knowledge mcp`, `sy file mcp`, `sy mon mcp` |
 | Glance at plane health | `sy mon` / Super+M, or `sy doctor` |
 | Theme the session from the repo | `sy apply --theme …` then reload niri |
 
@@ -1049,8 +1102,8 @@ systemctl --user enable --now sy.target
 ```
 
 That pulls in units such as `sy-agentd.service`,
-`sy-knowledge.service`, `sy-qdrant.service`, `sy-powerd.service`,
-and `sy-stack-bar.service`. The NPU plane (`aiplane`) joins the same
+`sy-knowledge.service`, `sy-qdrant.service`, and `sy-stack-bar.service`.
+The NPU plane (`aiplane`) joins the same
 group; it binds `/dev/accel/accel0` only if that device exists.
 
 ### Step 7 — Run sy doctor
@@ -1561,7 +1614,7 @@ Keystore:
 
 ```bash
 cd ~/sources/syauth/syauth-android
-# Follow the build steps in this directory's README.md, then:
+## Follow the build steps in this directory's README.md, then:
 adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
@@ -1881,7 +1934,7 @@ Gemini without hand-editing each client's config file.
 ### Result
 
 Each selected client has a `sy` MCP server entry. Tools such as
-`knowledge_search` and `power_status` show up in the client after
+`knowledge_search` show up in the client after
 restart. Re-running the command is safe: detectors that already
 wrote their files report as present.
 
@@ -1908,8 +1961,9 @@ answers from your laptop.
   `ssh dgx-spark true` must succeed with the keys, agent, or token
   you already use. `sy` does not accept passwords, keys, or tokens as
   arguments and does not store them.
-- A signed ARM64 `sy` release for the Spark: the binary, its minisign
-  signature, and the pinned minisign public key. `--yes` refuses to
+- A signed ARM64 `sy` release bundle for the Spark: `sy-aarch64`, the three
+  separate catalog TOMLs, `SHA256SUMS`, its minisign signature, and the pinned
+  minisign public key. `--yes` refuses to
   run without `--release-signature` and `--release-public-key`.
 - `sy` on your laptop `$PATH`.
 
@@ -1938,8 +1992,12 @@ a Docker socket.
    activation entrypoint. No arbitrary remote command is accepted:
 
    ```bash
+   scripts/package-spark-release.sh target/aarch64-unknown-linux-gnu/release/sy release
+   minisign -Sm release/SHA256SUMS -s sy-release.key
    sy spark dgx-spark install --yes \
-     --release-signature sy-aarch64.minisig \
+     --probe release/sy-aarch64 \
+     --release-manifest release/SHA256SUMS \
+     --release-signature release/SHA256SUMS.minisig \
      --release-public-key sy-release.pub
    ```
 
@@ -1960,6 +2018,40 @@ a Docker socket.
 (default 9843) and the executor healthy. `doctor --json` exits `0`.
 You can now [serve a model](serve-a-model-on-spark.md).
 
+### Upgrade or recover the control plane
+
+Preview and approve the same signed ARM64 artifact transaction used at first
+install:
+
+```bash
+sy spark dgx-spark upgrade --dry-run --json
+sy spark dgx-spark upgrade --yes \
+  --probe release/sy-aarch64 \
+  --release-manifest release/SHA256SUMS \
+  --release-signature release/SHA256SUMS.minisig \
+  --release-public-key sy-release.pub \
+  --json
+```
+
+Upgrade verifies a database backup, N/N-1 schema compatibility, active engine identities,
+and the protected DGX fingerprint. It changes only the control-plane release and
+keeps healthy engine containers running. Failed semantic health requests
+automatic rollback.
+
+Use the SSH-only recovery path even when HTTPS is unavailable:
+
+```bash
+sy spark dgx-spark rollback --dry-run --json
+sy spark dgx-spark rollback --yes --json
+sy spark dgx-spark cert rotate --dry-run --json
+sy spark dgx-spark cert rotate --yes --json
+```
+
+Add `cert rotate --ca --yes` only when replacing the local CA. The new public CA
+returns through SSH and the client atomically re-pins it; private keys remain on
+Spark. Docker restart and host reboot are not part of these commands and remain
+`not_run` unless the operator separately schedules them.
+
 Exit `2` is local configuration or usage. Exit `4` is OpenSSH, SFTP,
 TLS pin mismatch, or authentication failure — fix the SSH alias or
 the pinned CA, not the Spark units.
@@ -1978,7 +2070,7 @@ the pinned CA, not the Spark units.
 
 ### Goal
 
-Ask a Spark host to run a signed recipe, wait until the instance is
+Ask a Spark host to run a verified model with its configured engine, wait until the instance is
 healthy, and confirm the OpenAI-compatible gateway path answers.
 
 ### Prerequisites
@@ -1988,7 +2080,7 @@ healthy, and confirm the OpenAI-compatible gateway path answers.
   [How to install the Spark agent](install-spark.md) first.
 - `sy` on your laptop with Spark client credentials configured for
   that host. Substitute `dgx-spark` below for the host name you use.
-- Enough free memory and disk on the Spark for the recipe. Missing
+- Enough free memory and disk on the Spark for the configured engine envelope. Missing
   or stale telemetry fails closed; the agent will refuse the serve
   rather than overcommit.
 
@@ -2003,18 +2095,15 @@ healthy, and confirm the OpenAI-compatible gateway path answers.
    ```
 
    If the dry-run is denied, free memory or disk on the Spark and
-   retry. Do not pass `--allow-unverified` to skip a denial you do
-   not understand. Missing telemetry fails closed: the agent refuses
+   retry. Missing telemetry fails closed: the agent refuses
    rather than guessing.
 
-2. Serve a signed fixture first if you want to prove the Docker
-   lifecycle without loading weights or using the GPU. The fixture
-   recipe is digest-pinned ARM64 HTTP:
+2. Start the verified model. The agent selects the single engine configured at
+   `/etc/sy/spark/engine.toml`; there is no image, recipe, argv, or unsafe-override
+   flag on the request:
 
    ```bash
-   sy spark dgx-spark serve ornith-1.5:9b \
-     --recipe spark-fixture-http-echo-1.0.0 \
-     --name fixture
+   sy spark dgx-spark serve ornith-1.5:9b --name ornith
    ```
 
 3. Watch desired versus observed state. `ps` does not print the
@@ -2024,22 +2113,17 @@ healthy, and confirm the OpenAI-compatible gateway path answers.
    sy spark dgx-spark ps --json
    ```
 
-4. When you are ready for a real engine, omit `--recipe` to keep
-   verified vLLM as the default, or pass a named recipe. Example
-   embedding recipe:
+4. To add another model, download an immutable revision and serve its alias:
 
    ```bash
-   sy spark dgx-spark download Qwen/Qwen3-Embedding-0.6B \
-     --revision 97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3 \
-     --alias qwen3-embedding:0.6b
-   sy spark dgx-spark serve qwen3-embedding:0.6b \
-     --recipe qwen3-embedding-0.6b-vllm-0.19.1 \
-     --name embeddings \
-     --allow-unverified
+   sy spark dgx-spark download owner/model --revision <commit> --alias model:tag
+   sy spark dgx-spark serve model:tag --name model
    ```
 
-   `--allow-unverified` is for recipes that are not yet in the
-   signed set. Prefer a signed recipe when one exists.
+   Models supported by the installed vLLM version need no code change. If a
+   model requires a finite parser or capability, add a `model_type` profile to
+   the root-owned engine configuration and restart the two sy services. Never
+   place image names, model IDs, or launch arguments in Rust.
 
 5. Print a client config for Codex or Claude Code. The output names
    the token and CA environment variables; it does not print or
@@ -2050,10 +2134,26 @@ healthy, and confirm the OpenAI-compatible gateway path answers.
    sy spark dgx-spark client-config ornith --client claude-code
    ```
 
-6. Stop when you are done. Repeated `stop` is successful:
+6. Launch a local coding agent against the healthy model. Arguments after `--`
+   go directly to that client as exact argv tokens:
 
    ```bash
-   sy spark dgx-spark stop fixture
+   sy spark dgx-spark launch codex --model ornith-1.5:9b
+   sy spark dgx-spark launch claude --model ornith-1.5:9b -- --permission-mode plan
+   sy spark dgx-spark launch opencode --model ornith-1.5:9b
+   ```
+
+   Use `--dry-run --json` to inspect model/instance selection without changing
+   local or remote state, or `--config --json` to provision configuration and
+   the inference-only token without starting the agent. A missing model is not
+   downloaded implicitly; follow the printed immutable `download --revision`
+   remediation. `launch` does not edit the primary Claude/OpenCode config or
+   the main Codex config.
+
+7. Stop when you are done. An already-absent instance is an idempotent success:
+
+   ```bash
+   sy spark dgx-spark stop ornith
    ```
 
 ### Result
@@ -2063,6 +2163,13 @@ model-identity probe pass, OpenAI-compatible routes are at
 `https://<spark>:9843/openai/<instance>/v1` and Anthropic Messages
 routes are under `/anthropic/<instance>/v1`. Warming or recovering
 generations return protocol-native `503` with `Retry-After`.
+
+For Ornith, reasoning streams independently from final answer text as OpenAI
+`reasoning_content`, Responses reasoning-summary events, or Anthropic thinking
+blocks. `sy spark ... launch codex` advertises that capability in its private
+model catalog, so Codex renders the Responses reasoning stream. Requests that
+omit sampling settings receive Ornith's precise-coding defaults; explicit
+client settings remain unchanged.
 
 ### See also
 
@@ -2194,65 +2301,6 @@ warning or failure.
 ### See also
 
 - [CLI: `sy doctor`](../reference/cli.md#sy-doctor)
-- [How to read power status](read-power-status.md)
-
-# docs/how-to/read-power-status.md
-
-<!-- Template source: Good Docs Project how-to template (CC-BY 4.0) — https://www.thegooddocsproject.dev/template/how-to. Diátaxis quadrant: how-to. -->
-
-## How to read power status
-
-### Goal
-
-Print the live power-governor document — current profile, source,
-and rationale — from the CLI or from an MCP session you already
-have.
-
-### Prerequisites
-
-- `sy-powerd` is running under your user manager:
-
-  ```bash
-  systemctl --user is-active sy-powerd.service
-  ```
-
-- If you want the MCP path, you already speak MCP to `sy` (see
-  [how to wire MCP into your agents](wire-mcp-into-agents.md)).
-
-### Steps
-
-1. Print the human-readable status:
-
-   ```bash
-   sy power status
-   ```
-
-2. Print the stable `sy.power.status/v1` document:
-
-   ```bash
-   sy power status --json
-   ```
-
-3. If you already have an MCP session, call the `power_status` tool
-   instead of shelling the CLI. A daemon-down dial surfaces as a
-   JSON-RPC error (`code -32000`), not a transport crash.
-
-4. Read the exit code before you retry. `0` means healthy. Any other
-   code is listed under [CLI: `sy power`](../reference/cli.md#sy-power).
-   A persistent `3` is a signal to inspect `sy power log` or
-   `journalctl --user -u sy-powerd`, not an error to hammer.
-
-### Result
-
-You know which profile is active, why the bandit picked it, and
-whether the daemon is reachable. For the offline PDF report over the
-decision journal, use `sy power show` (add `--json` for
-`sy.power.report/v1`).
-
-### See also
-
-- [CLI: `sy power`](../reference/cli.md#sy-power)
-- [How to run sy doctor](run-doctor.md)
 
 # docs/how-to/run-sy-file.md
 
@@ -2543,7 +2591,7 @@ The minimum loop reads one JSON-RPC object per line, dispatches on
 `method`, and writes one object per line back:
 
 ```python
-#!/usr/bin/env python3
+##!/usr/bin/env python3
 import json
 import sys
 
@@ -2582,7 +2630,7 @@ into the plugin directory.
 #### Bash — speaking the wire format directly
 
 ```bash
-#!/usr/bin/env bash
+##!/usr/bin/env bash
 set -eu
 while IFS= read -r line; do
     method=$(printf '%s' "$line" | jq -r '.method // empty')
@@ -2887,7 +2935,6 @@ source):
 - **`sy aiplane`** — `status`, `list`, `run`, `cancel`.
 - **`sy knowledge`** — `list`, `index`, `search`, `manifests`, `status`,
   `bench`, `mcp-enable`, `mcp-disable`, `mcp-status`.
-- **`sy power`** — `status`, `log`, `explain`, `show`, `list-profiles`.
 - **`sy doctor`** — emits the SPEC §4.6 `sy.doctor/v1` schema.
 - **`sy crash`** — `list`, `show`.
 - **`sy ipc`** — `ping`, `describe` (default for `describe`).
@@ -2898,7 +2945,7 @@ source):
 - **`sy auto`** — `configure`, `list-detectors`.
 - **`sy stack`** — `push --json`, `list --json`.
 - **`sy spark`** — `install`, `status`, `doctor`, `operations`, `token`,
-  `recipes`, `download`, `serve`, `ps`, `logs`, `stop`, `ls`, `show`,
+  `download`, `serve`, `launch`, `ps`, `logs`, `stop`, `ls`, `show`,
   `rm`, `client-config`, `cert status`.
 - **`sy file`** — `doctor`. `sy file ipc <op>` prints the JSON
   response envelope by default.
@@ -2915,7 +2962,6 @@ State-changing subcommands honour `--dry-run` by printing the planned
 diff without applying. Honoured by:
 
 - `sy apply` (and the `--diff` alias).
-- `sy power apply`.
 - `sy auto configure` (dry-run is the **default**; `--apply` opts in).
 - `sy knowledge mcp-enable` / `sy knowledge mcp-disable` (dry-run is
   the default; `--apply` opts in).
@@ -2934,19 +2980,17 @@ agent callers cannot accidentally rewrite an agent's MCP config.
 `sy` uses **stable, documented** exit codes per SPEC §4.7. The
 constants live in the source under each plane's `exit` module
 (`src/doctor/mod.rs`, `src/knowledge/mod.rs`, `src/supervision/service.rs`,
-`src/power/mod.rs`, `src/ipc_cli.rs`, `src/crash/mod.rs`,
+`src/ipc_cli.rs`, `src/crash/mod.rs`,
 `src/agt/protocol.rs`).
 
 | Code | Meaning                  | Source of truth                                                           |
 |------|--------------------------|---------------------------------------------------------------------------|
 | `0`  | success                  | every plane                                                               |
 | `1`  | generic failure          | every plane                                                               |
-| `2`  | usage error              | clap (`ErrorKind::ValueValidation`), `policy`, `power`, `service`, `crash`|
-| `3`  | drift / warn-only / lint-fail | `doctor` (warn-only), `ipc` (degraded), `service` (status drift), `power` (ADWIN drift alarm), `policy lint`, `spark` (remote policy/state rejection), `mon snapshot` (aggregator unreachable), `file ipc` (daemon unreachable) |
-| `4`  | not-ready / daemon-unreachable / not-found | `ipc` (starting/failed), `service` (not-ready), `power` (daemon-unreachable), `crash` (record not found), `agt` (daemon unavailable), `knowledge` (qdrant-unreachable), `spark` (OpenSSH/TLS/auth unreachable), `file ipc` (op refused) |
-| `5`  | embedding-failed / polkit-denied / plugin-error | `knowledge`, `power`, `file ipc` (plugin error)                |
-| `6`  | unsupported hardware     | `power`                                                                   |
-| `7`  | onboarding-not-complete  | `power` (`sy power show` with insufficient audit window)                  |
+| `2`  | usage error              | clap (`ErrorKind::ValueValidation`), `policy`, `service`, `crash`         |
+| `3`  | warn-only / lint-fail    | `doctor` (warn-only), `ipc` (degraded), `service` (status drift), `policy lint`, `spark` (remote policy/state rejection), `mon snapshot` (aggregator unreachable), `file ipc` (daemon unreachable) |
+| `4`  | not-ready / daemon-unreachable / not-found | `ipc` (starting/failed), `service` (not-ready), `crash` (record not found), `agt` (daemon unavailable), `knowledge` (qdrant-unreachable), `spark` (OpenSSH/TLS/auth unreachable), `file ipc` (op refused) |
+| `5`  | embedding-failed / plugin-error | `knowledge`, `file ipc` (plugin error)                             |
 
 Each subcommand's reference entry lists the codes it can return.
 Codes not listed for a subcommand are not emitted by that subcommand.
@@ -2960,9 +3004,9 @@ load-bearing globals are:
 
 - `SY_ROOT` — global; same as `--root`.
 - `XDG_CONFIG_HOME` — read by `sy apply` to compute the default target.
-- `XDG_STATE_HOME` — read by `sy crash`, `sy knowledge`, `sy power`
-  for per-plane state directories.
-- `XDG_RUNTIME_DIR` — read by `sy agt`, `sy ipc`, `sy power` to locate
+- `XDG_STATE_HOME` — read by `sy crash` and `sy knowledge` for
+  per-plane state directories.
+- `XDG_RUNTIME_DIR` — read by `sy agt` and `sy ipc` to locate
   daemon Unix sockets.
 - `SY_PRIORITY` — QoS class for aiplane scheduler admission
   (`Realtime | Interactive | Background | Batch`).
@@ -2971,12 +3015,10 @@ load-bearing globals are:
 - `SY_DISK_THRESHOLD_GIB` — override the `sy disk` low-space threshold.
 - `SY_AGT_CWD`, `SY_AGT_AGENT`, `SY_AGT_SANDBOX_PROFILE`,
   `SY_AGT_REQUEST_ID` — `sy agt` sandbox + launcher overrides.
-- `SY_SYSFS_ROOT` — `sy power status` sysfs probe root override (test
-  hermeticity).
 - `SY_SPARK_*` — Spark client flags (`JSON`, `DRY_RUN`, `YES`,
   `CONFIG_DIR`, `PROBE`, `LISTEN_ADDRESS`, `LISTEN_PORT`,
   `RELEASE_SIGNATURE`, `RELEASE_PUBLIC_KEY`, and per-command
-  `REVISION` / `ALIAS` / `RECIPE` / …). See [`sy spark`](#sy-spark).
+  `REVISION` / `ALIAS` / `INSTANCE_NAME` / …). See [`sy spark`](#sy-spark).
 - `SY_FILE_SOCK` — override `$XDG_RUNTIME_DIR/sy-file.sock` for
   `sy file ipc`.
 - `SY_MON_HISTORY_SIZE`, `SY_MON_TICK_MS`, `SY_MON_BIND`,
@@ -2993,16 +3035,15 @@ stdin is not a TTY, per CLIG. The pairs that ship today:
   `--token-from-stdin --yes` is paired and the UUID is on stdin.
 - `sy policy trust --confirm` — refuses without a TTY unless `--yes`
   is paired and `TRUST THIS PROFILE\n` is on stdin.
-- `sy power show` — only spawns `xdg-open` on the resulting PDF when
-  stdin is a TTY; `--no-open` skips the spawn unconditionally.
-
 #### Aliases and overloaded flags
 
 - `sy apply --diff` is a documented alias for `sy apply --dry-run --json`.
 - The bar-tile applets (`sy bat`, `sy bright`, `sy bt`, `sy gpu`,
-  `sy npu`, `sy disk`, `sy pwr`, `sy silent`, `sy syauth`, `sy vol`)
+  `sy npu`, `sy disk`, `sy profile`, `sy silent`, `sy syauth`, `sy vol`)
   take `--waybar` instead of `--json` for the single-JSON-line
   waybar `custom/*` schema.
+- `sy pwr` is the visible short alias for `sy profile`; neither command
+  starts a daemon or applies its own power policy.
 
 ---
 
@@ -3313,117 +3354,6 @@ sy knowledge sync --yes        # destructive — drops the collection
 
 - [how-to: add a knowledge source](../how-to/add-a-knowledge-source.md)
 - [reference: aiplane](#sy-aiplane)
-
----
-
-### `sy power`
-
-Adaptive power orchestrator. Source: `src/power/mod.rs`, `src/power/cli.rs`.
-
-#### Subcommands
-
-| Subcommand                   | Purpose                                                                  |
-|------------------------------|--------------------------------------------------------------------------|
-| `status`                     | Current state, profile, shield, reason.                                  |
-| `daemon`                     | `sy-powerd` entrypoint (systemd user unit).                              |
-| `apply`                      | Install polkit action, udev rule, systemd unit, waybar tile.             |
-| `log`                        | Tail the NDJSON telemetry log.                                           |
-| `profile <NAME>` / `--auto`  | Manual profile override; `--auto` clears it.                             |
-| `explain`                    | Audit replay: which bandit arm fired and why.                            |
-| `train`                      | Offline GRU retrain — reads telemetry, writes ONNX.                      |
-| `show`                       | Render the offline `sy power` PDF report.                                |
-| `list-profiles`              | Enumerate the bandit arm table from `configs/sy/power.toml`.             |
-| `mcp`                        | MCP server entrypoint (stdio JSON-RPC).                                  |
-
-#### Options per subcommand
-
-##### `sy power status`
-
-| Name        | Type | Default | Env | Description                                                                                          |
-|-------------|------|---------|-----|------------------------------------------------------------------------------------------------------|
-| `--json`    | bool | `false` | —   | Emit the SPEC §4 `sy.power.status/v1` schema. Mutually exclusive with `--waybar`.                    |
-| `--waybar`  | bool | `false` | —   | Emit the SPEC §5 waybar pill JSON (`{text, tooltip, class}`). Daemon-down renders as the `error` class and exits 0 so waybar keeps polling. |
-
-##### `sy power apply`
-
-| Name         | Type | Default | Env | Description                                                                                                              |
-|--------------|------|---------|-----|--------------------------------------------------------------------------------------------------------------------------|
-| `--dry-run`  | bool | `false` | —   | Print the planned changes without touching disk.                                                                         |
-| `--yes`      | bool | `false` | —   | Gate destructive actions — currently the `systemctl --user mask power-profiles-daemon.service` path.                     |
-| `--with-ppd` | bool | `false` | —   | Keep `power-profiles-daemon` active; run the `sy power` shim alongside it without binding `net.hadess.PowerProfiles`.    |
-
-##### `sy power log`
-
-| Name       | Type     | Default                       | Env | Description                                              |
-|------------|----------|-------------------------------|-----|----------------------------------------------------------|
-| `--since`  | duration | `DEFAULT_TAIL_WINDOW`         | —   | Filter to entries newer than this duration (`1h`, `30m`, `7d`). Bad value exits 2. |
-| `--json`   | bool     | `false`                       | —   | Emit raw NDJSON (one JSON per line).                     |
-
-##### `sy power profile`
-
-| Name      | Type   | Default | Env | Description                                                                  |
-|-----------|--------|---------|-----|------------------------------------------------------------------------------|
-| `<NAME>`  | string | none    | —   | Profile name from the bandit arm table. Mutually exclusive with `--auto`.    |
-| `--auto`  | bool   | `false` | —   | Clear any manual override and restore bandit control.                        |
-
-##### `sy power explain`
-
-| Name      | Type  | Default | Env | Description                                                                  |
-|-----------|-------|---------|-----|------------------------------------------------------------------------------|
-| `--last`  | usize | `10`    | —   | Show the last N decisions.                                                   |
-| `--json`  | bool  | `false` | —   | Emit machine-readable JSON instead of a human summary.                       |
-
-##### `sy power train`
-
-| Name    | Type | Default                                                                | Env | Description                  |
-|---------|------|------------------------------------------------------------------------|-----|------------------------------|
-| `--in`  | path | `<state>/telemetry-<today>.ndjson`                                     | —   | Input NDJSON path.           |
-| `--out` | path | `<state>/forecaster.onnx`                                              | —   | Output ONNX path.            |
-
-##### `sy power show`
-
-| Name           | Type     | Default                                                  | Env | Description                                                                                                  |
-|----------------|----------|----------------------------------------------------------|-----|--------------------------------------------------------------------------------------------------------------|
-| `--since`      | duration | `7d`                                                     | —   | Audit-log window. Bad value exits 2.                                                                         |
-| `--out`        | path     | `<state>/reports/sy-power-<rfc3339>.pdf`                 | —   | PDF output path. Ignored with `--json`.                                                                      |
-| `--no-open`    | bool     | `false`                                                  | —   | Do not invoke `xdg-open` on the PDF (set implicitly when stdin is not a TTY).                                |
-| `--allow-thin` | bool     | `false`                                                  | —   | Skip the 24 h "thin window" gate (exit 7 by default).                                                        |
-| `--json`       | bool     | `false`                                                  | —   | Emit JSON; skip PDF generation.                                                                              |
-
-##### `sy power list-profiles`
-
-| Name     | Type | Default | Env | Description                                          |
-|----------|------|---------|-----|------------------------------------------------------|
-| `--json` | bool | `false` | —   | Emit the SPEC §4 `sy.power.profiles/v1` schema.      |
-
-#### Exit codes
-
-- `0` — success.
-- `1` — generic failure.
-- `2` — usage error (bad `--since`, unknown profile name, conflicting flags).
-- `3` — `EXIT_DRIFT_ACTIVE` — ADWIN drift alarm reported by the daemon.
-- `4` — `EXIT_DAEMON_UNREACHABLE` — socket missing or refused.
-- `7` — `EXIT_ONBOARDING_NOT_COMPLETE` — `sy power show` window has fewer than 24 h of audit entries and `--allow-thin` was not set.
-
-(Defined in `src/power/mod.rs` and `src/power/cli.rs`.)
-
-#### Examples
-
-```bash
-sy power status                          # human summary
-sy power status --json                   # sy.power.status/v1 schema
-sy power apply --dry-run                 # preview installer changes
-sy power profile performance             # pin a profile
-sy power profile --auto                  # release the pin
-sy power log --since=1h --json
-sy power explain --last=1 --json
-sy power show --since=24h --no-open      # CI / headless
-sy power show --json --since=1d          # agent path
-```
-
-#### See also
-
-- [reference: aiplane](#sy-aiplane) — power consumes the aiplane intent channel.
 
 ---
 
@@ -3775,7 +3705,7 @@ Wrapper for `systemctl --user` / `journalctl --user` per SPEC §4.7
 (arch-supervision Step 3). Source: `src/supervision/service.rs`.
 
 Canonical short names: `aiplane`, `knowledge`, `qdrant`, `stack-bar`,
-`agentd`, `powerd`. Each resolves to `sy-<name>.service`. Full
+`agentd`. Each resolves to `sy-<name>.service`. Full
 `sy-<name>.service` / `sy-<name>.socket` / `sy-<name>.target` /
 `sy.target` names are passed through verbatim. Anything else exits 2.
 
@@ -3969,21 +3899,24 @@ sy spark <HOST> <COMMAND>
 | Subcommand | Purpose |
 |------------|---------|
 | `install` | Inspect the appliance (`--dry-run`) or apply the signed ARM64 install (`--yes`). |
+| `upgrade` | Stage and verify a signed side-by-side release, preserve engines, and automatically roll back failed semantic health. |
+| `rollback` | SSH-only exact rollback to the verified preceding control-plane release. |
 | `status` | Compact authenticated agent/executor health over pinned HTTPS. |
 | `doctor` | Authenticated, read-only compatibility and security checks. |
 | `operations` | Inspect, `--follow`, or `cancel` durable operations. |
 | `token` | `create` / `list` / `revoke` scoped bearer tokens. Create returns the secret once on stdout. |
-| `recipes` | Explain signed engine recipes and preview selection. Read-only: never downloads, pulls, or starts. |
 | `download` | Acquire and verify one immutable Hugging Face model snapshot. |
-| `serve` | Start one recipe-selected instance after fail-closed admission. |
-| `ps` | Desired versus observed managed instances. Does not print the internal bridge address. |
+| `serve` | Start a verified model with the root-configured engine after fail-closed admission. |
+| `launch` | Run Codex, Claude Code, or OpenCode locally against an exact managed Spark model. |
+| `ps` | Compact active model-process table. Absent and failed historical instances are omitted from human and JSON output. |
 | `logs` | Bounded, redacted logs for one instance. |
-| `stop` | Persist stopped intent, drain, and remove one instance. Repeated `stop` succeeds. |
-| `ls` | List complete verified local model snapshots. |
+| `stop` | Persist stopped intent, drain, and remove one instance. An already-absent instance is an idempotent success. |
+| `ls` | Compact table of verified local models available to run; `--json` returns the complete inventory document. |
 | `show` | Immutable identity, provenance, aliases, and references for one model. |
 | `rm` | Preview or remove only unreferenced native-cache model data. |
 | `client-config` | Render a user-level Codex or Claude Code projection. Names the token env var; does not read or write it. |
 | `cert status` | Authenticated leaf-certificate identity. |
+| `cert rotate` | SSH-only leaf rotation with overlap; `--ca` rotates and atomically re-pins the local CA. |
 
 #### Options (`install`)
 
@@ -3992,26 +3925,54 @@ sy spark <HOST> <COMMAND>
 | `--dry-run` | bool | `false` | `SY_SPARK_DRY_RUN` | Upload a content-addressed probe, run `spark bootstrap inspect`, verify the hash, remove the probe. No install. |
 | `--yes` | bool | `false` | `SY_SPARK_YES` | Apply the reviewed manifest. Requires `--release-signature` and `--release-public-key`. |
 | `--json` | bool | `false` | `SY_SPARK_JSON` | Emit `sy.spark.install-manifest/v1`. |
-| `--probe` | path | `/usr/libexec/sy/spark-bootstrap-aarch64` | `SY_SPARK_PROBE` | ARM64 feature-minimal probe artefact. |
+| `--probe` | path | `$XDG_DATA_HOME/sy/spark-release/sy-aarch64` | `SY_SPARK_PROBE` | ARM64 feature-minimal probe artefact. |
+| `--release-manifest` | path | `SHA256SUMS` beside `--probe` | `SY_SPARK_RELEASE_MANIFEST` | Signed inventory for the binary and separate catalog TOMLs. |
 | `--listen-address` | IP | none | `SY_SPARK_LISTEN_ADDRESS` | Explicit LAN address for the HTTPS listener. |
 | `--listen-port` | u16 | `9843` | `SY_SPARK_LISTEN_PORT` | HTTPS listener port. |
-| `--release-signature` | path | none | `SY_SPARK_RELEASE_SIGNATURE` | Minisign signature for the ARM64 release (required with `--yes`). |
+| `--release-signature` | path | none | `SY_SPARK_RELEASE_SIGNATURE` | Minisign signature for `SHA256SUMS` (required with `--yes`). |
 | `--release-public-key` | path | none | `SY_SPARK_RELEASE_PUBLIC_KEY` | Pinned minisign public key (required with `--yes`). |
 | `--config-dir` | path | Spark config root | `SY_SPARK_CONFIG_DIR` | Local Spark configuration root. |
+
+`upgrade` accepts the same options. `rollback` and `cert rotate` accept
+`--dry-run`, `--yes`, `--json`, and `--config-dir`; exactly one of `--dry-run`
+and `--yes` is required. `cert rotate --ca` explicitly replaces the local CA.
+
+#### Options (`launch`)
+
+```text
+sy spark <HOST> launch <codex|claude|opencode> [OPTIONS] [-- <AGENT_ARGS>...]
+```
+
+| Name | Type | Env | Description |
+|------|------|-----|-------------|
+| `--model` | string | `SY_SPARK_LAUNCH_MODEL` | Exact installed model identity or alias. |
+| `--config` | bool | `SY_SPARK_LAUNCH_CONFIG` | Configure launch-owned state and exit. |
+| `--restore` | bool | `SY_SPARK_LAUNCH_RESTORE` | Remove only sy-owned Codex launch files. |
+| `-y`, `--yes` | bool | `SY_SPARK_YES` | Approve a fixed missing-client installer. |
+| `--dry-run` | bool | `SY_SPARK_DRY_RUN` | Resolve/reuse/admit without mutation. |
+| `--json` | bool | `SY_SPARK_JSON` | Emit `sy.spark.launch-plan/v1`; requires `--dry-run` or `--config`. |
+| `--config-dir` | path | `SY_SPARK_CONFIG_DIR` | Protected Spark configuration root. |
+
+Arguments are accepted only after `--` and are passed directly without a
+shell. The agent runs in the current directory with inherited terminal I/O and
+receives a separate inference-only token. The Spark administrator credential is
+never exposed. Exit codes `1..125` from the child are propagated.
 
 #### Token scopes (`token create --scope`)
 
 `models:read`, `models:write`, `instances:read`, `instances:write`,
 `inference`, `logs:read`, `operations:read`, `operations:cancel`,
-`benchmarks:read`, `benchmarks:write`. Repeat `--scope` for each.
+`benchmarks:read`, `benchmarks:write`. Repeat `--scope` for each. The benchmark
+scopes remain wire-compatible for pre-policy clients; the normal CLI has no
+recipe, benchmark, or tuning commands.
 
 #### Exit codes
 
 - `0` — success.
 - `1` — unexpected failure.
 - `2` — usage or local configuration.
-- `3` — remote policy or state rejection (admission denied, recipe
-  refused, and similar).
+- `3` — remote policy or state rejection (admission denied, invalid model
+  intent, and similar).
 - `4` — OpenSSH/SFTP/agent unreachable, TLS identity mismatch, or
   authentication failure.
 
@@ -4021,6 +3982,9 @@ sy spark <HOST> <COMMAND>
 sy spark dgx-spark install --dry-run --json
 sy spark dgx-spark install --yes --release-signature sy-aarch64.minisig \
   --release-public-key sy-release.pub
+sy spark dgx-spark upgrade --dry-run --json
+sy spark dgx-spark rollback --dry-run --json
+sy spark dgx-spark cert rotate --dry-run --json
 sy spark dgx-spark status --json
 sy spark dgx-spark doctor --json
 sy spark dgx-spark serve ornith-1.5:9b --dry-run --json
@@ -4028,6 +3992,9 @@ sy spark dgx-spark ps --json
 sy spark dgx-spark token create --name reader --scope models:read \
   --scope operations:read --detach --json
 sy spark dgx-spark client-config ornith --client codex
+sy spark dgx-spark launch codex --model ornith-1.5:9b
+sy spark dgx-spark launch claude --model ornith-1.5:9b -- --permission-mode plan
+sy spark dgx-spark launch opencode --model ornith-1.5:9b
 ```
 
 #### See also
@@ -4314,14 +4281,31 @@ Notification watcher/counter.
 
 AMD Ryzen AI NPU applet — bar tile showing active/idle + holders.
 
+#### `sy profile` (`sy pwr`)
+
+Thin frontend for Fedora's `tuned-ppd`. It does not run a policy daemon or
+write sysfs controls. With no action it opens a Fuzzel picker.
+
+| Name         | Type | Default | Env                 | Description                                                        |
+|--------------|------|---------|---------------------|--------------------------------------------------------------------|
+| `<ACTION>`   | enum | `menu`  | `SY_PROFILE_ACTION` | `menu | status | next | power-saver | balanced | performance`.       |
+| `--waybar`   | bool | `false` | —                   | Emit the active profile for the `custom/sy-profile` panel tile.    |
+| `--json`     | bool | `false` | —                   | Emit the selected profile and `tuned-ppd` backend as JSON.         |
+
+```bash
+sy profile                    # picker
+sy profile next               # cycle profiles
+sy profile performance        # select directly
+sy pwr balanced               # short compatibility alias
+sy profile status --json
+```
+
+On the panel, left-click cycles, middle-click restores `balanced`, and
+right-click opens the picker.
+
 #### `sy popup <KEY>`
 
 Toggle a named popup window. `KEY` is one of `agents | cal | nmtui`.
-
-#### `sy pwr`
-
-Power menu: tuned profile + lock/suspend/reboot/shutdown/logout
-(`--waybar` for bar JSON).
 
 #### `sy silent`
 
@@ -4421,8 +4405,6 @@ XDG variables.
 | `sy.toml` (repo root, copied into the target) | Active theme, registered knowledge sources, knowledge schedule, and other host knobs `sy` itself owns. |
 | `themes/<name>.toml` | Colour palette injected into every `configs/**` template at render time. |
 | `configs/` | Minijinja templates. Directory layout mirrors `~/.config/`. |
-| `configs/sy/power.toml` | Power-governor profiles, bandit arms, EPP / governor rules. |
-| `configs/sy/intent_whitelist.toml` | Agent-runner intent whitelist; also the `[call].who` substrings for "in a call" detection. |
 | `configs/systemd/user/` | User units grouped by `sy.target`. `sy apply` symlinks them into `~/.config/systemd/user/`. |
 | `configs/systemd/system/` | Rare system-level units (NPU, Spark agent/executor, syauth PAM helpers). |
 
@@ -4452,11 +4434,9 @@ Load-bearing globals (full per-command list is in
 |------|---------|
 | `SY_ROOT` | Repo root for template rendering. Same as `--root`. |
 | `XDG_CONFIG_HOME` | Default `--target` for `sy apply`. |
-| `XDG_STATE_HOME` | Per-plane state (`crash`, `knowledge`, `power`). |
-| `XDG_RUNTIME_DIR` | Unix sockets (`agt`, `ipc`, `power`, `mon`, `file`). |
+| `XDG_STATE_HOME` | Per-plane state (`crash`, `knowledge`). |
+| `XDG_RUNTIME_DIR` | Unix sockets (`agt`, `ipc`, `mon`, `file`). |
 | `NO_COLOR` | Disable ANSI when set (CLIG). |
-| `SY_POWER_REPORT_TIMESTAMP` | Pin the PDF report clock for byte-identical output. |
-| `SY_POWER_REPORT_MODEL_SHA` | Pin the PDF report model id for byte-identical output. |
 | `SY_KB_*` | Knowledge-search filters; flags override these. |
 
 ### Knowledge sources in `sy.toml`
@@ -4469,15 +4449,6 @@ tree.
 
 Do not register sources by editing `~/.config/` copies. Edit the
 repo (or use the CLI) and apply.
-
-### Intent whitelist
-
-`~/.config/sy/intent_whitelist.toml` is materialised by the
-installer from `configs/sy/intent_whitelist.toml`. New "in a call"
-triggers go in `[call].who` (case-insensitive substring match on
-the logind inhibitor `Who` field). A missing or malformed file
-falls back to an empty whitelist: call detection goes quiet rather
-than crashing the daemon.
 
 ### Examples
 
@@ -4502,22 +4473,41 @@ sy knowledge add ~/Documents/notes
 ## Spark reference
 
 `sy spark <host>` drives a Spark appliance from your laptop. Use this
-page for admission numbers, gateway paths, and recipe rules. For
+page for admission numbers, gateway paths, and engine-policy rules. For
 install steps see [How to install the Spark agent](../how-to/install-spark.md).
 For serving a model see [How to serve a model on Spark](../how-to/serve-a-model-on-spark.md).
 
 The laptop CLI never holds Docker authority. Engines run on an
-internal managed bridge; `ps` reports desired versus observed
-state without printing that address.
+internal managed bridge; `ps` reports only active model processes
+without printing that address.
+
+Maintenance uses SSH only. `upgrade` accepts the install artifact environment
+variables; `rollback` and `cert rotate` remain usable when HTTPS is unavailable.
+All three require exactly one of `--dry-run`/`SY_SPARK_DRY_RUN` or
+`--yes`/`SY_SPARK_YES`, and support `--json`/`SY_SPARK_JSON` plus
+`SY_SPARK_CONFIG_DIR`. Rollback JSON uses `sy.spark.maintenance/v1`; certificate
+rotation uses `sy.spark.certificate-rotation/v1`. Exit codes are `0` success,
+`2` local usage/artifact failure, `3` remote compatibility or safety rejection,
+and `4` SSH/TLS/agent reachability failure.
+
+The authenticated `GET /api/sy.spark/v1/metrics` endpoint returns bounded
+Prometheus text without prompt, generated text, credentials, operation IDs,
+commits, or client IDs as labels. It requires an admin token. Engine logs remain
+bounded, cursored, redacted, and protected by `logs:read`.
 
 ### Synopsis
 
 ```text
 sy spark <host> install --dry-run --json
-sy spark <host> install --yes --release-signature <sig> --release-public-key <pub>
+sy spark <host> install --yes --release-manifest <SHA256SUMS> --release-signature <sig> --release-public-key <pub>
+sy spark <host> upgrade --dry-run --json
+sy spark <host> rollback --dry-run --json
+sy spark <host> cert rotate [--ca] --dry-run --json
 sy spark <host> status --json
 sy spark <host> doctor --json
-sy spark <host> serve <model> [--recipe <id>] [--name <instance>] [--dry-run] [--json] [--allow-unverified]
+sy spark <host> serve <model> [--name <instance>] [--detach] [--dry-run] [--json]
+sy spark <host> launch <codex|claude|opencode> [--model <model>] [--config] [--restore] [-y] [-- <agent-args>...]
+sy spark <host> ls [--json]
 sy spark <host> ps [--json]
 sy spark <host> logs <instance> [--limit N]
 sy spark <host> stop <instance>
@@ -4527,17 +4517,41 @@ sy spark <host> client-config <name> --client <codex|claude-code>
 
 ### Description
 
+`ls` is the everyday inventory of verified models available to run. Its default
+columns are `NAME`, `ID`, `SIZE`, and `MODIFIED`. `ps` is the active lifecycle
+view: it omits absent and failed historical records and prints `NAME`, `MODEL`,
+`ENGINE`, `CONTEXT`, and `STATE`. `ps --json` contains the same active set. Use
+`show`, `logs`, and `ls --json` when complete immutable identity, provenance, or
+diagnostic state is required.
+
 Before an engine lifecycle is authorised, the agent requires one
 fresh executor-owned snapshot and checks aggregate cold-start
 memory, live `MemAvailable`, full-memory PSI, swap-in activity,
-disk reserve, recipe compatibility, and the single high-memory
-transition lease.
+disk reserve, immutable model provenance, and the single high-memory
+start lease. Stop does not take that lease: reducing memory must remain
+available while a start or startup reconciliation is active.
 
-Capabilities come only from the selected signed recipe. The named
-fixture recipe is a signed, digest-pinned ARM64 HTTP engine used to
-verify the Docker lifecycle without loading weights or using the
-GPU. Omitting `--recipe` keeps verified vLLM as the default
-fallback.
+The root-owned `/etc/sy/spark/engines/*.toml` catalog is the serving policy. It
+owns each engine image and digest, entrypoint, bounded arguments, environment,
+mounts, network, UID, resource envelope, health probe, public route allowlist,
+sampling defaults, and finite profiles. A signed `models.toml` entry may select
+an `engine_profile` explicitly; otherwise selection falls back to the model's
+`config.json` `model_type` and then the engine default. Rust owns schema
+validation and security invariants only. It does not embed model IDs, image
+versions, digests, tuning values, or per-model commands.
+
+Auxiliary artifact roles are open lowercase identifiers declared by the model
+catalog. Each engine configuration must either bind a role to an exact confined
+file argument or list the role under `ignored_roles`; an unbound role fails
+planning. Profiles can therefore add projectors, MTP drafts, adapters, or future
+engine inputs without adding model-aware Rust branches.
+
+`serve` accepts only a verified model reference and optional instance name. The
+HTTP schema rejects unknown fields, so callers cannot inject an image,
+entrypoint, mount, network, or argv. A model supported by the configured vLLM
+version can be downloaded and served without rebuilding sy. Unsupported models
+fail at bounded startup/semantic validation; sy never substitutes another
+engine.
 
 After health check and an exact model-identity completion probe,
 the agent publishes:
@@ -4549,9 +4563,26 @@ the agent publishes:
 
 The allowlist exposes authenticated models, completions,
 protocol-native chat completions, Responses, Messages, and token
-count with bounded SSE and client-side tool continuation. Health,
-metrics, tokenizer, debug, admin, and engine-native addresses stay
-private.
+count with bounded SSE and client-side tool continuation. Engine-native health,
+metrics, tokenizer, debug, admin, and addresses stay private; the separate
+control-plane metrics endpoint requires an admin token.
+
+The gateway preserves Ornith's parsed reasoning as a distinct channel. OpenAI
+Chat streams `reasoning_content`; Responses streams reasoning summary item
+events and includes the same item in non-stream documents; Anthropic streams a
+thinking block and accepts sy's integrity-checked block back in later turns.
+The sy-owned Codex catalog advertises reasoning-summary support so Codex sends
+the summary request and renders these native Responses events instead of
+discarding them as unsupported model output.
+Anthropic `display: "omitted"` emits the block and signature without thinking
+deltas, while `type: "disabled"` disables thinking in the Ornith template.
+
+Missing sampling values come from the selected profile in `engine.toml` and are
+applied consistently to OpenAI Chat, Responses, and Anthropic Messages. Explicit
+client values are preserved. Runtime workarounds are profile arguments in the
+same file. The current Qwen profile selects eager execution because the compiled
+Qwen 3.5 GEMM path can terminate vLLM on GB10; removing that workaround requires
+only a configuration edit after the upstream path is proven stable.
 
 Warming or recovering generations return protocol-native `503`
 with `Retry-After` and never inherit a stale route.
@@ -4568,7 +4599,7 @@ Missing or stale telemetry fails closed. The root executor samples
 pressure independently and can suppress restart before an emergency
 victim is stopped; it never selects unlabeled work.
 
-### Recipes and modalities
+### Engine profiles and modalities
 
 - Ornith accepts bounded inline JPEG, PNG, or WebP through OpenAI
   Responses and Anthropic Messages. The adapters validate media
@@ -4576,11 +4607,13 @@ victim is stopped; it never selects unlabeled work.
   before contacting vLLM. Remote URLs, local paths, traversal,
   unsupported media, and images sent to text-only instances are
   rejected.
-- `Qwen/Qwen3-Embedding-0.6B` has an embedding-only recipe at
-  `POST /openai/<instance>/v1/embeddings` (1024-dim unit-normalised
-  float vectors). It does not expose generation routes. Input
-  order, dimensions, usage, and public model identity are checked
-  by the gateway.
+- Model types needing finite parser arguments are declared as profiles in
+  `engine.toml`. Unknown model types use the declared default profile. Profiles
+  cannot override the image, executable, mounts, network, UID, or arbitrary
+  command line.
+- The `qwen3.8-mtp` llama.cpp profile preserves reasoning and selects
+  `draft-mtp` speculation with a verified Q4_0 MTP artifact. It imposes no
+  reasoning token guard.
 
 ### `client-config`
 
@@ -4590,14 +4623,41 @@ Code 2.1.241 projection. Both name the protected token and CA
 environment variables without reading, printing, or persisting the
 token.
 
+### `launch`
+
+`launch` runs a registered coding-agent executable on the workstation and
+routes its model calls to one exact managed Spark instance. A healthy matching
+instance is reused; otherwise the configuration-driven `serve` operation is
+followed to healthy. The launcher never guesses or downloads a missing model.
+
+`--model` selects a verified model ID, canonical identity, repository, exact
+alias, or exact instance name shown by `sy spark <host> ps`. A stopped selected
+instance is re-served under that same managed name. Without `--model`, the saved
+host/integration selection is reused; an interactive terminal can select from
+installed models. `--config` writes only launch-owned state/config and exits.
+`--dry-run` performs no local or remote mutation. `--json` is valid with either
+of those non-agent modes. `--restore` removes only sy-owned Codex
+profile/catalog files. `-y` permits the fixed Claude or OpenCode installer when
+the executable is absent. Only arguments after `--` are forwarded, without a
+shell.
+
+State is serialized with a local lock. Metadata stores only the token ID; the
+bearer is held separately in a mode-0600 credential file. The child receives an
+inference-only token and pinned CA, never the administrator credential. Claude
+uses the native Anthropic route, Codex uses a sy-owned Responses profile and
+catalog, and OpenCode uses process-local `OPENCODE_CONFIG_CONTENT`.
+
 ### Examples
 
 ```bash
 sy spark dgx-spark serve ornith-1.5:9b --dry-run --json
-sy spark dgx-spark serve ornith-1.5:9b --recipe spark-fixture-http-echo-1.0.0 --name fixture
+sy spark dgx-spark launch codex --model ornith-1.5:9b
+sy spark dgx-spark launch claude --model ornith-1.5:9b -- --permission-mode plan
+sy spark dgx-spark launch opencode --model ornith-1.5:9b
+sy spark dgx-spark serve ornith-1.5:9b --name ornith
 sy spark dgx-spark ps --json
-sy spark dgx-spark logs fixture --limit 100
-sy spark dgx-spark stop fixture
+sy spark dgx-spark logs ornith --limit 100
+sy spark dgx-spark stop ornith
 ```
 
 ### See also
@@ -4686,7 +4746,7 @@ its MCP server. See
 [Model Context Protocol](https://modelcontextprotocol.io) — the
 stdio JSON-RPC dialect agents (Claude, Cursor, Codex, Gemini) speak
 to discover and call tools. `sy` exposes `sy knowledge mcp`,
-`sy power mcp`, `sy mon mcp`, and `sy file mcp`. `sy auto` writes
+`sy mon mcp`, and `sy file mcp`. `sy auto` writes
 those servers into each agent's config.
 
 #### mon
@@ -4699,8 +4759,8 @@ by a 1 Hz aggregator. `Super+m` toggles the popup;
 #### plane
 
 A long-running service hosted by the single `sy` binary, identified
-by its top-level subcommand (`sy aiplane`, `sy knowledge`,
-`sy power`, `sy agt`, `sy stack`, `sy file`, `sy mon`, `sy spark`).
+by its top-level subcommand (`sy aiplane`, `sy knowledge`, `sy agt`,
+`sy stack`, `sy file`, `sy mon`, `sy spark`).
 All planes share one CLI + JSON surface so agents drive any plane
 the same way a human does. See
 [`How the planes fit together` — One binary, many planes](../explanation/architecture.md#one-binary-many-planes).
@@ -4710,14 +4770,6 @@ the same way a human does. See
 A small program `sy file` starts to preview a MIME type. Installed
 with `sy plugin install`, checked with `sy plugin doctor`. See
 [how to write a sy plugin](../how-to/write-a-sy-plugin.md).
-
-#### power (plane)
-
-The `sy-powerd` user daemon: a power-profiles-daemon shim layered
-with a contextual bandit that picks cpufreq governor, EPP, turbo,
-and the `net.hadess.PowerProfiles` D-Bus profile from
-[`configs/sy/power.toml`](../../configs/sy/power.toml). Reachable
-from CLI (`sy power status`) and via MCP (`sy power mcp`).
 
 #### Quark
 
@@ -4783,8 +4835,8 @@ hosts every other plane.
 #### sy.target
 
 The user-level systemd target that groups every `sy` plane
-(`sy-aiplane.service`, `sy-knowledge.service`, `sy-powerd.service`,
-`sy-stack-bar.service`, `sy-agentd.service`); enabling
+(`sy-aiplane.service`, `sy-knowledge.service`, `sy-stack-bar.service`,
+`sy-agentd.service`); enabling
 `sy.target` brings every plane up at login, stopping it tears them
 down. Units live under [`configs/systemd/user/`](../../configs/systemd/user/).
 See [`How the planes fit together` — `sy.target` is the supervisor](../explanation/architecture.md#sytarget-is-the-supervisor).
@@ -5008,14 +5060,13 @@ is optional — stays on [What sy is](what-sy-is.md).
 #### One binary, many planes
 
 `sy` ships as a single Rust binary. Every capability — NPU
-inference, semantic search, agent sandboxing, power management,
-the layer-shell bar, phone-as-key sudo, the file manager, the
+inference, semantic search, agent sandboxing, the layer-shell bar,
+phone-as-key sudo, the file manager, the
 health popup, remote Spark serving — is a subcommand of that
 binary. A *plane* is the long-running service behind one of those
 capabilities. The `aiplane` is the NPU plane. The `knowledge`
 plane is the semantic-search plane. The `agt` plane is the agent
-runner. The `power` plane is the adaptive governor. The `stack`
-plane is the bar. The `file` plane is the iced file manager. The
+runner. The `stack` plane is the bar. The `file` plane is the iced file manager. The
 `mon` plane is the health dashboard. Spark is the same binary
 running on a different machine: laptop CLI, unprivileged HTTPS
 agent, root Docker executor.
@@ -5449,15 +5500,14 @@ The rules that show up on every plane:
   (`sy auto configure`, `sy knowledge mcp-enable`) and require
   `--apply` so an agent cannot rewrite a file by accident.
 - Stable exit codes: `0` success, `1` generic failure, `2` usage,
-  `3` drift / warn-only, `4` daemon unreachable / not ready, and
-  plane-specific codes above that. Power and doctor document theirs
-  in the how-tos.
+  `3` warn-only, `4` daemon unreachable / not ready, and
+  plane-specific codes above that. Each command documents its codes.
 - Every flag also settable via `SY_*` (or the XDG variable the
   flag aliases). Precedence is flag > env > config file > default.
 - `NO_COLOR` and `TERM=dumb` strip ANSI.
 
-MCP servers (`sy knowledge mcp`, `sy power mcp`, `sy mon mcp`,
-`sy file mcp`) speak line-delimited JSON-RPC on stdio. Prefer the
+MCP servers (`sy knowledge mcp`, `sy mon mcp`, `sy file mcp`) speak
+line-delimited JSON-RPC on stdio. Prefer the
 tool when you already have a session; shelling `sy … --json` is the
 fallback, not the native path.
 
@@ -5468,10 +5518,6 @@ fallback, not the native path.
 - **Dry-run as default on the dangerous commands.** You type
   `--apply` once. An agent that copies a human snippet without
   `--apply` does nothing, which is the safe failure.
-- **Exit code `3` is data, not a retry loop.** Drift prints the
-  document and asks you to inspect the journal. Retrying `sy power
-  status` will not clear ADWIN.
-
 ### Alternatives we considered
 
 - **A separate `syctl` machine API.** That splits the user model
@@ -5585,7 +5631,7 @@ here.
 
 - User-facing documentation site (Docusaurus) under `website/`,
   fed by the Diátaxis tree in `docs/`: start-here page, search and
-  agent tutorials, NPU / MCP / Spark / theme / doctor / power
+  agent tutorials, NPU / MCP / Spark / theme / doctor
   how-tos, Spark and configuration reference, and explanations for
   no-snowflakes, agent-first CLI, and NPU-not-GPU.
 - Spark host-install how-to (`sy spark <host> install --dry-run`
@@ -5621,9 +5667,14 @@ here.
   separate process.
 - A sandboxed agent runner (`sy agt`) and an `aiplane` scheduler land
   alongside an observability core that journals every plane decision.
+- `sy profile` (visible alias `sy pwr`) and its Waybar tile provide a
+  picker, direct selection, and one-click cycling through Fedora's standard
+  `power-saver`, `balanced`, and `performance` profiles via `tuned-ppd`.
 
 #### Changed
 
+- `sy mon` snapshots now use schema version 2; the removed power panel
+  is no longer present in the snapshot document or dashboard grid.
 - The `knowledge` plane now consumes the `aiplane` daemon through thin
   facades: every embedding request crosses the JSON-over-Unix-socket
   IPC, so the "one process per NPU" rule holds even when several
@@ -5633,6 +5684,13 @@ here.
 - Internal layout follows SPEC §4.4: the agent sandbox, the `aiplane`
   scheduler, and the observability core move into dedicated modules.
   Public CLI surface is unchanged.
+
+#### Removed
+
+- The experimental `sy power` plane, adaptive governor, TuneD replacement
+  shim, host policy files, telemetry model, and MCP tool. Fedora's TuneD and
+  `tuned-ppd` services are now the sole power-profile managers; `sy profile`
+  is only a frontend to their standard D-Bus API.
 
 #### Fixed
 

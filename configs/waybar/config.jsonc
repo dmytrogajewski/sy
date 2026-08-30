@@ -11,14 +11,9 @@
 
     "modules-left":   ["niri/workspaces", "niri/language"],
     "modules-center": ["niri/window"],
-    // `custom/sy-mon` and `custom/sy-power` definitions live further
-    // down for operators who pull them in manually — both are
-    // deliberately off the rail. Per-plane tiles
-    // (cpu/memory/sy-gpu/sy-npu/sy-disk/sy-bat/…) already cover
-    // sy-mon's ground; the power orchestrator's onboarding hint
-    // (`sy: learning Xd Yh`) now surfaces on hover of the `custom/pwr`
-    // (perf) tile's tooltip instead of as its own permanent slot.
-    "modules-right":  ["cpu", "memory", "custom/sy-gpu", "custom/sy-npu", "custom/sy-disk", "custom/sy-silent", "custom/sy-vol", "custom/sy-bl", "custom/sy-knowledge", "custom/agents", "custom/bt", "network", "custom/sy-portal", "custom/notif", "clock", "custom/sy-syauth", "custom/pwr", "custom/sy-bat"],
+    // `custom/sy-mon` remains available for operators who want the
+    // aggregate dashboard; per-plane read-only tiles stay on the rail.
+    "modules-right":  ["cpu", "memory", "custom/sy-gpu", "custom/sy-npu", "custom/sy-disk", "custom/sy-silent", "custom/sy-vol", "custom/sy-bl", "custom/sy-knowledge", "custom/agents", "custom/bt", "network", "custom/sy-portal", "custom/notif", "clock", "custom/sy-syauth", "custom/sy-profile", "custom/sy-bat"],
 
     "niri/workspaces": {
         "format": "{value}",
@@ -118,27 +113,6 @@
         "tooltip":         true
     },
 
-    // SPEC §5 power-orchestrator pill: profile + shield state +
-    // onboarding countdown + drift indicator. interval=1 mirrors
-    // syauth so a drift/meeting flip surfaces inside the 2 s
-    // R6 cross-cutting DoD. Click opens the human status line.
-    // Module schema lives in configs/waybar/modules/sy-power.json.
-    "custom/sy-power": {
-        "exec":         "{{ home }}/.local/bin/sy power status --waybar",
-        "return-type":  "json",
-        "interval":     1,
-        "tooltip":      true,
-        "on-click":     "{{ home }}/.local/bin/sy power status"
-    },
-
-    "custom/pwr": {
-        "exec":        "{{ home }}/.local/bin/sy pwr --waybar",
-        "return-type": "json",
-        "interval":    30,
-        "signal":      10,
-        "on-click":    "{{ home }}/.local/bin/sy pwr"
-    },
-
     "clock": {
         "interval": 30,
         "format": "[{:%a %d %b  %H:%M}]",
@@ -231,6 +205,19 @@
         "interval": 30
     },
 
+    // Thin UI over Fedora tuned-ppd. `sy` owns no power policy and writes no
+    // sysfs knobs: clicks only set the standard ActiveProfile D-Bus property.
+    "custom/sy-profile": {
+        "exec":            "{{ home }}/.local/bin/sy profile --waybar",
+        "return-type":     "json",
+        "interval":        10,
+        "signal":          18,
+        "tooltip":         true,
+        "on-click":        "{{ home }}/.local/bin/sy profile next",
+        "on-click-middle": "{{ home }}/.local/bin/sy profile balanced",
+        "on-click-right":  "{{ home }}/.local/bin/sy profile"
+    },
+
     // sy-mon ROADMAP Step 22: one-shot tile sourced from the 1 Hz
     // aggregator's `system.mon.snapshot` over UDS. interval=2 keeps the
     // tile fresh without polling faster than the aggregator's own tick;
@@ -246,5 +233,3 @@
         "on-click":    "{{ home }}/.local/bin/sy mon"
     }
 }
-
-

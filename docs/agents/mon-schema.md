@@ -30,7 +30,6 @@ aggregator publishes one snapshot per 1 Hz tick.
 | `aiplane`        | `AiplanePanel`                | Per-workload-kind queue / warm pool / latency. |
 | `knowledge`      | `KnowledgePanel`              | Collections, docs indexed, embed throughput, search QPS. |
 | `agents`         | `AgentsPanel`                 | Running count, RSS total, recent policy denials. |
-| `power`          | `PowerPanel`                  | Current arm, dwell fractions, cumulative regret. |
 | `supervisor`     | `SupervisorPanel`             | One row per supervised plane. |
 | `errors`         | `Vec<MonError>`               | Per-source errors observed during the tick. Empty on a fully-healthy tick. |
 
@@ -114,5 +113,6 @@ semantics:
   is higher than they know. The wire shape is documented per-version;
   cross-version compatibility is not promised.
 
-Current version: `1`. See `SCHEMA_VERSION` in
+Current version: `2`. Version 2 removes the retired experimental power
+panel. See `SCHEMA_VERSION` in
 `crates/sy-core/src/mon/snapshot.rs`.

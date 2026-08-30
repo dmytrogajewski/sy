@@ -184,6 +184,25 @@ fn responses_rejects_malformed_function_arguments_at_completion() {
 }
 
 #[test]
+fn responses_rejects_reasoning_without_actionable_output() {
+    let mut encoder = gateway::ResponsesEncoder::new("fixture".into(), BTreeSet::new());
+    for event in [
+        upstream::GenerationEvent::ReasoningDelta {
+            text: "inspect".into(),
+        },
+        upstream::GenerationEvent::TextDelta {
+            text: "\n\n".into(),
+        },
+        upstream::GenerationEvent::Finished {
+            finish_reason: Some("stop".into()),
+        },
+    ] {
+        encoder.accept(event).unwrap();
+    }
+    assert!(encoder.accept(upstream::GenerationEvent::Done).is_err());
+}
+
+#[test]
 fn responses_stream_terminal_is_semantically_equal_to_non_streaming() {
     let mut encoder = gateway::ResponsesEncoder::new("fixture".into(), BTreeSet::new());
     for event in [

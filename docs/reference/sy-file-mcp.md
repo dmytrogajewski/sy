@@ -10,7 +10,7 @@ Source of truth: `src/file/mcp.rs`. For flags and exit codes, see
 see [browse files with sy file](../tutorials/browse-your-files.md).
 
 `protocolVersion` is `2024-11-05`. The transport is one JSON object
-per line — the same shape as `sy knowledge mcp` and `sy power mcp`.
+per line — the same shape as `sy knowledge mcp` and `sy mon mcp`.
 
 Every tool's response travels inside the MCP `content` / `isError`
 envelope:

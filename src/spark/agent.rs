@@ -1275,7 +1275,9 @@ async fn responses_json(
     while let Some(event) = upstream.next().await {
         match event {
             Ok(GenerationEvent::Done) => {
-                let _ = encoder.accept(GenerationEvent::Done);
+                if encoder.accept(GenerationEvent::Done).is_err() {
+                    return gateway_upstream_unavailable();
+                }
                 done = true;
                 break;
             }
@@ -1319,7 +1321,10 @@ fn responses_sse(
                 match upstream.next().await {
                     Some(Ok(event)) => {
                         terminal = matches!(event, GenerationEvent::Done);
-                        let _ = encoder.accept(event);
+                        if encoder.accept(event).is_err() {
+                            encoder.fail();
+                            terminal = true;
+                        }
                     }
                     _ => {
                         encoder.fail();
@@ -4790,7 +4795,20 @@ mod tests {
             + "data: [DONE]\n\n"
     }
 
-    async fn llama_chat_server() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    fn reasoning_only_chat_sse() -> String {
+        [
+            r#"{"choices":[{"delta":{"reasoning_content":"inspect"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"\n\n"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            r#"{"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3}}"#,
+        ]
+        .into_iter()
+        .map(|event| format!("data: {event}\n\n"))
+        .collect::<String>()
+            + "data: [DONE]\n\n"
+    }
+
+    async fn llama_chat_server_with(body: String) -> (SocketAddr, tokio::task::JoinHandle<()>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -4801,10 +4819,13 @@ mod tests {
             let request = String::from_utf8_lossy(&request[..count]);
             assert!(request.starts_with("POST /v1/chat/completions "));
             assert!(request.contains(r#""stream_options":{"include_usage":true}"#));
-            let body = llama_chat_sse();
             socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
         });
         (address, task)
+    }
+
+    async fn llama_chat_server() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        llama_chat_server_with(llama_chat_sse()).await
     }
 
     #[test]
@@ -4933,6 +4954,72 @@ mod tests {
                 .windows(2)
                 .all(|pair| body.find(pair[0]).unwrap() < body.rfind(pair[1]).unwrap()),
             "{body}"
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn responses_stream_marks_reasoning_only_stop_failed() {
+        let (address, server) = llama_chat_server_with(reasoning_only_chat_sse()).await;
+        let state = AgentState::new(TOKEN, Vec::new(), Vec::new());
+        let upstream = crate::spark::upstream::ObservedRoute::new(
+            "i_11111111111111111111111111111111",
+            1,
+            address.ip(),
+            address.port(),
+            [("POST", "/v1/chat/completions")],
+        )
+        .unwrap();
+        state.routes.publish(
+            "fixture",
+            "public-model".into(),
+            "served-model".into(),
+            upstream,
+        );
+        let request = Request::post("/openai/fixture/v1/responses")
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .body(Body::from(
+                r#"{"model":"public-model","input":"work","stream":true}"#,
+            ))
+            .unwrap();
+        let response = router(state).oneshot(request).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            body.contains("response.failed") && !body.contains("response.completed"),
+            "{body}"
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn responses_json_rejects_reasoning_only_stop() {
+        let (address, server) = llama_chat_server_with(reasoning_only_chat_sse()).await;
+        let state = AgentState::new(TOKEN, Vec::new(), Vec::new());
+        let upstream = crate::spark::upstream::ObservedRoute::new(
+            "i_11111111111111111111111111111111",
+            1,
+            address.ip(),
+            address.port(),
+            [("POST", "/v1/chat/completions")],
+        )
+        .unwrap();
+        state.routes.publish(
+            "fixture",
+            "public-model".into(),
+            "served-model".into(),
+            upstream,
+        );
+        let request = Request::post("/openai/fixture/v1/responses")
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .body(Body::from(r#"{"model":"public-model","input":"work"}"#))
+            .unwrap();
+        let response = router(state).oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
         );
         server.await.unwrap();
     }

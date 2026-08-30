@@ -27,11 +27,6 @@ const FEATURES = [
     desc: 'JSON, dry-run, stable exit codes. MCP is wired by sy auto, not by hand-edited client configs.',
   },
   {
-    href: '/docs/how-to/read-power-status',
-    name: 'power and health',
-    desc: 'A governor that can explain itself. Super+M for a live snapshot. sy doctor for the whole install.',
-  },
-  {
     href: '/docs/how-to/set-up-npu',
     name: 'optional silicon',
     desc: 'NPU embeddings, a Spark for models, phone-as-key sudo. Skip any of them. Bring-up does not require them.',
@@ -61,8 +56,8 @@ export default function Home(): JSX.Element {
               </p>
               <p className={styles.ledeDim}>
                 Search your notes. Open a file manager. Approve sudo from
-                the phone. Ask why the power profile changed. Serve a model
-                on a Spark if you have one. Rebuild the whole thing with
+                the phone. Serve a model on a Spark if you have one. Rebuild
+                the whole thing with
                 cargo build and sy apply when the disk dies.
               </p>
               <div className={styles.line}>

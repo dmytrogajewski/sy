@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "captured_at_ms": 1747900000000,
   "cpu": {
     "per_core_util_pct": [
@@ -83,15 +83,6 @@
     "running": 2,
     "rss_total_mib": 412,
     "policy_denials_recent": 0
-  },
-  "power": {
-    "current_arm": "balanced",
-    "dwell_pct": {
-      "balanced": 0.71,
-      "perf": 0.18,
-      "save": 0.11
-    },
-    "regret_cum": 0.034
   },
   "supervisor": {
     "planes": [

@@ -3,7 +3,6 @@
 //!   - waybar shows a moon glyph
 //!   - vol::pick warns if the user picks a loud sink
 //!   - a daemon watches pactl events and warns on auto-switch to loud
-//!   - tuned `performance` is dropped to `balanced` once on enable
 //!
 //! Override semantics (`~/.cache/sy/silent-state`):
 //!   `on`  → forced active regardless of the clock
@@ -215,17 +214,10 @@ fn set_state(new_state: &str, side_effects: bool) -> Result<()> {
     Ok(())
 }
 
-/// Emit the single state-transition notification, applying enter-side
-/// effects (pwr → balanced unless the user pinned perf, loud-sink hint)
-/// along the way.
+/// Emit the single state-transition notification and include a loud-sink hint.
 fn announce_transition(now_active: bool) {
     let mut msg = String::from(if now_active { "on" } else { "off" });
     if now_active {
-        if crate::pwr::set_balanced_if_performance() {
-            msg.push_str(" · pwr→balanced");
-        } else if crate::pwr::read_pin().as_deref() == Some("perf") {
-            msg.push_str(" · pwr pinned: perf");
-        }
         if let Some(name) = current_default_sink() {
             if !sink_is_quiet(&name) {
                 msg.push_str(" · loud output");
@@ -358,9 +350,6 @@ fn status_text() -> Result<()> {
     if let Some(sink) = current_default_sink() {
         let q = sink_is_quiet(&sink);
         println!("sink:     {sink} ({})", if q { "quiet" } else { "loud" });
-    }
-    if let Some(pin) = crate::pwr::read_pin() {
-        println!("pwr-pin:  {pin}");
     }
     Ok(())
 }

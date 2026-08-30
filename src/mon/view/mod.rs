@@ -1,13 +1,13 @@
 //! `sy mon` popup view tree.
 //!
-//! Renders nine panels — one per SCOPE §4.4 row. The layout is a
+//! Renders eight panels in a 3 × 3 grid with one empty cell. The layout is a
 //! 3 × 3 grid:
 //!
 //! | row | col 0     | col 1   | col 2       |
 //! |-----|-----------|---------|-------------|
 //! | 0   | host      | accel   | net         |
 //! | 1   | disk      | aiplane | knowledge   |
-//! | 2   | agents    | power   | supervisor  |
+//! | 2   | agents    | supervisor | empty    |
 //!
 //! Each panel module exposes:
 //!
@@ -44,7 +44,6 @@ pub mod filter;
 pub mod host;
 pub mod knowledge;
 pub mod net;
-pub mod power;
 pub mod supervisor;
 
 /// Render the popup. Pulls everything from [`view_data`] so the
@@ -113,7 +112,7 @@ fn grid(state: &State, palette: Palette) -> Element<'_, Message> {
         .into()
 }
 
-/// Canvas program drawing all nine panels. Borrows `&State` so the
+/// Canvas program drawing all eight panels. Borrows `&State` so the
 /// snapshot / ring history are read at render time without copying.
 struct PanelGrid<'a> {
     state: &'a State,
@@ -151,7 +150,7 @@ impl<'a> Program<Message> for PanelGrid<'a> {
 }
 
 /// Public so tests + production share one dispatch path. Splits the
-/// canvas area into nine rectangles and hands each one to its
+/// canvas area into nine rectangles and hands eight to panels.
 /// panel's `draw_into`. Pure projection of `area` → 9 sub-rectangles
 /// plus pure dispatch — no iced types touched, so the function is
 /// usable under any `Recorder`.
@@ -172,8 +171,7 @@ pub fn draw_panels(state: &State, palette: &Palette, area: Rectangle, recorder: 
     aiplane::draw_into(state, palette, cells[1][1], recorder);
     knowledge::draw_into(state, palette, cells[1][2], recorder);
     agents::draw_into(state, palette, cells[2][0], recorder);
-    power::draw_into(state, palette, cells[2][1], recorder);
-    supervisor::draw_into(state, palette, cells[2][2], recorder);
+    supervisor::draw_into(state, palette, cells[2][1], recorder);
 }
 
 /// Dispatch to a single panel's `draw_into`. Used by [`draw_panels`]
@@ -193,7 +191,6 @@ fn draw_panel(
         PanelId::Aiplane => aiplane::draw_into(state, palette, area, recorder),
         PanelId::Knowledge => knowledge::draw_into(state, palette, area, recorder),
         PanelId::Agents => agents::draw_into(state, palette, area, recorder),
-        PanelId::Power => power::draw_into(state, palette, area, recorder),
         PanelId::Supervisor => supervisor::draw_into(state, palette, area, recorder),
     }
 }
@@ -275,7 +272,7 @@ mod tests {
     /// `draw_panels` must reach every panel — pin by checking each
     /// panel's title text appears in the recorder's op stream.
     #[test]
-    fn draw_panels_dispatches_to_all_nine() {
+    fn draw_panels_dispatches_to_all_eight() {
         let state = empty_state();
         let palette = Palette::ink_fallback();
         let mut rec = MockRecorder::new();
@@ -288,7 +285,6 @@ mod tests {
             "aiplane",
             "knowledge",
             "agents",
-            "power",
             "supervisor",
         ];
         for t in titles {

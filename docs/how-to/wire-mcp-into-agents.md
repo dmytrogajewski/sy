@@ -53,7 +53,7 @@ Gemini without hand-editing each client's config file.
 ## Result
 
 Each selected client has a `sy` MCP server entry. Tools such as
-`knowledge_search` and `power_status` show up in the client after
+`knowledge_search` show up in the client after
 restart. Re-running the command is safe: detectors that already
 wrote their files report as present.
 

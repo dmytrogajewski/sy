@@ -47,4 +47,3 @@ warning or failure.
 ## See also
 
 - [CLI: `sy doctor`](../reference/cli.md#sy-doctor)
-- [How to read power status](read-power-status.md)

@@ -75,7 +75,7 @@ its MCP server. See
 [Model Context Protocol](https://modelcontextprotocol.io) — the
 stdio JSON-RPC dialect agents (Claude, Cursor, Codex, Gemini) speak
 to discover and call tools. `sy` exposes `sy knowledge mcp`,
-`sy power mcp`, `sy mon mcp`, and `sy file mcp`. `sy auto` writes
+`sy mon mcp`, and `sy file mcp`. `sy auto` writes
 those servers into each agent's config.
 
 ### mon
@@ -88,8 +88,8 @@ by a 1 Hz aggregator. `Super+m` toggles the popup;
 ### plane
 
 A long-running service hosted by the single `sy` binary, identified
-by its top-level subcommand (`sy aiplane`, `sy knowledge`,
-`sy power`, `sy agt`, `sy stack`, `sy file`, `sy mon`, `sy spark`).
+by its top-level subcommand (`sy aiplane`, `sy knowledge`, `sy agt`,
+`sy stack`, `sy file`, `sy mon`, `sy spark`).
 All planes share one CLI + JSON surface so agents drive any plane
 the same way a human does. See
 [`How the planes fit together` — One binary, many planes](../explanation/architecture.md#one-binary-many-planes).
@@ -99,14 +99,6 @@ the same way a human does. See
 A small program `sy file` starts to preview a MIME type. Installed
 with `sy plugin install`, checked with `sy plugin doctor`. See
 [how to write a sy plugin](../how-to/write-a-sy-plugin.md).
-
-### power (plane)
-
-The `sy-powerd` user daemon: a power-profiles-daemon shim layered
-with a contextual bandit that picks cpufreq governor, EPP, turbo,
-and the `net.hadess.PowerProfiles` D-Bus profile from
-[`configs/sy/power.toml`](../../configs/sy/power.toml). Reachable
-from CLI (`sy power status`) and via MCP (`sy power mcp`).
 
 ### Quark
 
@@ -172,8 +164,8 @@ hosts every other plane.
 ### sy.target
 
 The user-level systemd target that groups every `sy` plane
-(`sy-aiplane.service`, `sy-knowledge.service`, `sy-powerd.service`,
-`sy-stack-bar.service`, `sy-agentd.service`); enabling
+(`sy-aiplane.service`, `sy-knowledge.service`, `sy-stack-bar.service`,
+`sy-agentd.service`); enabling
 `sy.target` brings every plane up at login, stopping it tears them
 down. Units live under [`configs/systemd/user/`](../../configs/systemd/user/).
 See [`How the planes fit together` — `sy.target` is the supervisor](../explanation/architecture.md#sytarget-is-the-supervisor).

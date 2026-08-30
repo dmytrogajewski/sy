@@ -46,14 +46,13 @@ is optional — stays on [What sy is](what-sy-is.md).
 ### One binary, many planes
 
 `sy` ships as a single Rust binary. Every capability — NPU
-inference, semantic search, agent sandboxing, power management,
-the layer-shell bar, phone-as-key sudo, the file manager, the
+inference, semantic search, agent sandboxing, the layer-shell bar,
+phone-as-key sudo, the file manager, the
 health popup, remote Spark serving — is a subcommand of that
 binary. A *plane* is the long-running service behind one of those
 capabilities. The `aiplane` is the NPU plane. The `knowledge`
 plane is the semantic-search plane. The `agt` plane is the agent
-runner. The `power` plane is the adaptive governor. The `stack`
-plane is the bar. The `file` plane is the iced file manager. The
+runner. The `stack` plane is the bar. The `file` plane is the iced file manager. The
 `mon` plane is the health dashboard. Spark is the same binary
 running on a different machine: laptop CLI, unprivileged HTTPS
 agent, root Docker executor.

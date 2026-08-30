@@ -38,14 +38,7 @@ use sy_core::obs::mon_exporter::{install, InstallError};
 /// one-shot CLI, not a long-lived daemon — see roadmap Step 20
 /// "Landing notes"). The test below verifies each of these can be
 /// driven through the shared installer.
-const STEP_20_PLANES: &[&str] = &[
-    "aiplane",
-    "knowledge",
-    "agt",
-    "power",
-    "stack-bar",
-    "supervisor",
-];
+const STEP_20_PLANES: &[&str] = &["aiplane", "knowledge", "agt", "stack-bar", "supervisor"];
 
 /// Serialise installs so the process-global recorder slot is only
 /// raced sequentially. Held across `.await` so must be a

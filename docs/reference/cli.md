@@ -52,7 +52,6 @@ source):
 - **`sy aiplane`** — `status`, `list`, `run`, `cancel`.
 - **`sy knowledge`** — `list`, `index`, `search`, `manifests`, `status`,
   `bench`, `mcp-enable`, `mcp-disable`, `mcp-status`.
-- **`sy power`** — `status`, `log`, `explain`, `show`, `list-profiles`.
 - **`sy doctor`** — emits the SPEC §4.6 `sy.doctor/v1` schema.
 - **`sy crash`** — `list`, `show`.
 - **`sy ipc`** — `ping`, `describe` (default for `describe`).
@@ -80,7 +79,6 @@ State-changing subcommands honour `--dry-run` by printing the planned
 diff without applying. Honoured by:
 
 - `sy apply` (and the `--diff` alias).
-- `sy power apply`.
 - `sy auto configure` (dry-run is the **default**; `--apply` opts in).
 - `sy knowledge mcp-enable` / `sy knowledge mcp-disable` (dry-run is
   the default; `--apply` opts in).
@@ -99,19 +97,17 @@ agent callers cannot accidentally rewrite an agent's MCP config.
 `sy` uses **stable, documented** exit codes per SPEC §4.7. The
 constants live in the source under each plane's `exit` module
 (`src/doctor/mod.rs`, `src/knowledge/mod.rs`, `src/supervision/service.rs`,
-`src/power/mod.rs`, `src/ipc_cli.rs`, `src/crash/mod.rs`,
+`src/ipc_cli.rs`, `src/crash/mod.rs`,
 `src/agt/protocol.rs`).
 
 | Code | Meaning                  | Source of truth                                                           |
 |------|--------------------------|---------------------------------------------------------------------------|
 | `0`  | success                  | every plane                                                               |
 | `1`  | generic failure          | every plane                                                               |
-| `2`  | usage error              | clap (`ErrorKind::ValueValidation`), `policy`, `power`, `service`, `crash`|
-| `3`  | drift / warn-only / lint-fail | `doctor` (warn-only), `ipc` (degraded), `service` (status drift), `power` (ADWIN drift alarm), `policy lint`, `spark` (remote policy/state rejection), `mon snapshot` (aggregator unreachable), `file ipc` (daemon unreachable) |
-| `4`  | not-ready / daemon-unreachable / not-found | `ipc` (starting/failed), `service` (not-ready), `power` (daemon-unreachable), `crash` (record not found), `agt` (daemon unavailable), `knowledge` (qdrant-unreachable), `spark` (OpenSSH/TLS/auth unreachable), `file ipc` (op refused) |
-| `5`  | embedding-failed / polkit-denied / plugin-error | `knowledge`, `power`, `file ipc` (plugin error)                |
-| `6`  | unsupported hardware     | `power`                                                                   |
-| `7`  | onboarding-not-complete  | `power` (`sy power show` with insufficient audit window)                  |
+| `2`  | usage error              | clap (`ErrorKind::ValueValidation`), `policy`, `service`, `crash`         |
+| `3`  | warn-only / lint-fail    | `doctor` (warn-only), `ipc` (degraded), `service` (status drift), `policy lint`, `spark` (remote policy/state rejection), `mon snapshot` (aggregator unreachable), `file ipc` (daemon unreachable) |
+| `4`  | not-ready / daemon-unreachable / not-found | `ipc` (starting/failed), `service` (not-ready), `crash` (record not found), `agt` (daemon unavailable), `knowledge` (qdrant-unreachable), `spark` (OpenSSH/TLS/auth unreachable), `file ipc` (op refused) |
+| `5`  | embedding-failed / plugin-error | `knowledge`, `file ipc` (plugin error)                             |
 
 Each subcommand's reference entry lists the codes it can return.
 Codes not listed for a subcommand are not emitted by that subcommand.
@@ -125,9 +121,9 @@ load-bearing globals are:
 
 - `SY_ROOT` — global; same as `--root`.
 - `XDG_CONFIG_HOME` — read by `sy apply` to compute the default target.
-- `XDG_STATE_HOME` — read by `sy crash`, `sy knowledge`, `sy power`
-  for per-plane state directories.
-- `XDG_RUNTIME_DIR` — read by `sy agt`, `sy ipc`, `sy power` to locate
+- `XDG_STATE_HOME` — read by `sy crash` and `sy knowledge` for
+  per-plane state directories.
+- `XDG_RUNTIME_DIR` — read by `sy agt` and `sy ipc` to locate
   daemon Unix sockets.
 - `SY_PRIORITY` — QoS class for aiplane scheduler admission
   (`Realtime | Interactive | Background | Batch`).
@@ -136,8 +132,6 @@ load-bearing globals are:
 - `SY_DISK_THRESHOLD_GIB` — override the `sy disk` low-space threshold.
 - `SY_AGT_CWD`, `SY_AGT_AGENT`, `SY_AGT_SANDBOX_PROFILE`,
   `SY_AGT_REQUEST_ID` — `sy agt` sandbox + launcher overrides.
-- `SY_SYSFS_ROOT` — `sy power status` sysfs probe root override (test
-  hermeticity).
 - `SY_SPARK_*` — Spark client flags (`JSON`, `DRY_RUN`, `YES`,
   `CONFIG_DIR`, `PROBE`, `LISTEN_ADDRESS`, `LISTEN_PORT`,
   `RELEASE_SIGNATURE`, `RELEASE_PUBLIC_KEY`, and per-command
@@ -158,16 +152,15 @@ stdin is not a TTY, per CLIG. The pairs that ship today:
   `--token-from-stdin --yes` is paired and the UUID is on stdin.
 - `sy policy trust --confirm` — refuses without a TTY unless `--yes`
   is paired and `TRUST THIS PROFILE\n` is on stdin.
-- `sy power show` — only spawns `xdg-open` on the resulting PDF when
-  stdin is a TTY; `--no-open` skips the spawn unconditionally.
-
 ### Aliases and overloaded flags
 
 - `sy apply --diff` is a documented alias for `sy apply --dry-run --json`.
 - The bar-tile applets (`sy bat`, `sy bright`, `sy bt`, `sy gpu`,
-  `sy npu`, `sy disk`, `sy pwr`, `sy silent`, `sy syauth`, `sy vol`)
+  `sy npu`, `sy disk`, `sy profile`, `sy silent`, `sy syauth`, `sy vol`)
   take `--waybar` instead of `--json` for the single-JSON-line
   waybar `custom/*` schema.
+- `sy pwr` is the visible short alias for `sy profile`; neither command
+  starts a daemon or applies its own power policy.
 
 ---
 
@@ -478,117 +471,6 @@ sy knowledge sync --yes        # destructive — drops the collection
 
 - [how-to: add a knowledge source](../how-to/add-a-knowledge-source.md)
 - [reference: aiplane](#sy-aiplane)
-
----
-
-## `sy power`
-
-Adaptive power orchestrator. Source: `src/power/mod.rs`, `src/power/cli.rs`.
-
-### Subcommands
-
-| Subcommand                   | Purpose                                                                  |
-|------------------------------|--------------------------------------------------------------------------|
-| `status`                     | Current state, profile, shield, reason.                                  |
-| `daemon`                     | `sy-powerd` entrypoint (systemd user unit).                              |
-| `apply`                      | Install polkit action, udev rule, systemd unit, waybar tile.             |
-| `log`                        | Tail the NDJSON telemetry log.                                           |
-| `profile <NAME>` / `--auto`  | Manual profile override; `--auto` clears it.                             |
-| `explain`                    | Audit replay: which bandit arm fired and why.                            |
-| `train`                      | Offline GRU retrain — reads telemetry, writes ONNX.                      |
-| `show`                       | Render the offline `sy power` PDF report.                                |
-| `list-profiles`              | Enumerate the bandit arm table from `configs/sy/power.toml`.             |
-| `mcp`                        | MCP server entrypoint (stdio JSON-RPC).                                  |
-
-### Options per subcommand
-
-#### `sy power status`
-
-| Name        | Type | Default | Env | Description                                                                                          |
-|-------------|------|---------|-----|------------------------------------------------------------------------------------------------------|
-| `--json`    | bool | `false` | —   | Emit the SPEC §4 `sy.power.status/v1` schema. Mutually exclusive with `--waybar`.                    |
-| `--waybar`  | bool | `false` | —   | Emit the SPEC §5 waybar pill JSON (`{text, tooltip, class}`). Daemon-down renders as the `error` class and exits 0 so waybar keeps polling. |
-
-#### `sy power apply`
-
-| Name         | Type | Default | Env | Description                                                                                                              |
-|--------------|------|---------|-----|--------------------------------------------------------------------------------------------------------------------------|
-| `--dry-run`  | bool | `false` | —   | Print the planned changes without touching disk.                                                                         |
-| `--yes`      | bool | `false` | —   | Gate destructive actions — currently the `systemctl --user mask power-profiles-daemon.service` path.                     |
-| `--with-ppd` | bool | `false` | —   | Keep `power-profiles-daemon` active; run the `sy power` shim alongside it without binding `net.hadess.PowerProfiles`.    |
-
-#### `sy power log`
-
-| Name       | Type     | Default                       | Env | Description                                              |
-|------------|----------|-------------------------------|-----|----------------------------------------------------------|
-| `--since`  | duration | `DEFAULT_TAIL_WINDOW`         | —   | Filter to entries newer than this duration (`1h`, `30m`, `7d`). Bad value exits 2. |
-| `--json`   | bool     | `false`                       | —   | Emit raw NDJSON (one JSON per line).                     |
-
-#### `sy power profile`
-
-| Name      | Type   | Default | Env | Description                                                                  |
-|-----------|--------|---------|-----|------------------------------------------------------------------------------|
-| `<NAME>`  | string | none    | —   | Profile name from the bandit arm table. Mutually exclusive with `--auto`.    |
-| `--auto`  | bool   | `false` | —   | Clear any manual override and restore bandit control.                        |
-
-#### `sy power explain`
-
-| Name      | Type  | Default | Env | Description                                                                  |
-|-----------|-------|---------|-----|------------------------------------------------------------------------------|
-| `--last`  | usize | `10`    | —   | Show the last N decisions.                                                   |
-| `--json`  | bool  | `false` | —   | Emit machine-readable JSON instead of a human summary.                       |
-
-#### `sy power train`
-
-| Name    | Type | Default                                                                | Env | Description                  |
-|---------|------|------------------------------------------------------------------------|-----|------------------------------|
-| `--in`  | path | `<state>/telemetry-<today>.ndjson`                                     | —   | Input NDJSON path.           |
-| `--out` | path | `<state>/forecaster.onnx`                                              | —   | Output ONNX path.            |
-
-#### `sy power show`
-
-| Name           | Type     | Default                                                  | Env | Description                                                                                                  |
-|----------------|----------|----------------------------------------------------------|-----|--------------------------------------------------------------------------------------------------------------|
-| `--since`      | duration | `7d`                                                     | —   | Audit-log window. Bad value exits 2.                                                                         |
-| `--out`        | path     | `<state>/reports/sy-power-<rfc3339>.pdf`                 | —   | PDF output path. Ignored with `--json`.                                                                      |
-| `--no-open`    | bool     | `false`                                                  | —   | Do not invoke `xdg-open` on the PDF (set implicitly when stdin is not a TTY).                                |
-| `--allow-thin` | bool     | `false`                                                  | —   | Skip the 24 h "thin window" gate (exit 7 by default).                                                        |
-| `--json`       | bool     | `false`                                                  | —   | Emit JSON; skip PDF generation.                                                                              |
-
-#### `sy power list-profiles`
-
-| Name     | Type | Default | Env | Description                                          |
-|----------|------|---------|-----|------------------------------------------------------|
-| `--json` | bool | `false` | —   | Emit the SPEC §4 `sy.power.profiles/v1` schema.      |
-
-### Exit codes
-
-- `0` — success.
-- `1` — generic failure.
-- `2` — usage error (bad `--since`, unknown profile name, conflicting flags).
-- `3` — `EXIT_DRIFT_ACTIVE` — ADWIN drift alarm reported by the daemon.
-- `4` — `EXIT_DAEMON_UNREACHABLE` — socket missing or refused.
-- `7` — `EXIT_ONBOARDING_NOT_COMPLETE` — `sy power show` window has fewer than 24 h of audit entries and `--allow-thin` was not set.
-
-(Defined in `src/power/mod.rs` and `src/power/cli.rs`.)
-
-### Examples
-
-```bash
-sy power status                          # human summary
-sy power status --json                   # sy.power.status/v1 schema
-sy power apply --dry-run                 # preview installer changes
-sy power profile performance             # pin a profile
-sy power profile --auto                  # release the pin
-sy power log --since=1h --json
-sy power explain --last=1 --json
-sy power show --since=24h --no-open      # CI / headless
-sy power show --json --since=1d          # agent path
-```
-
-### See also
-
-- [reference: aiplane](#sy-aiplane) — power consumes the aiplane intent channel.
 
 ---
 
@@ -940,7 +822,7 @@ Wrapper for `systemctl --user` / `journalctl --user` per SPEC §4.7
 (arch-supervision Step 3). Source: `src/supervision/service.rs`.
 
 Canonical short names: `aiplane`, `knowledge`, `qdrant`, `stack-bar`,
-`agentd`, `powerd`. Each resolves to `sy-<name>.service`. Full
+`agentd`. Each resolves to `sy-<name>.service`. Full
 `sy-<name>.service` / `sy-<name>.socket` / `sy-<name>.target` /
 `sy.target` names are passed through verbatim. Anything else exits 2.
 
@@ -1516,14 +1398,31 @@ Notification watcher/counter.
 
 AMD Ryzen AI NPU applet — bar tile showing active/idle + holders.
 
+### `sy profile` (`sy pwr`)
+
+Thin frontend for Fedora's `tuned-ppd`. It does not run a policy daemon or
+write sysfs controls. With no action it opens a Fuzzel picker.
+
+| Name         | Type | Default | Env                 | Description                                                        |
+|--------------|------|---------|---------------------|--------------------------------------------------------------------|
+| `<ACTION>`   | enum | `menu`  | `SY_PROFILE_ACTION` | `menu | status | next | power-saver | balanced | performance`.       |
+| `--waybar`   | bool | `false` | —                   | Emit the active profile for the `custom/sy-profile` panel tile.    |
+| `--json`     | bool | `false` | —                   | Emit the selected profile and `tuned-ppd` backend as JSON.         |
+
+```bash
+sy profile                    # picker
+sy profile next               # cycle profiles
+sy profile performance        # select directly
+sy pwr balanced               # short compatibility alias
+sy profile status --json
+```
+
+On the panel, left-click cycles, middle-click restores `balanced`, and
+right-click opens the picker.
+
 ### `sy popup <KEY>`
 
 Toggle a named popup window. `KEY` is one of `agents | cal | nmtui`.
-
-### `sy pwr`
-
-Power menu: tuned profile + lock/suspend/reboot/shutdown/logout
-(`--waybar` for bar JSON).
 
 ### `sy silent`
 

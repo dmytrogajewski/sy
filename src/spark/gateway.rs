@@ -1185,6 +1185,16 @@ impl ResponsesEncoder {
         }) {
             return Err(invalid_request("upstream tool arguments are invalid"));
         }
+        if self.finish_reason.as_deref() == Some("stop")
+            && !self.reasoning.trim().is_empty()
+            && self.text.trim().is_empty()
+            && self.tools.is_empty()
+        {
+            return Err(OpenAiError {
+                code: "server_error",
+                message: "upstream generation produced no actionable output",
+            });
+        }
         self.finish_reasoning();
         self.finish_text();
         self.finish_tools();

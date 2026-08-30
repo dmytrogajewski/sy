@@ -32,15 +32,14 @@ The rules that show up on every plane:
   (`sy auto configure`, `sy knowledge mcp-enable`) and require
   `--apply` so an agent cannot rewrite a file by accident.
 - Stable exit codes: `0` success, `1` generic failure, `2` usage,
-  `3` drift / warn-only, `4` daemon unreachable / not ready, and
-  plane-specific codes above that. Power and doctor document theirs
-  in the how-tos.
+  `3` warn-only, `4` daemon unreachable / not ready, and
+  plane-specific codes above that. Each command documents its codes.
 - Every flag also settable via `SY_*` (or the XDG variable the
   flag aliases). Precedence is flag > env > config file > default.
 - `NO_COLOR` and `TERM=dumb` strip ANSI.
 
-MCP servers (`sy knowledge mcp`, `sy power mcp`, `sy mon mcp`,
-`sy file mcp`) speak line-delimited JSON-RPC on stdio. Prefer the
+MCP servers (`sy knowledge mcp`, `sy mon mcp`, `sy file mcp`) speak
+line-delimited JSON-RPC on stdio. Prefer the
 tool when you already have a session; shelling `sy … --json` is the
 fallback, not the native path.
 
@@ -51,10 +50,6 @@ fallback, not the native path.
 - **Dry-run as default on the dangerous commands.** You type
   `--apply` once. An agent that copies a human snippet without
   `--apply` does nothing, which is the safe failure.
-- **Exit code `3` is data, not a retry loop.** Drift prints the
-  document and asks you to inspect the journal. Retrying `sy power
-  status` will not clear ADWIN.
-
 ## Alternatives we considered
 
 - **A separate `syctl` machine API.** That splits the user model

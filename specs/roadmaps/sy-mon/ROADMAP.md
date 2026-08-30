@@ -505,9 +505,8 @@ verify `streaming: true` capability already advertised.
   seeds with `SystemSnapshot::default()` so a read before the first
   `store` still returns a parseable wire shape with the current
   `SCHEMA_VERSION`. The new dep is `arc-swap.workspace = true` on
-  `crates/sy-core/Cargo.toml`; the workspace was already pinned at
-  `arc-swap = "1"` for sy-power's hot-reload path so no new compile-tree
-  weight.
+  `crates/sy-core/Cargo.toml`; the workspace already pinned
+  `arc-swap = "1"`, so this adds no compile-tree weight.
 - Streaming wiring: `sy-ipc`'s `Handler` trait returns one `Response`
   per call, so `subscribe` cannot ride on the generic
   `sy_ipc::Server::serve` accept loop. The least-invasive option was
@@ -1239,13 +1238,6 @@ daemon" — `cargo tree --features mon-exporter` in CI catches drift.
     was bound in the same process. Same recorder → same exposition;
     both `KNOWN_PLANES` paths surface a healthy plane to the
     aggregator.
-- *`src/power/cli.rs` → `src/power/daemon.rs` redirect:* the
-  roadmap step listed `src/power/cli.rs` for the power install but
-  the actual long-lived daemon entry is `power::daemon::run()`. Wiring
-  the exporter in `cli.rs` would attach it to the short-lived `sy
-  power` dispatcher rather than the persistent `sy-powerd` process
-  the aggregator scrapes. Comment in `src/power/daemon.rs` documents
-  the deviation.
 - *Wallpaper skipped:* `src/wallpaper.rs::run` is a one-shot CLI
   (`apply_user(image)` or `apply_default()` then return) — it spawns
   `swaybg` and exits. There is no long-lived `sy wallpaper daemon`

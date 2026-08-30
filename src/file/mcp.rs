@@ -128,8 +128,7 @@ impl FileDaemonClient for SyIpcClient {
         // The handler trait is sync (driven from the line-by-line
         // stdio loop) but `sy_ipc::Client` is async; build a small
         // single-threaded runtime per call so a hung call can't
-        // poison the whole MCP server. Same trade-off `sy power`'s
-        // `cli::build_live_status_value` makes.
+        // poison the whole MCP server.
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -486,8 +485,7 @@ mod tests {
     #[test]
     fn protocol_version_matches_other_sy_mcp_servers() {
         // Drift here would break the one-handshake contract across
-        // `sy stack mcp`, `sy knowledge mcp`, `sy power mcp`, and
-        // `sy file mcp`.
+        // `sy stack mcp`, `sy knowledge mcp`, and `sy file mcp`.
         assert_eq!(PROTOCOL_VERSION, "2024-11-05");
     }
 }

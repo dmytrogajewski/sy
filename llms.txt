@@ -2,7 +2,7 @@
 
 > An Agentic OS layer for Fedora 43 — a single Rust binary plus declarative configs that turn a stock Fedora laptop into an agent-first workstation, with no snowflake state outside the repo.
 
-`sy` is one repo, one binary, one source of truth. A fresh machine plus `cargo build --release && ./target/release/sy apply` reproduces the entire system. The binary hosts every plane — `aiplane` (on-device NPU inference), `agt` (sandboxed agent runner), `knowledge` (semantic search), `file` (native file manager), `mon` (health popup), `power` (adaptive governor), `spark` (remote DGX Spark serving), `stack` (layer-shell bar), `syauth` (phone-as-key sudo), and the niri session — all supervised by `sy.target` and reachable over the same CLI + JSON surface, so an agent drives any plane the same way a human does.
+`sy` is one repo, one binary, one source of truth. A fresh machine plus `cargo build --release && ./target/release/sy apply` reproduces the entire system. The binary hosts every plane — `aiplane` (on-device NPU inference), `agt` (sandboxed agent runner), `knowledge` (semantic search), `file` (native file manager), `mon` (health popup), `spark` (remote DGX Spark serving), `stack` (layer-shell bar), `syauth` (phone-as-key sudo), and the niri session — all supervised by `sy.target` and reachable over the same CLI + JSON surface, so an agent drives any plane the same way a human does.
 
 This file follows the [llms.txt proposal](https://llmstxt.org/). Paths are repository-relative.
 
@@ -23,7 +23,6 @@ This file follows the [llms.txt proposal](https://llmstxt.org/). Paths are repos
 - [How-to: Serve a model on Spark](docs/how-to/serve-a-model-on-spark.md): dry-run admission, fixture recipe, stop.
 - [How-to: Apply a theme](docs/how-to/apply-a-theme.md): render `configs/` with a named palette and reload the session.
 - [How-to: Run sy doctor](docs/how-to/run-doctor.md): cross-plane health probes.
-- [How-to: Read power status](docs/how-to/read-power-status.md): live governor document from CLI or MCP.
 - [How-to: Run sy file](docs/how-to/run-sy-file.md): doctor and IPC from a shell.
 - [How-to: Troubleshoot sy file](docs/how-to/troubleshoot-sy-file.md): daemon socket, refused IPC, empty preview, niri binds.
 - [How-to: Write a sy plugin](docs/how-to/write-a-sy-plugin.md): minimum previewer in Rust, Python, or Bash.

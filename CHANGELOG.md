@@ -23,7 +23,7 @@ here.
 
 - User-facing documentation site (Docusaurus) under `website/`,
   fed by the Diátaxis tree in `docs/`: start-here page, search and
-  agent tutorials, NPU / MCP / Spark / theme / doctor / power
+  agent tutorials, NPU / MCP / Spark / theme / doctor
   how-tos, Spark and configuration reference, and explanations for
   no-snowflakes, agent-first CLI, and NPU-not-GPU.
 - Spark host-install how-to (`sy spark <host> install --dry-run`
@@ -59,9 +59,14 @@ here.
   separate process.
 - A sandboxed agent runner (`sy agt`) and an `aiplane` scheduler land
   alongside an observability core that journals every plane decision.
+- `sy profile` (visible alias `sy pwr`) and its Waybar tile provide a
+  picker, direct selection, and one-click cycling through Fedora's standard
+  `power-saver`, `balanced`, and `performance` profiles via `tuned-ppd`.
 
 ### Changed
 
+- `sy mon` snapshots now use schema version 2; the removed power panel
+  is no longer present in the snapshot document or dashboard grid.
 - The `knowledge` plane now consumes the `aiplane` daemon through thin
   facades: every embedding request crosses the JSON-over-Unix-socket
   IPC, so the "one process per NPU" rule holds even when several
@@ -71,6 +76,13 @@ here.
 - Internal layout follows SPEC §4.4: the agent sandbox, the `aiplane`
   scheduler, and the observability core move into dedicated modules.
   Public CLI surface is unchanged.
+
+### Removed
+
+- The experimental `sy power` plane, adaptive governor, TuneD replacement
+  shim, host policy files, telemetry model, and MCP tool. Fedora's TuneD and
+  `tuned-ppd` services are now the sole power-profile managers; `sy profile`
+  is only a frontend to their standard D-Bus API.
 
 ### Fixed
 

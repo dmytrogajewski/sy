@@ -19,10 +19,10 @@ use regex::Regex;
 use sy_core::mon::ring::Ring;
 use sy_core::mon::snapshot::SystemSnapshot;
 
-/// Stable identifier for each of the nine SCOPE §4 panels rendered in
+/// Stable identifier for each SCOPE §4 panel rendered in
 /// the popup grid. Variant order is the canonical digit-jump order
 /// (`1=Host`, `2=Accel`, `3=Net`, `4=Disk`, `5=Aiplane`, `6=Knowledge`,
-/// `7=Agents`, `8=Power`, `9=Supervisor`) — Step 18's `1`..`9` keybind
+/// `7=Agents`, `8=Supervisor`) — Step 18's digit keybind
 /// reads this order, and `Tab` cycles forward through it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelId {
@@ -33,15 +33,14 @@ pub enum PanelId {
     Aiplane,
     Knowledge,
     Agents,
-    Power,
     Supervisor,
 }
 
 impl PanelId {
-    /// Ordered list of all nine panel IDs in digit-jump / Tab-cycle
+    /// Ordered list of all panel IDs in digit-jump / Tab-cycle
     /// order. Single source of truth; `from_digit`, `next`, and `prev`
     /// all read this array so a new panel slots in by appending.
-    pub const ALL: [PanelId; 9] = [
+    pub const ALL: [PanelId; 8] = [
         PanelId::Host,
         PanelId::Accel,
         PanelId::Net,
@@ -49,15 +48,14 @@ impl PanelId {
         PanelId::Aiplane,
         PanelId::Knowledge,
         PanelId::Agents,
-        PanelId::Power,
         PanelId::Supervisor,
     ];
 
-    /// Map a 1-based digit (`1`..`9`) to its panel. Returns `None`
+    /// Map a 1-based digit (`1`..`8`) to its panel. Returns `None`
     /// for `0` or out-of-range so `keypress_to_message` can fall
     /// through to no-op.
     pub fn from_digit(d: u32) -> Option<PanelId> {
-        if (1..=9).contains(&d) {
+        if (1..=8).contains(&d) {
             Some(PanelId::ALL[(d - 1) as usize])
         } else {
             None
@@ -116,7 +114,7 @@ pub struct State {
     /// successful frame's timestamp for the operator-visible copy.
     pub banner: Option<Banner>,
     /// Currently-focused panel for keyboard navigation (Step 18).
-    /// `Tab` cycles forward, `Shift+Tab` backward, `1`..`9` jumps
+    /// `Tab` cycles forward, `Shift+Tab` backward, `1`..`8` jumps
     /// direct. Defaults to [`PanelId::Host`].
     pub focused_panel: PanelId,
     /// Some when a panel is full-screened (Enter on focused panel).

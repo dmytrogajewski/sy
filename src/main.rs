@@ -39,8 +39,7 @@ mod npu;
 // `Cmd::Plugin` reaches the full runtime through `plugin::cli::dispatch`.
 mod plugin;
 mod popup;
-mod power;
-mod pwr;
+mod profile;
 mod silent;
 mod sound;
 mod spark;
@@ -192,6 +191,20 @@ enum Cmd {
         #[arg(long)]
         waybar: bool,
     },
+    /// Switch Fedora's tuned-ppd profile; contains no sy power policy engine.
+    /// Examples: `sy profile`; `sy profile performance`; `sy profile status --json`.
+    #[command(visible_alias = "pwr")]
+    Profile {
+        /// menu | status | next | power-saver | balanced | performance
+        #[arg(env = "SY_PROFILE_ACTION")]
+        action: Option<String>,
+        /// Emit waybar-compatible JSON instead of acting.
+        #[arg(long, conflicts_with_all = ["action", "json"])]
+        waybar: bool,
+        /// Emit machine-readable JSON for status or the selected profile.
+        #[arg(long, conflicts_with = "waybar")]
+        json: bool,
+    },
     /// NVIDIA GPU applet — bar tile showing VRAM pressure + util.
     /// `--waybar` emits JSON; no args prints a human-readable summary.
     Gpu {
@@ -245,18 +258,6 @@ enum Cmd {
         /// Skip the upstream CLI's interactive confirmation prompt.
         #[arg(long)]
         yes: bool,
-    },
-    /// Power menu: tuned profile + lock/suspend/reboot/shutdown/logout
-    Pwr {
-        /// Emit waybar-compatible JSON
-        #[arg(long)]
-        waybar: bool,
-    },
-    /// ML-driven power orchestrator (sy-power). Subcommands:
-    /// status|daemon|apply|log|profile|explain|train|show|mcp.
-    Power {
-        #[command(subcommand)]
-        cmd: power::PowerCmd,
     },
     /// FIDO/U2F auth for swaylock via pam_u2f (enable|disable|status)
     Fido {
@@ -424,10 +425,6 @@ fn main() -> Result<()> {
             eprintln!("error: {}", se.msg);
             std::process::exit(se.code);
         }
-        if let Some(pe) = e.downcast_ref::<power::PowerError>() {
-            eprintln!("error: {}", pe.msg);
-            std::process::exit(pe.code);
-        }
         if let Some(se) = e.downcast_ref::<spark::cli::SparkError>() {
             se.exit();
         }
@@ -516,6 +513,11 @@ fn run() -> Result<()> {
         Cmd::Vol { action, waybar } => vol::run(action.as_deref(), waybar),
         Cmd::Bright { action, waybar } => bright::run(action.as_deref(), waybar),
         Cmd::Bat { waybar } => bat::run(waybar),
+        Cmd::Profile {
+            action,
+            waybar,
+            json,
+        } => profile::run(action.as_deref(), waybar, json),
         Cmd::Gpu { waybar } => gpu::run(waybar),
         Cmd::Npu { waybar } => npu::run(waybar),
         Cmd::Disk {
@@ -540,8 +542,6 @@ fn run() -> Result<()> {
             control.as_deref(),
             yes,
         ),
-        Cmd::Pwr { waybar } => pwr::run(waybar),
-        Cmd::Power { cmd } => power::dispatch(cmd),
         Cmd::Fido { action } => fido::run(action.as_deref()),
         Cmd::Wwan { action, json, yes } => wwan::run(action.as_deref(), json, yes),
         Cmd::Silent { action, waybar } => silent::run(action.as_deref(), waybar),

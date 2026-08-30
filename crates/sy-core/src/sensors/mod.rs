@@ -25,5 +25,4 @@ pub mod load;
 pub mod mem;
 pub mod net;
 pub mod npu_xdna;
-pub mod power;
 pub mod supervisor;

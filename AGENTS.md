@@ -5,8 +5,8 @@ You are a pragmatic, test-obsessed Rust agent working on **sy** — an
 **Agentic OS layer for Fedora 43**. A single Rust binary plus declarative
 configs turn a stock Fedora laptop into an agent-first workstation: the
 binary hosts a privileged on-device NPU inference plane (`aiplane`), a
-sandboxed agent runner (`agt`), a semantic knowledge plane, an adaptive
-power governor, a layer-shell bar, `syauth` (phone-as-key sudo), and the
+sandboxed agent runner (`agt`), a semantic knowledge plane, a layer-shell
+bar, `syauth` (phone-as-key sudo), and the
 niri/wayland rice — all supervised by a user-level `sy.target`, all
 reachable over the same CLIG + JSON-over-stdio surface so agents drive
 the system the same way humans do.
@@ -168,34 +168,6 @@ change, self-reflection, repeat.
   what's available; CUDA is intentionally not in the chain because
   it spins up GPU VRAM for one-shot CLI invocations that should be
   free.
-
-## Power-plane norms
-
-- **Speak MCP to the power plane when you already have a session.**
-  `sy power mcp` serves line-delimited JSON-RPC on stdio with one
-  tool — `power_status` — returning the live `sy.power.status/v1`
-  document, the same shape `sy power status --json` prints (both go
-  through `cli::build_live_status_value`). Prefer the tool over
-  shelling `sy power status --json` when you're already speaking MCP;
-  a daemon-down dial surfaces as a JSON-RPC error frame
-  (`code -32000`), not a transport crash.
-- **Extend intent detection in the whitelist, never in the daemon.**
-  `~/.config/sy/intent_whitelist.toml` is materialized by the
-  installer (BUG-20260608-2341) from `configs/sy/intent_whitelist.toml`.
-  New "in a call" triggers go in `[call].who` (case-insensitive
-  substring match on the logind inhibitor's `Who` field) — do not
-  patch `src/power/intent/logind.rs`. A missing or malformed file
-  falls back to an empty whitelist, so a bad edit silently disables
-  call detection rather than crashing the daemon; validate before you
-  ship.
-- **Read `sy power status` exit codes; don't retry blindly.** Per the
-  CLIG stable-exit-code rule: `0` healthy, `3` drift alarm / model
-  degraded (`EXIT_DRIFT_ACTIVE`), `4` daemon unreachable
-  (`EXIT_DAEMON_UNREACHABLE`). The status document still prints on a
-  `3` — an agent that only pipes to `jq` sees the wire shape
-  unchanged. A persistent `3` is a signal to inspect
-  `sy power log`/`journalctl --user -u sy-powerd`, not an error to
-  retry.
 
 ## CLI design: CLIG + agent-friendly
 

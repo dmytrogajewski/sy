@@ -24,17 +24,14 @@
 # syauth-integration Step 3 `Cmd::Syauth` flag expansion (the
 # `--service` / `--control` / `--yes` clap fields with their
 # docstrings; dispatch is a single-line shim into
-# `src/syauth.rs::run_cli`) — running total 1040 + 10 lines for the
-# sy-power Step 1 `Cmd::Power` clap variant (docstring + nested
-# `#[command(subcommand)]` block) + `mod power;` declaration +
-# dispatch arm; heavy lifting lives in `src/power/cli.rs::dispatch`
-# + 10 lines for `cargo fmt`-driven re-flow of the pre-existing
+# `src/syauth.rs::run_cli`) — running total 1040 + 10 lines for
+# `cargo fmt`-driven re-flow of the pre-existing
 # `Cmd::Syauth` match arm into the multi-line struct destructure
-# rustfmt requires once the file is touched. Running total: 1060.
+# rustfmt requires once the file is touched. Running total: 1050.
 # Pre-flight for the sy-mon roadmap extracted `list_themes` into
 # `src/themes.rs` (-23 body lines + 1 `mod themes;` declaration +
 # the `list_themes` call site rename — net -22). Running total:
-# 1038, with 22 lines of slack reserved for the sy-mon roadmap's
+# 1028, with 22 lines of slack reserved for the sy-mon roadmap's
 # `Cmd::Mon` clap variant (docstring + nested `#[command(
 # subcommand)]` block) + `mod mon;` declaration + dispatch arm
 # that will land in sy-mon Step 11. Plus 6 lines for the waybar
@@ -43,41 +40,41 @@
 # render loop + a four-line `if waybar_touched && !dry {
 # waybar::reload(); }` trailer so `sy apply` is the single deploy
 # verb per CLAUDE.md "no snowflakes" (SIGUSR2 plumbing itself
-# lives in `src/waybar.rs`). Running total: 1066. Plus 5 lines for
+# lives in `src/waybar.rs`). Running total: 1056. Plus 5 lines for
 # the yazi bootstrap follow-up landed `mod yazi_install;` + a
 # `println!("yazi:")` header + the `yazi_install::ensure_yazi(root,
 # dry)?;` call inside `apply`. sy-file-manager Step 36 retired that
 # bootstrap (the productivised yazi rice is gone now that `sy file`
 # is the canonical path) and the five lines were subtracted again.
-# Net for this zone: 0. Running total: 1066. Plus
+# Net for this zone: 0. Running total: 1056. Plus
 # 10 lines for the sy-file-manager roadmap Step 1 `mod plugin;`
 # declaration (gated `#[cfg(test)]` until the Step 2+ non-test
 # consumers in the bin land; the seven-line comment documents the
 # gate so Step 2 can drop it without surprise); heavy lifting lives
-# in `src/plugin/manifest.rs`. Running total: 1076. Plus 8 lines for
+# in `src/plugin/manifest.rs`. Running total: 1066. Plus 8 lines for
 # the sy-file-manager roadmap Step 8 `Cmd::Plugin` clap variant
 # (six-line docstring + nested `#[command(subcommand)]` block) +
 # dispatch arm; the gate flips off from `#[cfg(test)] mod plugin;`
 # to plain `mod plugin;` (net +1 — the `#[cfg(test)]` attribute went
 # away but the rewritten comment grew by one line). Heavy lifting
-# lives in `src/plugin/cli.rs`. Running total: 1084. Plus 13 lines
+# lives in `src/plugin/cli.rs`. Running total: 1074. Plus 13 lines
 # for the sy-file-manager roadmap Step 13 `mod file;` declaration +
 # `Cmd::File { path, cmd }` clap variant (six-line docstring + two
 # positional/`#[command(subcommand)]` fields) + dispatch arm; heavy
-# lifting lives in `src/file/cli.rs::dispatch`. Running total: 1097.
+# lifting lives in `src/file/cli.rs::dispatch`. Running total: 1087.
 # Plus 13 lines for the sy-wwan roadmap (4G/LTE modem plane): `mod
 # wwan;` declaration + `Cmd::Wwan { action, json }` clap variant
 # (four-line docstring + two fields) + dispatch arm; heavy lifting
 # (config parse, `nmcli` reconcile, `mmcli` status) lives in
-# `src/wwan.rs`. Running total: 1110. Plus 3 lines for the
+# `src/wwan.rs`. Running total: 1100. Plus 3 lines for the
 # `sy wwan modeswitch --yes` gate (the `--yes` clap field + docstring
 # on `Cmd::Wwan`, destructured in the one-line dispatch shim); the
 # AT+GTUSBMODE orchestration lives in `src/wwan.rs` +
-# `scripts/wwan_modeswitch.py`. Running total: 1113. Plus 5 lines to
+# `scripts/wwan_modeswitch.py`. Running total: 1103. Plus 5 lines to
 # grow `Cmd::Net` from a unit variant into `Net { waybar }` (docstring
 # + `--waybar` flag) so `sy net --waybar` can emit the captive-portal
 # indicator tile; the classifier + JSON live in `src/net.rs`. Running
-# total: 1118.
+# total: 1108.
 # Pass a lower value as $1 when later zones extract logic out of
 # main.rs and the budget should ratchet.
 #

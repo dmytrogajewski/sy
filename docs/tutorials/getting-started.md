@@ -138,8 +138,8 @@ systemctl --user enable --now sy.target
 ```
 
 That pulls in units such as `sy-agentd.service`,
-`sy-knowledge.service`, `sy-qdrant.service`, `sy-powerd.service`,
-and `sy-stack-bar.service`. The NPU plane (`aiplane`) joins the same
+`sy-knowledge.service`, `sy-qdrant.service`, and `sy-stack-bar.service`.
+The NPU plane (`aiplane`) joins the same
 group; it binds `/dev/accel/accel0` only if that device exists.
 
 ## Step 7 — Run sy doctor

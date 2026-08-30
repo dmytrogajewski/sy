@@ -32,8 +32,8 @@ Six months later you cannot rebuild the laptop.
 `sy` is one answer to that: an **Agentic OS layer for Fedora 43**.
 One Rust binary plus the `configs/` tree in this repo. You clone,
 you build, you run `sy apply`, you enable `sy.target`. The desktop,
-the search index, the power governor, the file manager, and the
-agent plumbing come from that apply. An agent talks to the same
+the search index, the file manager, and the agent plumbing come from
+that apply. An agent talks to the same
 `sy` commands you do.
 
 The name is short on purpose. `sy` is the orchestrator, not a
@@ -58,10 +58,8 @@ wins the PAM stack with a biometric tap. If the phone is in the
 other room, FIDO or your password still works. syauth is
 `sufficient`, never a lockout.
 
-The power governor has already picked a profile from battery,
-thermal headroom, and whether you are in a call. You can ask
-`sy power status --json` why. Super+M opens a health popup: CPU,
-NPU holders, knowledge queue, agent denials.
+Super+M opens a health popup with CPU, NPU holders, knowledge queue,
+and agent denials.
 
 If a DGX Spark is on the desk, `sy spark dgx-spark serve …` is how
 you start a signed engine. The laptop never holds Docker. Chat
@@ -82,8 +80,7 @@ the whole list for bring-up.
 | Rebuild the machine from git | `sy apply` renders `configs/` and starts `sy.target` |
 | Search folders you own | `sy knowledge` (CLI, MCP, waybar tile) |
 | Browse files in a window | `sy file`, Super+E |
-| Let an agent use the same tools | `sy auto` writes MCP configs; `sy knowledge mcp`, `sy power mcp`, `sy file mcp`, `sy mon mcp` |
-| See why the laptop picked a power profile | `sy power status` |
+| Let an agent use the same tools | `sy auto` writes MCP configs; `sy knowledge mcp`, `sy file mcp`, `sy mon mcp` |
 | Glance at plane health | `sy mon` / Super+M, or `sy doctor` |
 | Theme the session from the repo | `sy apply --theme …` then reload niri |
 

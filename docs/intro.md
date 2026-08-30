@@ -13,8 +13,8 @@ an AI agent can drive the same way.
 
 It is one Rust program and the `configs/` tree in this git repo.
 You build the binary, run `sy apply`, and enable `sy.target`. The
-compositor session, semantic search, file manager, power governor,
-and agent plumbing then match the repo. If the disk dies, a fresh
+compositor session, semantic search, file manager, and agent plumbing
+then match the repo. If the disk dies, a fresh
 Fedora install plus those steps is the same machine. That promise
 is the product.
 
@@ -87,7 +87,6 @@ How-to (you already know the job):
 - [Wire MCP into your agents](./how-to/wire-mcp-into-agents.md)
 - [Apply a theme](./how-to/apply-a-theme.md)
 - [Run sy doctor](./how-to/run-doctor.md)
-- [Read power status](./how-to/read-power-status.md)
 - [Install the Spark agent](./how-to/install-spark.md)
 - [Serve a model on Spark](./how-to/serve-a-model-on-spark.md)
 - [Run sy file from a shell](./how-to/run-sy-file.md)

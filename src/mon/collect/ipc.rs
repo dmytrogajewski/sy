@@ -82,11 +82,6 @@ const METRIC_COLUMNS: &[(&str, usize)] = &[
     ("sy_mem_used_mib", 1),
     ("sy_swap_used_mib", 2),
     ("sy_load_avg_1m", 3),
-    // Step 17 reserves col 4 for the power-governor's cumulative
-    // regret, which the `view::power` panel reads as its chart input.
-    // The collector's `project_row` leaves it at 0.0 until Step 20
-    // wires per-plane data sources into the host tick.
-    ("sy_power_regret_cum", 4),
 ];
 
 /// Public projection of the metric names this aggregator understands,
@@ -98,15 +93,7 @@ pub const KNOWN_METRICS: &[&str] = &[
     "sy_mem_used_mib",
     "sy_swap_used_mib",
     "sy_load_avg_1m",
-    "sy_power_regret_cum",
 ];
-
-/// Column index for the power-governor regret metric. Reserved by
-/// Step 17 so the `view::power` panel can read the same slice the
-/// aggregator (Step 20+) will eventually fill. Out-of-tree tests can
-/// pre-populate the ring at this index to assert the panel's history
-/// projection matches what the chart will paint.
-pub const POWER_REGRET_COL: usize = 4;
 
 /// Resolve a metric name to a ring column index. Returns the sorted
 /// list of known names in the error message so an operator typo gets a

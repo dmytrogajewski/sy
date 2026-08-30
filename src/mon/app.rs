@@ -82,7 +82,7 @@ pub enum Message {
     /// backward. The reducer rotates `state.focused_panel` through
     /// [`PanelId::ALL`].
     CycleFocus { forward: bool },
-    /// Step 18: digit-jump (`1`..`9`). Sets `state.focused_panel`
+    /// Step 18: digit-jump (`1`..`8`). Sets `state.focused_panel`
     /// directly so the user can reach any panel in one keystroke.
     FocusPanel(PanelId),
     /// Step 18: `Enter` toggles the focused panel between collapsed
@@ -122,7 +122,7 @@ pub enum Message {
 /// - `Tab` → cycle panel focus forward; `Shift+Tab` cycles backward.
 ///   (Shift detection lives at the [`Subscription`] layer; this
 ///   function takes the modifier flag as an argument.)
-/// - `1`..`9` → jump focus to the matching [`PanelId`].
+/// - `1`..`8` → jump focus to the matching [`PanelId`].
 /// - `Enter` → toggle expand on the focused panel.
 /// - `/` → open the filter overlay.
 /// - `j` / `k` → scroll down / up.
@@ -155,7 +155,7 @@ pub fn keypress_to_message(key: &Key, shift: bool, filter_open: bool) -> Option<
                 '/' => Some(Message::OpenFilter),
                 'j' => Some(Message::Scroll { delta: 1 }),
                 'k' => Some(Message::Scroll { delta: -1 }),
-                d @ '1'..='9' => PanelId::from_digit(d.to_digit(10)?).map(Message::FocusPanel),
+                d @ '1'..='8' => PanelId::from_digit(d.to_digit(10)?).map(Message::FocusPanel),
                 _ => None,
             }
         }
@@ -735,15 +735,15 @@ mod tests {
             PanelId::Disk,
             "Tab × 3 from Host must land on Disk (index 3)"
         );
-        // Pure-helper guard: nine Tabs is one full cycle.
+        // Pure-helper guard: eight Tabs is one full cycle.
         let mut state3 = state_with_prepopulated_ring(0);
-        for _ in 0..9 {
+        for _ in 0..8 {
             let _ = update(&mut state3, Message::CycleFocus { forward: true });
         }
         assert_eq!(
             state3.focused_panel,
             PanelId::Host,
-            "nine Tabs must wrap back to Host"
+            "eight Tabs must wrap back to Host"
         );
     }
 

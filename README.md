@@ -9,8 +9,8 @@ snowflakes: `cargo build --release && ./target/release/sy apply` on a
 fresh machine reproduces the entire system.
 
 You get a desktop that matches this git tree, search over folders
-you register, a file manager on Super+E, a power governor you can
-ask *why*, and the same CLI for a coding agent. An NPU, a DGX
+you register, a file manager on Super+E, and the same CLI for a
+coding agent. An NPU, a DGX
 Spark, and phone-as-key sudo are extras — bring-up does not need
 them. The story is
 [What sy is](docs/explanation/what-sy-is.md); the rest of the docs
@@ -23,12 +23,12 @@ sy apply              # render configs/* → ~/.config/, ~/.local/share/, /etc/*
 sy aiplane daemon     # on-device NPU inference plane (ORT + VitisAI EP)
 sy agt …              # sandboxed agent runner
 sy knowledge daemon   # semantic search over local files (NPU-accelerated)
-sy power status       # adaptive power governor (ppd shim + bandit + MCP)
 sy file               # native iced file manager (Mod+E)
 sy mon                # layer-shell health dashboard (Super+m)
 sy spark HOST …       # remote DGX Spark model appliance
 sy auto               # auto-configure MCP servers across agents (Claude, …)
 sy stack bar          # layer-shell waybar replacement
+sy profile performance # switch Fedora's tuned-ppd profile (alias: sy pwr)
 sy syauth doctor      # phone-as-key sudo (PAM + BlueZ + Android)
 …
 ```
@@ -225,9 +225,9 @@ actions and are reported as `not_run` by default.
 
 ### `agt` — sandboxed agent runner
 
-`sy agt` runs coding/inference agents under an intent-whitelisted
-sandbox. The whitelist lives in [`configs/sy/intent_whitelist.toml`](configs/sy/intent_whitelist.toml);
-the runner enforces it before dispatching tool calls. Used by `sy auto`
+`sy agt` runs coding/inference agents under policy-profile sandboxes.
+The profiles live under [`configs/policy/profiles/`](configs/policy/profiles/);
+the runner enforces them before dispatching tool calls. Used by `sy auto`
 to plumb MCP servers into Claude / Cursor / Codex / Gemini configs
 without each tool re-implementing tool-permission policy.
 
@@ -279,32 +279,6 @@ known aliases (`X5 → Пятёрочка/Перекрёсток/Чижик`) in
 Voice/video notes can be transcribed into the index (Whisper, CPU/iGPU)
 by building with `--features transcribe` (off by default — it vendors
 whisper.cpp and downloads a model).
-
-### `power` — adaptive power governor
-
-The `sy-powerd` user daemon (under `src/power/`) is a power-profiles-daemon
-shim with an adaptive layer on top: cpufreq governor selection, EPP,
-turbo, and `net.hadess.PowerProfiles` D-Bus name ownership are all
-managed declaratively from [`configs/sy/power.toml`](configs/sy/power.toml).
-A contextual bandit picks profile transitions; every decision is
-journaled and reachable over MCP (`sy power mcp`).
-
-```
-sy power status            # current profile, source, rationale
-sy power apply             # apply config rules
-sy power show --json       # full snapshot (governor, EPP, bandit weights)
-```
-
-`sy power show` renders an offline PDF report over the decision journal:
-an executive summary, the per-arm decision mix, cumulative regret against
-the rules-only baseline, and power/reward plots — so you can audit what
-the bandit actually did over a window. Add `--json` for the
-`sy.power.report/v1` schema instead of a PDF, `--out` to pin the path, and
-`--since` to widen the window. The PDF is byte-identical over the same
-audit window once its two wall-clock inputs are pinned via
-`SY_POWER_REPORT_TIMESTAMP` and `SY_POWER_REPORT_MODEL_SHA`.
-
-<img src="assets/sy-power-report.png" alt="sy power show report — executive summary and methodology page" width="600" />
 
 ### Rice — niri + waybar + …
 
@@ -374,7 +348,6 @@ the PAM module's control flags and arguments are in
 │   ├── aiplane/              # NPU plane: registry, session pool, IPC, daemon
 │   ├── agt/                  # sandboxed agent runner
 │   ├── knowledge/            # qdrant-backed semantic search
-│   ├── power/                # adaptive power governor
 │   ├── supervision/          # sy.target supervisor + unit linker
 │   ├── stack/                # layer-shell waybar replacement
 │   ├── doctor/               # cross-plane health probes
@@ -382,7 +355,6 @@ the PAM module's control flags and arguments are in
 ├── configs/                  # declarative config (rendered by `sy apply`)
 │   ├── systemd/{system,user}/*.service|*.target
 │   ├── niri/ waybar/ mako/ fuzzel/ foot/ swaylock/
-│   ├── sy/{power,intent_whitelist}.toml
 │   ├── dbus-1/ policy/ selinux/ udev/ modprobe.d/ grub/ dracut/
 │   └── …
 ├── scripts/                  # one-shot helpers (prep_npu_workload.py …)
@@ -551,12 +523,6 @@ sy knowledge mcp                   # MCP server (stdio): knowledge_search,
                                    #   knowledge_get_chunk, knowledge_index,
                                    #   knowledge_list_sources
 
-# power
-sy power status [--json]
-sy power apply
-sy power show --json
-sy power mcp
-
 # mon — system health popup + 1 Hz aggregator
 sy mon                             # toggle the layer-shell popup (Super+m)
 sy mon snapshot [--json]           # one-shot snapshot from the aggregator
@@ -568,7 +534,7 @@ sy mon waybar                      # waybar custom-module tile (ok/degraded/down
 sy agt run <prompt> [--profile <name>]
 
 # auto-configure MCP across agents
-sy auto                            # plumbs sy-knowledge / sy-power into Claude, Cursor, Codex, Gemini
+sy auto                            # configures sy MCP servers for Claude, Cursor, Codex, Gemini
 
 # syauth
 sy syauth install-pam --service sudo
