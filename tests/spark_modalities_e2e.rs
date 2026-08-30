@@ -35,6 +35,10 @@ fn vision_profile() -> gateway::GatewayProfile {
             health_disable_thinking: true,
         }),
         embeddings: None,
+        startup_protocol_probe: true,
+        native_responses: false,
+        native_response_timeout_seconds: 0,
+        stream_idle_timeout_seconds: 0,
         sampling: gateway::SamplingPolicy::default(),
     }
 }
@@ -309,7 +313,9 @@ async fn vision_readiness_uses_the_exact_signed_inline_fixture() {
             } else {
                 assert!(request.starts_with("POST /v1/chat/completions "));
                 assert!(request.contains("data:image/png;base64,iVBORw0KGgo"));
+                assert!(request.contains(r#""thinking_budget_tokens":0"#));
                 assert!(request.contains(r#""enable_thinking":false"#));
+                assert!(request.contains(r#""reasoning_strength":"low""#));
                 r#"{"object":"chat.completion","model":"Ornith-1.5-9B","choices":[{"index":0,"message":{"role":"assistant","content":"black"},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":1,"total_tokens":10}}"#
             };
             socket

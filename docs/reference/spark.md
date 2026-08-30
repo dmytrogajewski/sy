@@ -8,8 +8,8 @@ install steps see [How to install the Spark agent](../how-to/install-spark.md).
 For serving a model see [How to serve a model on Spark](../how-to/serve-a-model-on-spark.md).
 
 The laptop CLI never holds Docker authority. Engines run on an
-internal managed bridge; `ps` reports desired versus observed
-state without printing that address.
+internal managed bridge; `ps` reports only active model processes
+without printing that address.
 
 Maintenance uses SSH only. `upgrade` accepts the install artifact environment
 variables; `rollback` and `cert rotate` remain usable when HTTPS is unavailable.
@@ -29,7 +29,7 @@ bounded, cursored, redacted, and protected by `logs:read`.
 
 ```text
 sy spark <host> install --dry-run --json
-sy spark <host> install --yes --release-signature <sig> --release-public-key <pub>
+sy spark <host> install --yes --release-manifest <SHA256SUMS> --release-signature <sig> --release-public-key <pub>
 sy spark <host> upgrade --dry-run --json
 sy spark <host> rollback --dry-run --json
 sy spark <host> cert rotate [--ca] --dry-run --json
@@ -37,6 +37,7 @@ sy spark <host> status --json
 sy spark <host> doctor --json
 sy spark <host> serve <model> [--name <instance>] [--detach] [--dry-run] [--json]
 sy spark <host> launch <codex|claude|opencode> [--model <model>] [--config] [--restore] [-y] [-- <agent-args>...]
+sy spark <host> ls [--json]
 sy spark <host> ps [--json]
 sy spark <host> logs <instance> [--limit N]
 sy spark <host> stop <instance>
@@ -46,6 +47,13 @@ sy spark <host> client-config <name> --client <codex|claude-code>
 
 ## Description
 
+`ls` is the everyday inventory of verified models available to run. Its default
+columns are `NAME`, `ID`, `SIZE`, and `MODIFIED`. `ps` is the active lifecycle
+view: it omits absent and failed historical records and prints `NAME`, `MODEL`,
+`ENGINE`, `CONTEXT`, and `STATE`. `ps --json` contains the same active set. Use
+`show`, `logs`, and `ls --json` when complete immutable identity, provenance, or
+diagnostic state is required.
+
 Before an engine lifecycle is authorised, the agent requires one
 fresh executor-owned snapshot and checks aggregate cold-start
 memory, live `MemAvailable`, full-memory PSI, swap-in activity,
@@ -53,12 +61,20 @@ disk reserve, immutable model provenance, and the single high-memory
 start lease. Stop does not take that lease: reducing memory must remain
 available while a start or startup reconciliation is active.
 
-The root-owned `/etc/sy/spark/engine.toml` is the only serving policy. It owns
-the vLLM image repository and digest, entrypoint, bounded arguments, environment,
+The root-owned `/etc/sy/spark/engines/*.toml` catalog is the serving policy. It
+owns each engine image and digest, entrypoint, bounded arguments, environment,
 mounts, network, UID, resource envelope, health probe, public route allowlist,
-context length, sampling defaults, and finite profiles selected from the model's `config.json`
-`model_type`. Rust owns schema validation and security invariants only. It does
-not embed model IDs, image versions, digests, tuning values, or per-model commands.
+sampling defaults, and finite profiles. A signed `models.toml` entry may select
+an `engine_profile` explicitly; otherwise selection falls back to the model's
+`config.json` `model_type` and then the engine default. Rust owns schema
+validation and security invariants only. It does not embed model IDs, image
+versions, digests, tuning values, or per-model commands.
+
+Auxiliary artifact roles are open lowercase identifiers declared by the model
+catalog. Each engine configuration must either bind a role to an exact confined
+file argument or list the role under `ignored_roles`; an unbound role fails
+planning. Profiles can therefore add projectors, MTP drafts, adapters, or future
+engine inputs without adding model-aware Rust branches.
 
 `serve` accepts only a verified model reference and optional instance name. The
 HTTP schema rejects unknown fields, so callers cannot inject an image,
@@ -125,6 +141,9 @@ victim is stopped; it never selects unlabeled work.
   `engine.toml`. Unknown model types use the declared default profile. Profiles
   cannot override the image, executable, mounts, network, UID, or arbitrary
   command line.
+- The `qwen3.8-mtp` llama.cpp profile preserves reasoning and selects
+  `draft-mtp` speculation with a verified Q4_0 MTP artifact. It imposes no
+  reasoning token guard.
 
 ## `client-config`
 
@@ -141,14 +160,16 @@ routes its model calls to one exact managed Spark instance. A healthy matching
 instance is reused; otherwise the configuration-driven `serve` operation is
 followed to healthy. The launcher never guesses or downloads a missing model.
 
-`--model` selects a verified model ID, canonical identity, repository, or exact
-alias. Without it, the saved host/integration selection is reused; an
-interactive terminal can select from installed models. `--config` writes only
-launch-owned state/config and exits. `--dry-run` performs no local or remote
-mutation. `--json` is valid with either of those non-agent modes. `--restore`
-removes only sy-owned Codex profile/catalog files. `-y` permits the fixed Claude
-or OpenCode installer when the executable is absent. Only arguments after `--`
-are forwarded, without a shell.
+`--model` selects a verified model ID, canonical identity, repository, exact
+alias, or exact instance name shown by `sy spark <host> ps`. A stopped selected
+instance is re-served under that same managed name. Without `--model`, the saved
+host/integration selection is reused; an interactive terminal can select from
+installed models. `--config` writes only launch-owned state/config and exits.
+`--dry-run` performs no local or remote mutation. `--json` is valid with either
+of those non-agent modes. `--restore` removes only sy-owned Codex
+profile/catalog files. `-y` permits the fixed Claude or OpenCode installer when
+the executable is absent. Only arguments after `--` are forwarded, without a
+shell.
 
 State is serialized with a local lock. Metadata stores only the token ID; the
 bearer is held separately in a mode-0600 credential file. The child receives an

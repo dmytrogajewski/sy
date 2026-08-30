@@ -1,0 +1,121 @@
+schema = "sy.spark.engine/v3"
+id = "llama-cpp-cuda13-arm64"
+priority = 100
+family = "llama.cpp"
+version = "e70802a01-cublas-sm121-o2"
+image_transport = "local"
+image_repository = "sy-spark/llama-cpp"
+image_digest = "sha256:8d4c012406f79dcce74fca4a8dd0edb819dc2009f5c06727c93f5aa9d58bb6dd"
+image_architecture = "arm64"
+entrypoint = ["/app/llama-server"]
+arguments = [
+  "--host", "0.0.0.0",
+  "--port", "{port}",
+  "--alias", "{served_model}",
+  "--n-gpu-layers", "999",
+  "--ctx-size", "0",
+  "--parallel", "1",
+  "--cont-batching",
+]
+environment = [
+  "HOME=/tmp",
+  "CUDA_CACHE_PATH=/compile-cache/cuda",
+  "XDG_CACHE_HOME=/compile-cache/xdg",
+  "GGML_CUDA_DISABLE_GRAPHS=1",
+  "UMASK=0027",
+]
+default_profile = "generic"
+model_cache_root = "/var/lib/sy-spark/huggingface"
+compile_cache_root = "/var/lib/sy-spark/compile-cache"
+network = "sy-spark-internal"
+port = 8000
+run_as_uid = 65534
+pid_limit = 512
+seccomp = "default"
+ipc_mode = "private"
+shm_size_bytes = 67108864
+tmpfs = ["/tmp"]
+startup_deadline_seconds = 900
+health_method = "GET"
+health_path = "/health"
+semantic_prompt = "Generate one completion token."
+semantic_max_tokens = 1
+model_mount = "artifact_files"
+
+[matcher]
+formats = ["gguf"]
+required_capabilities = ["text_generation"]
+
+[artifact_arguments]
+primary = ["--model", "{model_file}"]
+ignored_roles = ["weight_shard"]
+
+[[artifact_arguments.bindings]]
+role = "projector"
+arguments = ["--mmproj", "{auxiliary_file}"]
+
+[[artifact_arguments.bindings]]
+role = "draft_model"
+arguments = ["--model-draft", "{auxiliary_file}"]
+
+[resources]
+image_bytes = 5000000000
+startup_peak_bytes = 68719476736
+steady_peak_bytes = 68719476736
+compile_cache_bytes = 8589934592
+
+[[routes]]
+method = "GET"
+path = "/v1/models"
+
+[[routes]]
+method = "POST"
+path = "/v1/completions"
+
+[[routes]]
+method = "POST"
+path = "/v1/chat/completions"
+
+[[routes]]
+method = "POST"
+path = "/tokenize"
+
+[[profiles]]
+id = "generic"
+model_types = []
+context_window = 65536
+arguments = ["--jinja", "--reasoning-preserve"]
+capabilities = ["text_generation", "tool_calling", "vision"]
+startup_protocol_probe = true
+sampling = { temperature = 0.6, top_p = 0.95, top_k = 20, min_p = 0.0, presence_penalty = 0.0, repetition_penalty = 1.0 }
+vision = { processor_sha256 = "1a9e22a3ab130c186f632fef78c8b0bf8aea5585a6795bf9021ca447c9bf335d", media_types = ["image/jpeg", "image/png", "image/webp"], max_bytes = 524288, max_total_bytes = 786432, max_count = 2, max_width = 4096, max_height = 4096, health_media_type = "image/png", health_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAOAAAADgAQAAAAAyVldMAAAAHUlEQVRYw+3BMQEAAADCoPVPbQZ/oAAAAAAAAHgMGWAAAct2tnAAAAAASUVORK5CYII=", health_image_sha256 = "1b8ab2918e9fb346d8ff5b7579372510b0d8b1566d590dac31aea311fff15fc6", health_prompt = "Name the single dominant color using one lowercase word.", health_expected_text = "black", health_max_tokens = 256, health_disable_thinking = true }
+
+[[profiles]]
+id = "ornith-coding"
+model_types = []
+context_window = 65536
+arguments = ["--jinja", "--reasoning-preserve", "--reasoning-budget", "16384", "--reasoning-budget-message", "Reasoning budget reached. Stop analyzing and use the available tools to act now."]
+capabilities = ["text_generation", "tool_calling", "vision"]
+startup_protocol_probe = true
+sampling = { temperature = 0.6, top_p = 0.95, top_k = 20, min_p = 0.0, presence_penalty = 0.0, repetition_penalty = 1.0 }
+vision = { processor_sha256 = "1a9e22a3ab130c186f632fef78c8b0bf8aea5585a6795bf9021ca447c9bf335d", media_types = ["image/jpeg", "image/png", "image/webp"], max_bytes = 524288, max_total_bytes = 786432, max_count = 2, max_width = 4096, max_height = 4096, health_media_type = "image/png", health_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAOAAAADgAQAAAAAyVldMAAAAHUlEQVRYw+3BMQEAAADCoPVPbQZ/oAAAAAAAAHgMGWAAAct2tnAAAAAASUVORK5CYII=", health_image_sha256 = "1b8ab2918e9fb346d8ff5b7579372510b0d8b1566d590dac31aea311fff15fc6", health_prompt = "Name the single dominant color using one lowercase word.", health_expected_text = "black", health_max_tokens = 256, health_disable_thinking = true }
+
+[[profiles]]
+id = "qwen3.8-mtp"
+model_types = []
+context_window = 65536
+arguments = ["--jinja", "--reasoning-preserve", "--spec-default", "--spec-type", "draft-mtp"]
+capabilities = ["text_generation", "tool_calling", "vision"]
+startup_protocol_probe = false
+sampling = { temperature = 0.6, top_p = 0.95, top_k = 20, min_p = 0.0, presence_penalty = 0.0, repetition_penalty = 1.0 }
+vision = { processor_sha256 = "1a9e22a3ab130c186f632fef78c8b0bf8aea5585a6795bf9021ca447c9bf335d", media_types = ["image/jpeg", "image/png", "image/webp"], max_bytes = 524288, max_total_bytes = 786432, max_count = 2, max_width = 4096, max_height = 4096, health_media_type = "image/png", health_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAOAAAADgAQAAAAAyVldMAAAAHUlEQVRYw+3BMQEAAADCoPVPbQZ/oAAAAAAAAHgMGWAAAct2tnAAAAAASUVORK5CYII=", health_image_sha256 = "1b8ab2918e9fb346d8ff5b7579372510b0d8b1566d590dac31aea311fff15fc6", health_prompt = "Name the single dominant color using one lowercase word.", health_expected_text = "black", health_max_tokens = 256, health_disable_thinking = true }
+
+[[profiles]]
+id = "qwen3.8-flash-next"
+model_types = []
+context_window = 65536
+arguments = ["--jinja", "--reasoning-preserve", "--reasoning-effort", "low", "--ctx-size", "65536", "--cache-type-k", "q8_0", "--cache-type-v", "q8_0"]
+capabilities = ["text_generation", "tool_calling"]
+startup_protocol_probe = true
+resources = { image_bytes = 5000000000, startup_peak_bytes = 105000000000, steady_peak_bytes = 105000000000, compile_cache_bytes = 8589934592 }
+sampling = { temperature = 1.0, top_p = 0.95, top_k = 20, min_p = 0.0, presence_penalty = 0.0, repetition_penalty = 1.0 }

@@ -1,7 +1,7 @@
 //! Root-only, peer-authorized Spark executor boundary.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     future::Future,
     io::Read,
     os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -17,8 +17,8 @@ use std::{
 use bollard::{
     models::{
         ContainerCreateBody, ContainerUpdateBody, DeviceRequest, EndpointSettings, EventMessage,
-        EventMessageTypeEnum, HostConfig, ImageInspect, Mount, MountType, NetworkCreateRequest,
-        NetworkingConfig, RestartPolicy, RestartPolicyNameEnum,
+        EventMessageTypeEnum, HealthConfig, HostConfig, ImageInspect, Mount, MountType,
+        NetworkCreateRequest, NetworkingConfig, RestartPolicy, RestartPolicyNameEnum,
     },
     query_parameters::{
         CreateContainerOptionsBuilder, CreateImageOptionsBuilder, EventsOptionsBuilder,
@@ -39,33 +39,103 @@ use tokio::net::UnixListener;
 use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
+#[cfg(test)]
+use super::recipe::{Accelerator, RecipeCatalog, RecipeHost};
 use super::{
-    engine::EnginePolicy,
+    engine::{
+        artifact_fingerprint, EngineCatalog, EngineHealthBody, EngineModelMount, EnginePolicy,
+    },
     gateway::GatewayProfile,
-    recipe::{Accelerator, RecipeCatalog, RecipeHost},
-    wire::RecipeCatalogDocument,
+    MAX_ENGINE_STARTUP_DEADLINE_SECONDS,
 };
 use super::{
     resources::{
         HostResourceSnapshot, HostSampler, ProcfsHostSampler, ResourcePolicy, ResourcePolicyConfig,
     },
-    wire::{DockerCapability, ExecutorHealth, ExecutorSnapshot, ProtectedHostSnapshot},
+    wire::{
+        DockerCapability, ExecutorHealth, ExecutorSnapshot, ModelArtifactsDocument,
+        ProtectedHostSnapshot,
+    },
 };
 
 pub const EXECUTOR_SOCKET: &str = "/run/sy-spark/executor.sock";
-const RECIPE_CATALOG_DIR: &str = "/etc/sy/spark-recipes.d";
 const RESOURCE_POLICY_PATH: &str = "/etc/sy/spark-agent.toml";
-const ENGINE_POLICY_PATH: &str = "/etc/sy/spark/engine.toml";
-#[cfg(test)]
+const ENGINE_CATALOG_PATH: &str = "/etc/sy/spark/engines";
 const COMPILE_CACHE_IDENTITY_SCHEMA: &str = "sy.spark.compile-cache-identity/v1";
 const EXECUTOR_METHOD: &str = "spark.executor.execute";
-const MAX_REQUEST_FRAME: usize = 16 * 1024;
-const MAX_DEADLINE_MS: u64 = super::recipe::MAX_STARTUP_DEADLINE_SECONDS * 1_000;
+const MAX_REQUEST_FRAME: usize = 512 * 1024;
+const MAX_DEADLINE_MS: u64 = MAX_ENGINE_STARTUP_DEADLINE_SECONDS * 1_000;
 const DOCKER_TIMEOUT_SECONDS: u64 = 3;
 const HEARTBEAT_STALE_SECONDS: u64 = 5;
 const MAX_ENGINE_LOG_LINES: usize = 256;
 const MAX_MANAGED_CONTAINERS: usize = 256;
 const MAX_MANAGED_EVENTS_PER_WINDOW: usize = 1024;
+const MAX_CANDIDATE_CACHE_ENTRIES: usize = 1_000_000;
+
+fn allocated_tree_bytes(path: &Path, root: &Path) -> Result<u64, ()> {
+    if !path.starts_with(root)
+        || std::fs::symlink_metadata(root)
+            .map_err(|_| ())?
+            .file_type()
+            .is_symlink()
+    {
+        return Err(());
+    }
+    let mut pending = vec![path.to_owned()];
+    let mut seen = HashSet::new();
+    let mut total = 0_u64;
+    while let Some(entry) = pending.pop() {
+        let metadata = match std::fs::symlink_metadata(&entry) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && entry == path => {
+                return Ok(0)
+            }
+            Err(_) => return Err(()),
+        };
+        if metadata.file_type().is_symlink() || !seen.insert((metadata.dev(), metadata.ino())) {
+            return Err(());
+        }
+        total = total
+            .checked_add(metadata.blocks().checked_mul(512).ok_or(())?)
+            .ok_or(())?;
+        if metadata.is_dir() {
+            match std::fs::read_dir(&entry) {
+                Ok(children) => {
+                    for child in children {
+                        pending.push(child.map_err(|_| ())?.path());
+                        if pending.len() + seen.len() > MAX_CANDIDATE_CACHE_ENTRIES {
+                            return Err(());
+                        }
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {}
+                Err(_) => return Err(()),
+            }
+        }
+    }
+    Ok(total)
+}
+
+#[cfg(not(test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Accelerator {
+    Cpu,
+    Nvidia,
+}
+
+#[cfg(not(test))]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecipeHost {
+    pub architecture: String,
+    pub gpu_model: String,
+    pub compute_capability: String,
+    pub dgx_build: String,
+    pub driver_version: String,
+    pub toolkit_version: String,
+    pub protected_fingerprint: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -74,8 +144,45 @@ pub struct StartInstanceInput {
     pub generation: u64,
     pub model_commit: String,
     pub model_repository: String,
-    pub recipe_id: String,
+    pub engine_id: String,
+    pub engine_fingerprint: String,
+    pub artifacts: ModelArtifactsDocument,
+    pub artifact_fingerprint: String,
     pub operation_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateStorageInput {
+    pub instance_id: String,
+    pub model_commit: String,
+    pub model_repository: String,
+    pub engine_id: String,
+    pub engine_fingerprint: String,
+    pub artifacts: ModelArtifactsDocument,
+    pub artifact_fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateStorage {
+    pub image_present: bool,
+    pub compile_cache_allocated_bytes: u64,
+    pub compile_cache_namespace: String,
+}
+
+impl From<&StartInstanceInput> for CandidateStorageInput {
+    fn from(input: &StartInstanceInput) -> Self {
+        Self {
+            instance_id: input.instance_id.clone(),
+            model_commit: input.model_commit.clone(),
+            model_repository: input.model_repository.clone(),
+            engine_id: input.engine_id.clone(),
+            engine_fingerprint: input.engine_fingerprint.clone(),
+            artifacts: input.artifacts.clone(),
+            artifact_fingerprint: input.artifact_fingerprint.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,6 +208,7 @@ struct ContainerMount {
     source: String,
     target: String,
     read_only: bool,
+    expected_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +224,8 @@ struct ContainerSpec {
     port: u16,
     health_method: String,
     health_path: String,
+    #[serde(default)]
+    health_body: Option<EngineHealthBody>,
     allowed_routes: Vec<(String, String)>,
     gateway_profile: GatewayProfile,
     served_model: String,
@@ -125,6 +235,8 @@ struct ContainerSpec {
     mounts: Vec<ContainerMount>,
     model_cache_root: String,
     compile_cache_root: String,
+    ipc_mode: String,
+    shm_size_bytes: u64,
     tmpfs: Vec<String>,
     run_as_uid: u32,
     pid_limit: u32,
@@ -151,6 +263,8 @@ pub struct ObservedEngine {
     pub restart_policy: String,
     pub health_method: String,
     pub health_path: String,
+    #[serde(default)]
+    pub health_body: Option<EngineHealthBody>,
     pub allowed_routes: Vec<(String, String)>,
     pub gateway_profile: GatewayProfile,
     pub served_model: String,
@@ -181,7 +295,9 @@ pub struct ManagedContainerObservation {
     pub role: Option<String>,
     pub model_commit: Option<String>,
     pub model_repository: Option<String>,
-    pub recipe_id: Option<String>,
+    pub engine_id: Option<String>,
+    pub engine_fingerprint: Option<String>,
+    pub artifact_fingerprint: Option<String>,
     pub image: Option<String>,
     pub networks: Vec<String>,
     pub restart_policy: String,
@@ -194,7 +310,10 @@ pub struct ReconcileExpectation {
     pub generation: u64,
     pub model_commit: String,
     pub model_repository: String,
-    pub recipe_id: String,
+    pub engine_id: String,
+    pub engine_fingerprint: String,
+    pub artifacts: ModelArtifactsDocument,
+    pub artifact_fingerprint: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,150 +333,58 @@ pub struct ReconcileScan {
     pub quarantined: Vec<QuarantinedContainer>,
 }
 
-#[cfg(test)]
-fn build_container_spec(
-    recipe: &super::recipe::Recipe,
-    input: &StartInstanceInput,
-    network: &str,
-) -> Result<ContainerSpec, ()> {
-    if input.instance_id.len() != 34
-        || !input.instance_id.starts_with("i_")
-        || input.generation == 0
-        || input.model_commit.len() != 40
-        || input.recipe_id != recipe.identity.id
-        || !recipe.model.commits.contains(&input.model_commit)
-        || input.operation_id.len() != 26
-    {
-        return Err(());
-    }
-    let repository_cache = format!("models--{}", recipe.model.repository.replace('/', "--"));
-    let model_snapshot = format!("/models/snapshots/{}", input.model_commit);
-    let port = recipe.gateway.port.to_string();
-    let context = recipe.resources.context_ceiling.to_string();
-    let compile_cache_key = recipe_compile_cache_key(recipe, &input.model_commit)?;
-    let substitute = |token: &str| {
-        token
-            .replace("{model_snapshot}", &model_snapshot)
-            .replace("{port}", &port)
-            .replace("{max_model_len}", &context)
-            .replace("{instance_id}", &input.instance_id)
-            .replace("{compile_cache}", "/compile-cache")
-    };
-    let mounts = recipe
-        .isolation
-        .mounts
-        .iter()
-        .map(|mount| {
-            let source = match mount.purpose {
-                super::recipe::MountPurpose::Model => {
-                    format!("{}/{repository_cache}", mount.host_root)
-                }
-                super::recipe::MountPurpose::CompileCache => format!(
-                    "{}/{}/{}",
-                    mount.host_root, compile_cache_key, input.instance_id
-                ),
-            };
-            ContainerMount {
-                source,
-                target: mount.container_path.clone(),
-                read_only: mount.read_only,
-            }
-        })
-        .collect();
-    let labels = [
-        ("io.sy.spark.managed", "true".into()),
-        ("io.sy.spark.instance", input.instance_id.clone()),
-        ("io.sy.spark.generation", input.generation.to_string()),
-        ("io.sy.spark.role", "engine".into()),
-        ("io.sy.spark.model_commit", input.model_commit.clone()),
-        ("io.sy.spark.recipe", input.recipe_id.clone()),
-        ("io.sy.spark.operation", input.operation_id.clone()),
-    ]
-    .into_iter()
-    .map(|(key, value)| (key.into(), value))
-    .collect();
-    let model_cache_root = recipe
-        .isolation
-        .mounts
-        .iter()
-        .find(|mount| mount.purpose == super::recipe::MountPurpose::Model)
-        .map(|mount| mount.host_root.clone())
-        .ok_or(())?;
-    let compile_cache_root = recipe
-        .isolation
-        .mounts
-        .iter()
-        .find(|mount| mount.purpose == super::recipe::MountPurpose::CompileCache)
-        .map(|mount| mount.host_root.clone())
-        .ok_or(())?;
-    Ok(ContainerSpec {
-        name: format!("sy-spark-{}-g{}", input.instance_id, input.generation),
-        image: format!(
-            "{}@{}",
-            recipe.engine.image_repository, recipe.engine.image_digest
-        ),
-        entrypoint: recipe
-            .engine
-            .entrypoint
-            .iter()
-            .map(|value| substitute(value))
-            .collect(),
-        argv: recipe
-            .engine
-            .argv
-            .iter()
-            .map(|value| substitute(value))
-            .collect(),
-        environment: Vec::new(),
-        labels,
-        network: network.into(),
-        port: recipe.gateway.port,
-        health_method: recipe.health.method.clone(),
-        health_path: recipe.health.path.clone(),
-        allowed_routes: std::iter::once((recipe.health.method.clone(), recipe.health.path.clone()))
-            .chain(
-                recipe
-                    .gateway
-                    .methods
-                    .iter()
-                    .map(|route| (route.method.clone(), route.path.clone())),
-            )
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect(),
-        gateway_profile: recipe.gateway.profile(),
-        served_model: recipe.health.served_model.clone(),
-        semantic_prompt: recipe.health.semantic_prompt.clone(),
-        semantic_max_tokens: recipe.health.semantic_max_tokens,
-        startup_deadline_seconds: recipe.health.startup_deadline_seconds,
-        mounts,
-        model_cache_root,
-        compile_cache_root,
-        tmpfs: recipe.isolation.writable_tmpfs.clone(),
-        run_as_uid: recipe.isolation.run_as_uid,
-        pid_limit: recipe.isolation.pid_limit,
-        memory_bytes: recipe.resources.startup_peak_bytes,
-        read_only_rootfs: true,
-        cap_drop: vec!["ALL".into()],
-        seccomp: recipe.isolation.seccomp.clone(),
-        no_new_privileges: true,
-        published_ports: Vec::new(),
-        restart: "no".into(),
-        accelerator: recipe.engine.accelerator,
-    })
-}
-
 fn build_generic_container_spec(
     policy: &EnginePolicy,
     input: &StartInstanceInput,
 ) -> Result<ContainerSpec, ()> {
+    build_generic_container_spec_with(policy, input, |config, repository, commit| {
+        read_model_config(config, repository, commit).unwrap_or_default()
+    })
+}
+
+fn candidate_cache_path(
+    policy: &EnginePolicy,
+    input: &CandidateStorageInput,
+) -> Result<PathBuf, ()> {
+    let spec = build_generic_container_spec(
+        policy,
+        &StartInstanceInput {
+            instance_id: input.instance_id.clone(),
+            generation: 1,
+            model_commit: input.model_commit.clone(),
+            model_repository: input.model_repository.clone(),
+            engine_id: input.engine_id.clone(),
+            engine_fingerprint: input.engine_fingerprint.clone(),
+            artifacts: input.artifacts.clone(),
+            artifact_fingerprint: input.artifact_fingerprint.clone(),
+            operation_id: Ulid::nil().to_string(),
+        },
+    )?;
+    spec.mounts
+        .into_iter()
+        .find(|mount| mount.target == "/compile-cache" && !mount.read_only)
+        .map(|mount| PathBuf::from(mount.source))
+        .ok_or(())
+}
+
+fn build_generic_container_spec_with<F>(
+    policy: &EnginePolicy,
+    input: &StartInstanceInput,
+    load_model_config: F,
+) -> Result<ContainerSpec, ()>
+where
+    F: FnOnce(&super::engine::EngineConfig, &str, &str) -> ModelConfig,
+{
     let config = policy.config();
     let repository = valid_model_repository(&input.model_repository)?;
+    let artifact_fingerprint = artifact_fingerprint(&input.artifacts).map_err(|_| ())?;
     if input.instance_id.len() != 34
         || !input.instance_id.starts_with("i_")
         || input.generation == 0
         || !valid_commit(&input.model_commit)
-        || input.recipe_id != config.id
+        || input.engine_id != config.id
+        || input.engine_fingerprint != policy.fingerprint()
+        || input.artifact_fingerprint != artifact_fingerprint
         || input.operation_id.len() != 26
     {
         return Err(());
@@ -365,10 +392,13 @@ fn build_generic_container_spec(
     let repository_cache = format!("models--{}", input.model_repository.replace('/', "--"));
     let model_snapshot = format!("/models/snapshots/{}", input.model_commit);
     let served_model = repository.1;
-    let model_type = read_model_type(config, &input.model_repository, &input.model_commit)
-        .ok()
-        .flatten();
-    let profile = policy.profile(model_type.as_deref());
+    let model_config = load_model_config(config, &input.model_repository, &input.model_commit);
+    let profile = policy
+        .profile_for(model_config.model_type.as_deref(), &input.artifacts)
+        .map_err(|_| ())?;
+    let resources = policy
+        .resources_for(model_config.model_type.as_deref(), &input.artifacts)
+        .map_err(|_| ())?;
     let substitute = |value: &str| match value {
         "{model_snapshot}" => model_snapshot.clone(),
         "{served_model}" => served_model.to_owned(),
@@ -376,11 +406,17 @@ fn build_generic_container_spec(
         _ => value.to_owned(),
     };
     let compile_identity = format!(
-        "{}\0{}\0{}\0{}",
-        policy.fingerprint(),
+        "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
+        COMPILE_CACHE_IDENTITY_SCHEMA,
+        config.id,
+        config.version,
+        config.image_digest,
+        config.image_architecture,
+        config.run_as_uid,
         input.model_repository,
         input.model_commit,
-        profile.id
+        profile.id,
+        artifact_fingerprint,
     );
     let compile_cache_key = format!("sha256-{:x}", Sha256::digest(compile_identity));
     let labels = [
@@ -393,7 +429,15 @@ fn build_generic_container_spec(
             "io.sy.spark.model_repository",
             input.model_repository.clone(),
         ),
-        ("io.sy.spark.recipe", input.recipe_id.clone()),
+        ("io.sy.spark.engine", input.engine_id.clone()),
+        (
+            "io.sy.spark.engine_fingerprint",
+            input.engine_fingerprint.clone(),
+        ),
+        (
+            "io.sy.spark.artifact_fingerprint",
+            input.artifact_fingerprint.clone(),
+        ),
         ("io.sy.spark.operation", input.operation_id.clone()),
     ]
     .into_iter()
@@ -412,6 +456,13 @@ fn build_generic_container_spec(
             .iter()
             .chain(&profile.arguments)
             .map(|value| substitute(value))
+            .chain(
+                policy
+                    .artifact_argv(&input.artifacts, |path| {
+                        artifact_container_path(config.model_mount, &input.model_commit, path)
+                    })
+                    .map_err(|_| ())?,
+            )
             .collect(),
         environment: config.environment.clone(),
         labels,
@@ -419,6 +470,7 @@ fn build_generic_container_spec(
         port: config.port,
         health_method: config.health_method.clone(),
         health_path: config.health_path.clone(),
+        health_body: config.health_body.clone(),
         allowed_routes: std::iter::once((config.health_method.clone(), config.health_path.clone()))
             .chain(
                 config
@@ -427,32 +479,37 @@ fn build_generic_container_spec(
                     .map(|route| (route.method.clone(), route.path.clone())),
             )
             .collect(),
-        gateway_profile: policy.gateway_profile(model_type.as_deref()),
+        gateway_profile: policy
+            .gateway_profile_for(
+                model_config.model_type.as_deref(),
+                &input.artifacts,
+                model_config.hidden_size,
+            )
+            .map_err(|_| ())?,
         served_model: served_model.to_owned(),
         semantic_prompt: config.semantic_prompt.clone(),
         semantic_max_tokens: config.semantic_max_tokens,
         startup_deadline_seconds: config.startup_deadline_seconds,
-        mounts: vec![
-            ContainerMount {
-                source: format!("{}/{}", config.model_cache_root, repository_cache),
-                target: "/models".into(),
-                read_only: true,
-            },
-            ContainerMount {
+        mounts: model_mounts(config.model_mount, config, input, &repository_cache)?
+            .into_iter()
+            .chain([ContainerMount {
                 source: format!(
                     "{}/{}/{}",
                     config.compile_cache_root, compile_cache_key, input.instance_id
                 ),
                 target: "/compile-cache".into(),
                 read_only: false,
-            },
-        ],
+                expected_bytes: None,
+            }])
+            .collect(),
         model_cache_root: config.model_cache_root.clone(),
         compile_cache_root: config.compile_cache_root.clone(),
+        ipc_mode: config.ipc_mode.clone(),
+        shm_size_bytes: config.shm_size_bytes,
         tmpfs: config.tmpfs.clone(),
         run_as_uid: config.run_as_uid,
         pid_limit: config.pid_limit,
-        memory_bytes: config.resources.startup_peak_bytes,
+        memory_bytes: resources.startup_peak_bytes,
         read_only_rootfs: true,
         cap_drop: vec!["ALL".into()],
         seccomp: config.seccomp.clone(),
@@ -461,6 +518,98 @@ fn build_generic_container_spec(
         restart: "no".into(),
         accelerator: Accelerator::Nvidia,
     })
+}
+
+fn model_mounts(
+    mode: EngineModelMount,
+    config: &super::engine::EngineConfig,
+    input: &StartInstanceInput,
+    repository_cache: &str,
+) -> Result<Vec<ContainerMount>, ()> {
+    let artifacts = verified_artifacts(&input.artifacts)?;
+    let snapshot = format!(
+        "{}/{repository_cache}/snapshots/{}",
+        config.model_cache_root, input.model_commit
+    );
+    match mode {
+        EngineModelMount::ArtifactFiles => artifacts
+            .into_iter()
+            .map(|(path, bytes)| {
+                Ok(ContainerMount {
+                    source: format!("{snapshot}/{path}"),
+                    target: artifact_container_path(mode, &input.model_commit, path)
+                        .map_err(|_| ())?,
+                    read_only: true,
+                    expected_bytes: Some(bytes),
+                })
+            })
+            .collect(),
+        EngineModelMount::Snapshot => Ok(vec![ContainerMount {
+            source: format!("{}/{}", config.model_cache_root, repository_cache),
+            target: "/models".into(),
+            read_only: true,
+            expected_bytes: None,
+        }]),
+    }
+}
+
+fn verified_artifacts(artifacts: &ModelArtifactsDocument) -> Result<Vec<(&str, u64)>, ()> {
+    if artifacts.schema != "sy.spark.model-artifacts/v2" || artifacts.primary.bytes == 0 {
+        return Err(());
+    }
+    let mut paths = std::collections::BTreeMap::new();
+    let all = std::iter::once((
+        artifacts.primary.path.as_str(),
+        artifacts.primary.bytes,
+        artifacts.primary.sha256.as_deref(),
+    ))
+    .chain(artifacts.auxiliary.iter().map(|artifact| {
+        (
+            artifact.path.as_str(),
+            artifact.bytes,
+            artifact.sha256.as_deref(),
+        )
+    }));
+    for (path, bytes, sha256) in all {
+        if bytes == 0
+            || !valid_artifact_path(path)
+            || sha256.is_some_and(|hash| !valid_sha256(hash))
+            || paths.insert(path, bytes).is_some()
+        {
+            return Err(());
+        }
+    }
+    Ok(paths.into_iter().collect())
+}
+
+fn artifact_container_path(
+    mode: EngineModelMount,
+    commit: &str,
+    path: &str,
+) -> Result<String, String> {
+    if !valid_artifact_path(path) {
+        return Err("artifact path escapes the verified snapshot".into());
+    }
+    Ok(match mode {
+        EngineModelMount::ArtifactFiles => format!("/models/{path}"),
+        EngineModelMount::Snapshot => format!("/models/snapshots/{commit}/{path}"),
+    })
+}
+
+fn valid_artifact_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 512
+        && !Path::new(path).is_absolute()
+        && Path::new(path)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn valid_model_repository(repository: &str) -> Result<(&str, &str), ()> {
@@ -486,15 +635,17 @@ fn valid_commit(commit: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-fn read_model_type(
+#[derive(Default, Deserialize)]
+struct ModelConfig {
+    model_type: Option<String>,
+    hidden_size: Option<usize>,
+}
+
+fn read_model_config(
     config: &super::engine::EngineConfig,
     repository: &str,
     commit: &str,
-) -> Result<Option<String>, ()> {
-    #[derive(Deserialize)]
-    struct ModelConfig {
-        model_type: Option<String>,
-    }
+) -> Result<ModelConfig, ()> {
     let repository_cache = format!("models--{}", repository.replace('/', "--"));
     let path = Path::new(&config.model_cache_root)
         .join(repository_cache)
@@ -502,9 +653,7 @@ fn read_model_type(
         .join(commit)
         .join("config.json");
     let text = std::fs::read_to_string(path).map_err(|_| ())?;
-    serde_json::from_str::<ModelConfig>(&text)
-        .map(|model| model.model_type)
-        .map_err(|_| ())
+    serde_json::from_str(&text).map_err(|_| ())
 }
 
 #[cfg(test)]
@@ -591,8 +740,7 @@ pub struct ExecutorConfig {
     pub schema: String,
     pub socket: PathBuf,
     pub agent_uid: u32,
-    pub recipes_dir: PathBuf,
-    pub engine_policy: PathBuf,
+    pub engine_catalog: PathBuf,
     pub resources_policy: PathBuf,
     pub host: RecipeHost,
 }
@@ -610,8 +758,8 @@ enum ExecutorActionKind {
     InspectProtectedHost,
     InspectDockerVersion,
     InspectResources,
+    InspectCandidateStorage(CandidateStorageInput),
     InspectEmergencyRecords,
-    InspectRecipes(RecipeQuery),
     PrepareInstance(StartInstanceInput),
     StartInstance(StartInstanceInput),
     PromoteRestartPolicy(StopInstanceInput),
@@ -620,14 +768,6 @@ enum ExecutorActionKind {
     InspectInstance(StopInstanceInput),
     ReadManagedLogs(LogInput),
     ReconcileScan(Vec<ReconcileExpectation>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RecipeQuery {
-    model_repository: Option<String>,
-    model_commit: Option<String>,
-    objective: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -646,11 +786,11 @@ enum ExecutorResult {
         snapshot: HostResourceSnapshot,
         policy: ResourcePolicy,
     },
+    InspectCandidateStorage {
+        storage: CandidateStorage,
+    },
     InspectEmergencyRecords {
         records: Vec<super::resources::EmergencyRecord>,
-    },
-    InspectRecipes {
-        catalog: RecipeCatalogDocument,
     },
     PrepareInstance {
         startup_deadline_seconds: u64,
@@ -666,7 +806,7 @@ enum ExecutorResult {
     },
     StopInstance,
     InspectInstance {
-        observed: Option<ObservedEngine>,
+        running: Option<bool>,
     },
     ReadManagedLogs {
         logs: EngineLogs,
@@ -703,11 +843,23 @@ type RuntimeFuture<T> = Pin<Box<dyn Future<Output = Result<T, ()>> + Send>>;
 
 trait ContainerRuntime: Send + Sync + 'static {
     fn ensure_network(&self, name: String) -> RuntimeFuture<String>;
-    fn ensure_image(&self, image: String, architecture: String) -> RuntimeFuture<()>;
+    fn ensure_image(
+        &self,
+        image: String,
+        architecture: String,
+        transport: super::engine::EngineImageTransport,
+    ) -> RuntimeFuture<()>;
+    fn image_present(
+        &self,
+        image: String,
+        architecture: String,
+        transport: super::engine::EngineImageTransport,
+    ) -> RuntimeFuture<bool>;
     fn start(&self, spec: ContainerSpec) -> RuntimeFuture<ObservedEngine>;
     fn promote_restart(&self, input: StopInstanceInput) -> RuntimeFuture<ObservedEngine>;
     fn disable_restart(&self, input: StopInstanceInput) -> RuntimeFuture<ObservedEngine>;
     fn inspect(&self, input: StopInstanceInput) -> RuntimeFuture<Option<ObservedEngine>>;
+    fn running(&self, input: StopInstanceInput) -> RuntimeFuture<Option<bool>>;
     fn stop(&self, input: StopInstanceInput) -> RuntimeFuture<()>;
     fn logs(&self, input: LogInput) -> RuntimeFuture<EngineLogs>;
     fn scan_managed(&self) -> RuntimeFuture<Vec<ManagedContainerObservation>>;
@@ -730,6 +882,15 @@ fn exact_image_reference(image: &str) -> bool {
         && digest
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn exact_local_image_id(image: &str) -> bool {
+    image.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
 }
 
 fn exact_image_matches(image: &str, architecture: &str, inspected: &ImageInspect) -> bool {
@@ -779,8 +940,22 @@ async fn ensure_exact_image(
     store: &dyn ImageStore,
     image: &str,
     architecture: &str,
+    transport: super::engine::EngineImageTransport,
 ) -> Result<(), ()> {
-    if !exact_image_reference(image) {
+    if transport == super::engine::EngineImageTransport::Local {
+        if !exact_local_image_id(image) {
+            return Err(());
+        }
+        return match store.inspect_exact(image.into()).await {
+            Ok(inspected)
+                if inspected.id.as_deref() == Some(image)
+                    && inspected.architecture.as_deref() == Some(architecture) =>
+            {
+                Ok(())
+            }
+            _ => Err(()),
+        };
+    } else if !exact_image_reference(image) {
         return Err(());
     }
     if store
@@ -886,10 +1061,37 @@ impl ContainerRuntime for BollardContainerRuntime {
         })
     }
 
-    fn ensure_image(&self, image: String, architecture: String) -> RuntimeFuture<()> {
+    fn ensure_image(
+        &self,
+        image: String,
+        architecture: String,
+        transport: super::engine::EngineImageTransport,
+    ) -> RuntimeFuture<()> {
         Box::pin(async move {
             let docker = Self::docker().await?;
-            ensure_exact_image(&BollardImageStore(docker), &image, &architecture).await
+            ensure_exact_image(&BollardImageStore(docker), &image, &architecture, transport).await
+        })
+    }
+
+    fn image_present(
+        &self,
+        image: String,
+        architecture: String,
+        transport: super::engine::EngineImageTransport,
+    ) -> RuntimeFuture<bool> {
+        Box::pin(async move {
+            let docker = Self::docker().await?;
+            let inspected = docker.inspect_image(&image).await.map_err(|_| ())?;
+            Ok(match transport {
+                super::engine::EngineImageTransport::Local => {
+                    exact_local_image_id(&image)
+                        && inspected.id.as_deref() == Some(image.as_str())
+                        && inspected.architecture.as_deref() == Some(architecture.as_str())
+                }
+                super::engine::EngineImageTransport::Registry => {
+                    exact_image_matches(&image, &architecture, &inspected)
+                }
+            })
         })
     }
 
@@ -913,14 +1115,22 @@ impl ContainerRuntime for BollardContainerRuntime {
             let mounts = spec
                 .mounts
                 .iter()
-                .map(|mount| Mount {
-                    target: Some(mount.target.clone()),
-                    source: Some(mount.source.clone()),
-                    typ: Some(MountType::BIND),
-                    read_only: Some(mount.read_only),
-                    ..Default::default()
+                .map(|mount| {
+                    Ok(Mount {
+                        target: Some(mount.target.clone()),
+                        source: Some(
+                            Path::new(&mount.source)
+                                .canonicalize()
+                                .map_err(|_| ())?
+                                .to_string_lossy()
+                                .into_owned(),
+                        ),
+                        typ: Some(MountType::BIND),
+                        read_only: Some(mount.read_only),
+                        ..Default::default()
+                    })
                 })
-                .collect();
+                .collect::<Result<Vec<_>, ()>>()?;
             let tmpfs = spec
                 .tmpfs
                 .iter()
@@ -944,12 +1154,15 @@ impl ContainerRuntime for BollardContainerRuntime {
                 image: Some(spec.image.clone()),
                 entrypoint: Some(spec.entrypoint.clone()),
                 labels: Some(labels),
+                healthcheck: Some(managed_healthcheck()),
                 host_config: Some(HostConfig {
                     memory: Some(i64::try_from(spec.memory_bytes).map_err(|_| ())?),
                     memory_swap: Some(i64::try_from(spec.memory_bytes).map_err(|_| ())?),
                     pids_limit: Some(spec.pid_limit.into()),
                     init: Some(true),
                     network_mode: Some(spec.network.clone()),
+                    ipc_mode: Some(spec.ipc_mode.clone()),
+                    shm_size: Some(i64::try_from(spec.shm_size_bytes).map_err(|_| ())?),
                     port_bindings: None,
                     restart_policy: Some(restart_policy(RestartPolicyNameEnum::NO)),
                     mounts: Some(mounts),
@@ -1066,6 +1279,13 @@ impl ContainerRuntime for BollardContainerRuntime {
         Box::pin(async move {
             let docker = Self::docker().await?;
             inspect_input(&docker, &input).await
+        })
+    }
+
+    fn running(&self, input: StopInstanceInput) -> RuntimeFuture<Option<bool>> {
+        Box::pin(async move {
+            let docker = Self::docker().await?;
+            inspect_running_input(&docker, &input).await
         })
     }
 
@@ -1272,7 +1492,9 @@ fn managed_observation(
         role: labels.get("io.sy.spark.role").cloned(),
         model_commit: labels.get("io.sy.spark.model_commit").cloned(),
         model_repository: labels.get("io.sy.spark.model_repository").cloned(),
-        recipe_id: labels.get("io.sy.spark.recipe").cloned(),
+        engine_id: labels.get("io.sy.spark.engine").cloned(),
+        engine_fingerprint: labels.get("io.sy.spark.engine_fingerprint").cloned(),
+        artifact_fingerprint: labels.get("io.sy.spark.artifact_fingerprint").cloned(),
         image: inspect.config.and_then(|config| config.image),
         networks,
         restart_policy,
@@ -1283,6 +1505,13 @@ fn restart_policy(name: RestartPolicyNameEnum) -> RestartPolicy {
     RestartPolicy {
         name: Some(name),
         maximum_retry_count: Some(0),
+    }
+}
+
+fn managed_healthcheck() -> HealthConfig {
+    HealthConfig {
+        test: Some(vec!["NONE".into()]),
+        ..Default::default()
     }
 }
 
@@ -1369,10 +1598,25 @@ fn validate_mount_sources_at(
             }
             let metadata = canonical.metadata().map_err(mount_io)?;
             let mode = metadata.permissions().mode() & 0o777;
-            if !metadata.is_dir() || metadata.gid() != cache_gid {
+            let expected_mode = if mount.expected_bytes.is_some() {
+                0o040
+            } else {
+                0o050
+            };
+            let valid_kind = if mount.expected_bytes.is_some() {
+                metadata.is_file()
+            } else {
+                metadata.is_dir()
+            };
+            if metadata.gid() != cache_gid
+                || !valid_kind
+                || mount
+                    .expected_bytes
+                    .is_some_and(|bytes| metadata.len() != bytes)
+            {
                 return Err(MountValidationError::InvalidOwnership);
             }
-            if mode & 0o022 != 0 || mode & 0o050 != 0o050 {
+            if mode & 0o022 != 0 || mode & expected_mode != expected_mode {
                 return Err(MountValidationError::InvalidMode);
             }
         } else {
@@ -1445,6 +1689,24 @@ async fn inspect_stop_target(
         }) => return Ok(None),
         Err(_) => return Err(()),
     };
+    let running = inspect_managed_running(&inspect, input)?;
+    Ok(Some((inspect.id.ok_or(())?, running)))
+}
+
+async fn inspect_running_input(
+    docker: &Docker,
+    input: &StopInstanceInput,
+) -> Result<Option<bool>, ()> {
+    let Some((_, running)) = inspect_stop_target(docker, input).await? else {
+        return Ok(None);
+    };
+    Ok(Some(running))
+}
+
+fn inspect_managed_running(
+    inspect: &bollard::models::ContainerInspectResponse,
+    input: &StopInstanceInput,
+) -> Result<bool, ()> {
     let labels = inspect
         .config
         .as_ref()
@@ -1453,12 +1715,11 @@ async fn inspect_stop_target(
     if !exact_managed_identity(labels, input) {
         return Err(());
     }
-    let running = inspect
+    Ok(inspect
         .state
         .as_ref()
         .and_then(|state| state.running)
-        .unwrap_or(false);
-    Ok(Some((inspect.id.ok_or(())?, running)))
+        .unwrap_or(false))
 }
 
 fn exact_managed_identity(
@@ -1497,6 +1758,7 @@ async fn inspect_exact(
     let mut observed = observed_from_inspect(inspect, spec.port)?;
     observed.health_method = spec.health_method.clone();
     observed.health_path = spec.health_path.clone();
+    observed.health_body = spec.health_body.clone();
     observed.allowed_routes = spec.allowed_routes.clone();
     observed.gateway_profile = spec.gateway_profile.clone();
     observed.served_model = spec.served_model.clone();
@@ -1578,6 +1840,7 @@ fn observed_from_inspect(
         restart_policy,
         health_method: "GET".into(),
         health_path: "/health".into(),
+        health_body: None,
         allowed_routes: vec![("GET".into(), "/health".into())],
         gateway_profile: GatewayProfile::text(),
         served_model: String::new(),
@@ -1948,9 +2211,7 @@ struct ExecutorHandler {
     hostname_path: PathBuf,
     kernel_release: String,
     machine_id_path: PathBuf,
-    catalog: Arc<RecipeCatalog>,
-    engine_policy: Arc<EnginePolicy>,
-    recipe_host: RecipeHost,
+    engine_catalog: Arc<EngineCatalog>,
     resources: Option<Arc<ResourceMonitor>>,
 }
 
@@ -1961,8 +2222,7 @@ impl ExecutorHandler {
         resources: Arc<ResourceMonitor>,
         runtime: Arc<dyn ContainerRuntime>,
     ) -> Result<Self, String> {
-        let catalog = RecipeCatalog::load_legacy(&config.recipes_dir)?;
-        let engine_policy = EnginePolicy::load(&config.engine_policy)?;
+        let engine_catalog = EngineCatalog::load(&config.engine_catalog)?;
         Ok(Self {
             agent_uid: config.agent_uid,
             cancellation: Arc::new(CancelRegistry::new()),
@@ -1975,9 +2235,7 @@ impl ExecutorHandler {
                 .to_string_lossy()
                 .into_owned(),
             machine_id_path: "/etc/machine-id".into(),
-            catalog: Arc::new(catalog),
-            engine_policy: Arc::new(engine_policy),
-            recipe_host: config.host.clone(),
+            engine_catalog: Arc::new(engine_catalog),
             resources: Some(resources),
         })
     }
@@ -2017,36 +2275,68 @@ impl ExecutorHandler {
                 .and_then(|resources| resources.snapshot())
                 .map(|(snapshot, policy)| ExecutorResult::InspectResources { snapshot, policy })
                 .ok_or(ErrorCode::NotReady),
+            ExecutorActionKind::InspectCandidateStorage(input) => {
+                let policy = self
+                    .engine_catalog
+                    .select(&input.artifacts)
+                    .ok()
+                    .filter(|policy| policy.config().id == input.engine_id)
+                    .ok_or(ErrorCode::BadRequest)?;
+                let cache =
+                    candidate_cache_path(policy, &input).map_err(|()| ErrorCode::BadRequest)?;
+                let image_present = self
+                    .runtime
+                    .image_present(
+                        policy.image(),
+                        policy.config().image_architecture.clone(),
+                        policy.config().image_transport,
+                    )
+                    .await
+                    .map_err(|()| ErrorCode::NotReady)?;
+                let compile_cache_allocated_bytes =
+                    allocated_tree_bytes(&cache, Path::new(&policy.config().compile_cache_root))
+                        .map_err(|()| ErrorCode::NotReady)?;
+                let compile_cache_namespace = cache
+                    .strip_prefix(&policy.config().compile_cache_root)
+                    .map_err(|_| ErrorCode::Internal)?
+                    .to_string_lossy()
+                    .into_owned();
+                Ok(ExecutorResult::InspectCandidateStorage {
+                    storage: CandidateStorage {
+                        image_present,
+                        compile_cache_allocated_bytes,
+                        compile_cache_namespace,
+                    },
+                })
+            }
             ExecutorActionKind::InspectEmergencyRecords => self
                 .resources
                 .as_ref()
                 .and_then(|resources| resources.emergency_records().ok())
                 .map(|records| ExecutorResult::InspectEmergencyRecords { records })
                 .ok_or(ErrorCode::NotReady),
-            ExecutorActionKind::InspectRecipes(query) => Ok(ExecutorResult::InspectRecipes {
-                catalog: self.catalog.query(
-                    &self.recipe_host,
-                    query.model_repository.as_deref(),
-                    query.model_commit.as_deref(),
-                    &query.objective,
-                    chrono::Utc::now(),
-                ),
-            }),
             ExecutorActionKind::PrepareInstance(input) => {
-                if input.recipe_id != self.engine_policy.config().id {
-                    return Err(ErrorCode::BadRequest);
-                }
-                let spec = build_generic_container_spec(&self.engine_policy, &input)
+                let policy = self
+                    .engine_catalog
+                    .select(&input.artifacts)
+                    .ok()
+                    .filter(|policy| policy.config().id == input.engine_id)
+                    .ok_or(ErrorCode::BadRequest)?;
+                let spec = build_generic_container_spec(policy, &input)
                     .map_err(|()| ErrorCode::BadRequest)?;
-                let architecture = self.engine_policy.config().image_architecture.clone();
-                let startup_deadline_seconds = self.engine_policy.config().startup_deadline_seconds;
+                let architecture = policy.config().image_architecture.clone();
+                let startup_deadline_seconds = policy.config().startup_deadline_seconds;
                 self.runtime
-                    .ensure_network(self.engine_policy.config().network.clone())
+                    .ensure_network(policy.config().network.clone())
                     .await
                     .map(|_| ())
                     .map_err(|()| ErrorCode::NotReady)?;
                 self.runtime
-                    .ensure_image(spec.image.clone(), architecture)
+                    .ensure_image(
+                        spec.image.clone(),
+                        architecture,
+                        policy.config().image_transport,
+                    )
                     .await
                     .map_err(|()| ErrorCode::NotReady)?;
                 Ok(ExecutorResult::PrepareInstance {
@@ -2054,10 +2344,13 @@ impl ExecutorHandler {
                 })
             }
             ExecutorActionKind::StartInstance(input) => {
-                if input.recipe_id != self.engine_policy.config().id {
-                    return Err(ErrorCode::BadRequest);
-                }
-                let spec = build_generic_container_spec(&self.engine_policy, &input)
+                let policy = self
+                    .engine_catalog
+                    .select(&input.artifacts)
+                    .ok()
+                    .filter(|policy| policy.config().id == input.engine_id)
+                    .ok_or(ErrorCode::BadRequest)?;
+                let spec = build_generic_container_spec(policy, &input)
                     .map_err(|()| ErrorCode::BadRequest)?;
                 let observed = self
                     .runtime
@@ -2098,9 +2391,9 @@ impl ExecutorHandler {
             }
             ExecutorActionKind::InspectInstance(input) => self
                 .runtime
-                .inspect(input)
+                .running(input)
                 .await
-                .map(|observed| ExecutorResult::InspectInstance { observed })
+                .map(|running| ExecutorResult::InspectInstance { running })
                 .map_err(|()| ErrorCode::NotReady),
             ExecutorActionKind::ReadManagedLogs(input) => self
                 .runtime
@@ -2125,14 +2418,18 @@ impl ExecutorHandler {
         }
         let mut catalogued = BTreeMap::new();
         for item in expected {
-            let identity_valid = if item.recipe_id == self.engine_policy.config().id {
-                valid_model_repository(&item.model_repository).is_ok()
-                    && valid_commit(&item.model_commit)
-            } else {
-                self.catalog
-                    .recipe(&item.recipe_id)
-                    .is_some_and(|recipe| recipe.model.commits.contains(&item.model_commit))
-            };
+            let identity_valid = self
+                .engine_catalog
+                .select(&item.artifacts)
+                .ok()
+                .is_some_and(|policy| {
+                    policy.config().id == item.engine_id
+                        && policy.fingerprint() == item.engine_fingerprint
+                        && artifact_fingerprint(&item.artifacts).ok().as_deref()
+                            == Some(item.artifact_fingerprint.as_str())
+                        && valid_model_repository(&item.model_repository).is_ok()
+                        && valid_commit(&item.model_commit)
+                });
             if !valid_reconcile_expectation(&item)
                 || !identity_valid
                 || catalogued
@@ -2152,15 +2449,11 @@ impl ExecutorHandler {
                 .as_ref()
                 .and_then(|identity| catalogued.get(identity))
                 .is_some_and(|expected| {
-                    if expected.recipe_id == self.engine_policy.config().id {
-                        observation_matches_engine(&observation, expected, &self.engine_policy)
-                    } else {
-                        self.catalog
-                            .recipe(&expected.recipe_id)
-                            .is_some_and(|recipe| {
-                                observation_matches_expected(&observation, expected, recipe)
-                            })
-                    }
+                    self.engine_catalog
+                        .get(&expected.engine_id)
+                        .is_some_and(|policy| {
+                            observation_matches_engine(&observation, expected, policy)
+                        })
                 });
             if valid {
                 if let Some(identity) = identity {
@@ -2203,17 +2496,14 @@ impl ExecutorHandler {
             match self.runtime.inspect(input).await? {
                 Some(mut observed) if observed.container_id == container.container_id => {
                     let expected = catalogued.get(&identity).ok_or(())?;
-                    if expected.recipe_id == self.engine_policy.config().id {
-                        enrich_observed_from_engine(
-                            &mut observed,
-                            &self.engine_policy,
-                            &expected.model_repository,
-                            &expected.model_commit,
-                        );
-                    } else {
-                        let recipe = self.catalog.recipe(&expected.recipe_id).ok_or(())?;
-                        enrich_observed_from_recipe(&mut observed, recipe);
-                    }
+                    let policy = self.engine_catalog.get(&expected.engine_id).ok_or(())?;
+                    enrich_observed_from_engine(
+                        &mut observed,
+                        policy,
+                        &expected.model_repository,
+                        &expected.model_commit,
+                        &expected.artifacts,
+                    );
                     matched.push(observed)
                 }
                 _ => {
@@ -2339,38 +2629,19 @@ impl ExecutorHandler {
     }
 }
 
-fn enrich_observed_from_recipe(observed: &mut ObservedEngine, recipe: &super::recipe::Recipe) {
-    observed.port = recipe.gateway.port;
-    observed.health_method = recipe.health.method.clone();
-    observed.health_path = recipe.health.path.clone();
-    observed.allowed_routes =
-        std::iter::once((recipe.health.method.clone(), recipe.health.path.clone()))
-            .chain(
-                recipe
-                    .gateway
-                    .methods
-                    .iter()
-                    .map(|route| (route.method.clone(), route.path.clone())),
-            )
-            .collect();
-    observed.gateway_profile = recipe.gateway.profile();
-    observed.served_model = recipe.health.served_model.clone();
-    observed.semantic_prompt = recipe.health.semantic_prompt.clone();
-    observed.semantic_max_tokens = recipe.health.semantic_max_tokens;
-    observed.startup_deadline_seconds = recipe.health.startup_deadline_seconds;
-}
-
 fn enrich_observed_from_engine(
     observed: &mut ObservedEngine,
     policy: &EnginePolicy,
     repository: &str,
     commit: &str,
+    artifacts: &ModelArtifactsDocument,
 ) {
     let config = policy.config();
-    let model_type = read_model_type(config, repository, commit).ok().flatten();
+    let model = read_model_config(config, repository, commit).unwrap_or_default();
     observed.port = config.port;
     observed.health_method = config.health_method.clone();
     observed.health_path = config.health_path.clone();
+    observed.health_body = config.health_body.clone();
     observed.allowed_routes =
         std::iter::once((config.health_method.clone(), config.health_path.clone()))
             .chain(
@@ -2380,7 +2651,11 @@ fn enrich_observed_from_engine(
                     .map(|route| (route.method.clone(), route.path.clone())),
             )
             .collect();
-    observed.gateway_profile = policy.gateway_profile(model_type.as_deref());
+    if let Ok(profile) =
+        policy.gateway_profile_for(model.model_type.as_deref(), artifacts, model.hidden_size)
+    {
+        observed.gateway_profile = profile;
+    }
     observed.served_model = repository.rsplit('/').next().unwrap_or(repository).into();
     observed.semantic_prompt = config.semantic_prompt.clone();
     observed.semantic_max_tokens = config.semantic_max_tokens;
@@ -2395,35 +2670,9 @@ fn valid_reconcile_expectation(expected: &ReconcileExpectation) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
         && expected.generation > 0
         && expected.model_commit.len() == 40
-        && expected.recipe_id.len() <= 128
-}
-
-fn observation_matches_expected(
-    observed: &ManagedContainerObservation,
-    expected: &ReconcileExpectation,
-    recipe: &super::recipe::Recipe,
-) -> bool {
-    observed.container_id.len() == 64
-        && observed
-            .container_id
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-        && observed.name == format!("sy-spark-{}-g{}", expected.instance_id, expected.generation)
-        && observed.instance_id.as_deref() == Some(expected.instance_id.as_str())
-        && observed.generation == Some(expected.generation)
-        && observed.role.as_deref() == Some("engine")
-        && observed.model_commit.as_deref() == Some(expected.model_commit.as_str())
-        && observed.recipe_id.as_deref() == Some(expected.recipe_id.as_str())
-        && observed.image.as_deref()
-            == Some(
-                format!(
-                    "{}@{}",
-                    recipe.engine.image_repository, recipe.engine.image_digest
-                )
-                .as_str(),
-            )
-        && observed.networks.len() == 1
-        && observed.restart_policy.len() <= 32
+        && expected.engine_id.len() <= 128
+        && expected.engine_fingerprint.len() == 71
+        && expected.artifact_fingerprint.len() == 71
 }
 
 fn observation_matches_engine(
@@ -2442,7 +2691,9 @@ fn observation_matches_engine(
         && observed.role.as_deref() == Some("engine")
         && observed.model_commit.as_deref() == Some(expected.model_commit.as_str())
         && observed.model_repository.as_deref() == Some(expected.model_repository.as_str())
-        && observed.recipe_id.as_deref() == Some(expected.recipe_id.as_str())
+        && observed.engine_id.as_deref() == Some(expected.engine_id.as_str())
+        && observed.engine_fingerprint.as_deref() == Some(expected.engine_fingerprint.as_str())
+        && observed.artifact_fingerprint.as_deref() == Some(expected.artifact_fingerprint.as_str())
         && observed.image.as_deref() == Some(policy.image().as_str())
         && observed.networks == [policy.config().network.as_str()]
         && observed.restart_policy.len() <= 32
@@ -2570,6 +2821,21 @@ impl ExecutorClient {
         }
     }
 
+    pub async fn candidate_storage(
+        &self,
+        input: CandidateStorageInput,
+    ) -> Result<CandidateStorage, ExecutorClientError> {
+        match self
+            .call(ExecutorAction {
+                action: ExecutorActionKind::InspectCandidateStorage(input),
+            })
+            .await?
+        {
+            ExecutorResult::InspectCandidateStorage { storage } => Ok(storage),
+            _ => Err(protocol_error()),
+        }
+    }
+
     pub async fn emergency_records(
         &self,
     ) -> Result<Vec<super::resources::EmergencyRecord>, ExecutorClientError> {
@@ -2599,9 +2865,7 @@ impl ExecutorClient {
         {
             ExecutorResult::PrepareInstance {
                 startup_deadline_seconds,
-            } if (1..=super::recipe::MAX_STARTUP_DEADLINE_SECONDS)
-                .contains(&startup_deadline_seconds) =>
-            {
+            } if (1..=MAX_ENGINE_STARTUP_DEADLINE_SECONDS).contains(&startup_deadline_seconds) => {
                 Ok(PreparedStart {
                     input,
                     deadline: Duration::from_secs(startup_deadline_seconds),
@@ -2661,6 +2925,24 @@ impl ExecutorClient {
             .await?
         {
             ExecutorResult::DisableRestartPolicy { observed } => Ok(observed),
+            _ => Err(protocol_error()),
+        }
+    }
+
+    pub async fn inspect_instance(
+        &self,
+        input: StopInstanceInput,
+    ) -> Result<Option<bool>, ExecutorClientError> {
+        match self
+            .call_with_timeout(
+                ExecutorAction {
+                    action: ExecutorActionKind::InspectInstance(input),
+                },
+                Duration::from_secs(10),
+            )
+            .await?
+        {
+            ExecutorResult::InspectInstance { running } => Ok(running),
             _ => Err(protocol_error()),
         }
     }
@@ -2793,20 +3075,12 @@ pub async fn serve(config_path: &Path) -> anyhow::Result<()> {
     let heartbeats = Arc::new(Heartbeats::default());
     tokio::spawn(docker_event_loop(heartbeats.clone()));
     anyhow::ensure!(
-        config.recipes_dir.is_absolute(),
-        "recipe catalog path must be absolute"
-    );
-    anyhow::ensure!(
-        config.recipes_dir == Path::new(RECIPE_CATALOG_DIR),
-        "recipe catalog must use the fixed root-owned path"
-    );
-    anyhow::ensure!(
         config.resources_policy == Path::new(RESOURCE_POLICY_PATH),
         "resource policy must use the fixed root-owned path"
     );
     anyhow::ensure!(
-        config.engine_policy == Path::new(ENGINE_POLICY_PATH),
-        "engine policy must use the fixed root-owned path"
+        config.engine_catalog == Path::new(ENGINE_CATALOG_PATH),
+        "engine catalog must use the fixed root-owned path"
     );
     let resource_policy =
         load_resource_policy(&config.resources_policy).map_err(anyhow::Error::msg)?;
@@ -2823,6 +3097,18 @@ pub async fn serve(config_path: &Path) -> anyhow::Result<()> {
     anyhow::ensure!(
         config.host.architecture == std::env::consts::ARCH,
         "configured recipe host architecture differs from the running executor"
+    );
+    anyhow::ensure!(
+        [
+            &config.host.gpu_model,
+            &config.host.compute_capability,
+            &config.host.dgx_build,
+            &config.host.driver_version,
+            &config.host.toolkit_version,
+        ]
+        .into_iter()
+        .all(|value| !value.is_empty() && value.len() <= 128),
+        "configured protected host identity is invalid"
     );
     anyhow::ensure!(
         config
@@ -3065,9 +3351,24 @@ mod tests {
             Box::pin(async { Ok("network-id".into()) })
         }
 
-        fn ensure_image(&self, image: String, _: String) -> RuntimeFuture<()> {
+        fn ensure_image(
+            &self,
+            image: String,
+            _: String,
+            _: super::super::engine::EngineImageTransport,
+        ) -> RuntimeFuture<()> {
             self.record(format!("image:{image}"));
             Box::pin(async { Ok(()) })
+        }
+
+        fn image_present(
+            &self,
+            image: String,
+            _: String,
+            _: super::super::engine::EngineImageTransport,
+        ) -> RuntimeFuture<bool> {
+            self.record(format!("inspect-image:{image}"));
+            Box::pin(async { Ok(true) })
         }
 
         fn start(&self, _: ContainerSpec) -> RuntimeFuture<ObservedEngine> {
@@ -3093,6 +3394,12 @@ mod tests {
             self.record("inspect");
             let observed = self.observed.clone();
             Box::pin(async move { Ok(Some(observed)) })
+        }
+
+        fn running(&self, _: StopInstanceInput) -> RuntimeFuture<Option<bool>> {
+            self.record("running");
+            let running = self.observed.running;
+            Box::pin(async move { Ok(Some(running)) })
         }
 
         fn stop(&self, input: StopInstanceInput) -> RuntimeFuture<()> {
@@ -3137,6 +3444,7 @@ mod tests {
             restart_policy: "no".into(),
             health_method: "GET".into(),
             health_path: "/health".into(),
+            health_body: None,
             allowed_routes: vec![("GET".into(), "/health".into())],
             gateway_profile: GatewayProfile::text(),
             served_model: "fixture".into(),
@@ -3147,6 +3455,34 @@ mod tests {
             pid_start_time_ticks: 456,
             cgroup_path: format!("system.slice/docker-{}.scope", "a".repeat(64)),
         }
+    }
+
+    #[test]
+    fn stopped_managed_container_is_an_inspectable_non_running_generation() {
+        let input = StopInstanceInput {
+            instance_id: format!("i_{}", "1".repeat(32)),
+            generation: 1,
+            grace_seconds: 0,
+        };
+        let inspect = bollard::models::ContainerInspectResponse {
+            id: Some("a".repeat(64)),
+            config: Some(bollard::models::ContainerConfig {
+                labels: Some(std::collections::HashMap::from([
+                    ("io.sy.spark.managed".into(), "true".into()),
+                    ("io.sy.spark.role".into(), "engine".into()),
+                    ("io.sy.spark.instance".into(), input.instance_id.clone()),
+                    ("io.sy.spark.generation".into(), "1".into()),
+                ])),
+                ..Default::default()
+            }),
+            state: Some(bollard::models::ContainerState {
+                running: Some(false),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(inspect_managed_running(&inspect, &input), Ok(false));
     }
 
     fn managed_event(action: &str) -> EventMessage {
@@ -3201,7 +3537,39 @@ mod tests {
             pull_succeeds: false,
         };
 
-        assert!(ensure_exact_image(&store, IMAGE, "arm64").await.is_ok());
+        assert!(ensure_exact_image(
+            &store,
+            IMAGE,
+            "arm64",
+            super::super::engine::EngineImageTransport::Registry,
+        )
+        .await
+        .is_ok());
+        assert_eq!(store.pulls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn local_content_image_is_verified_without_a_registry_pull() {
+        const IMAGE: &str =
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        let store = FakeImageStore {
+            inspections: Mutex::new(std::collections::VecDeque::from([Ok(ImageInspect {
+                id: Some(IMAGE.into()),
+                architecture: Some("arm64".into()),
+                ..Default::default()
+            })])),
+            pulls: AtomicU64::new(0),
+            pull_succeeds: false,
+        };
+
+        assert!(ensure_exact_image(
+            &store,
+            IMAGE,
+            "arm64",
+            super::super::engine::EngineImageTransport::Local,
+        )
+        .await
+        .is_ok());
         assert_eq!(store.pulls.load(Ordering::SeqCst), 0);
     }
 
@@ -3218,7 +3586,14 @@ mod tests {
             pulls: AtomicU64::new(0),
             pull_succeeds: false,
         };
-        assert!(ensure_exact_image(&recovered, IMAGE, "arm64").await.is_ok());
+        assert!(ensure_exact_image(
+            &recovered,
+            IMAGE,
+            "arm64",
+            super::super::engine::EngineImageTransport::Registry,
+        )
+        .await
+        .is_ok());
         assert_eq!(recovered.pulls.load(Ordering::SeqCst), 1);
 
         let mismatched = FakeImageStore {
@@ -3233,9 +3608,14 @@ mod tests {
             pulls: AtomicU64::new(0),
             pull_succeeds: false,
         };
-        assert!(ensure_exact_image(&mismatched, IMAGE, "arm64")
-            .await
-            .is_err());
+        assert!(ensure_exact_image(
+            &mismatched,
+            IMAGE,
+            "arm64",
+            super::super::engine::EngineImageTransport::Registry,
+        )
+        .await
+        .is_err());
     }
 
     #[test]
@@ -3289,37 +3669,66 @@ mod tests {
         }
     }
 
-    fn recipe_host() -> RecipeHost {
-        RecipeHost {
-            architecture: "aarch64".into(),
-            gpu_model: "NVIDIA GB10".into(),
-            compute_capability: "12.1".into(),
-            dgx_build: "7.5.0".into(),
-            driver_version: "580.159.03".into(),
-            toolkit_version: "1.19.0".into(),
-            protected_fingerprint:
-                "sha256:7e42b88250e762400e91b902cfa1fcda6b4d1cc118eb6b91fd50716b41cf8510".into(),
-        }
+    fn vllm_policy() -> Arc<EnginePolicy> {
+        Arc::new(
+            EnginePolicy::parse(include_str!("../../configs/sy/spark/engines/vllm.toml")).unwrap(),
+        )
     }
 
-    fn catalog() -> Arc<RecipeCatalog> {
-        Arc::new(RecipeCatalog::signed_for_test())
+    fn llama_policy() -> Arc<EnginePolicy> {
+        Arc::new(
+            EnginePolicy::parse(include_str!(
+                "../../configs/sy/spark/engines/llama-cpp.toml"
+            ))
+            .unwrap(),
+        )
     }
 
-    fn engine_policy() -> Arc<EnginePolicy> {
-        Arc::new(EnginePolicy::parse(include_str!("../../configs/sy/spark/engine.toml")).unwrap())
+    fn engine_catalog() -> Arc<EngineCatalog> {
+        Arc::new(
+            EngineCatalog::parse_files([
+                (
+                    "llama-cpp.toml",
+                    include_str!("../../configs/sy/spark/engines/llama-cpp.toml"),
+                ),
+                (
+                    "vllm.toml",
+                    include_str!("../../configs/sy/spark/engines/vllm.toml"),
+                ),
+            ])
+            .unwrap(),
+        )
     }
 
-    fn generic_input(marker: char) -> StartInstanceInput {
-        let policy = engine_policy();
+    fn test_artifacts() -> ModelArtifactsDocument {
+        serde_json::from_str(r#"{"schema":"sy.spark.model-artifacts/v2","format":"safetensors","primary":{"path":"model.safetensors","bytes":8,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"auxiliary":[],"quantization":"FP8","capabilities":["text_generation"],"configured_alias":null}"#).unwrap()
+    }
+
+    fn gguf_artifacts() -> ModelArtifactsDocument {
+        serde_json::from_str(r#"{"schema":"sy.spark.model-artifacts/v2","format":"gguf","primary":{"path":"weights/model.gguf","bytes":8,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"auxiliary":[{"role":"projector","path":"vision/mmproj.gguf","bytes":4,"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},{"role":"weight_shard","path":"weights/model-00002.gguf","bytes":3,"sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}],"quantization":"Q4_K_XL","capabilities":["text_generation"],"configured_alias":"model:q4"}"#).unwrap()
+    }
+
+    fn input_for(
+        policy: &EnginePolicy,
+        artifacts: ModelArtifactsDocument,
+        marker: char,
+    ) -> StartInstanceInput {
         StartInstanceInput {
             instance_id: format!("i_{}", marker.to_string().repeat(32)),
             generation: 1,
             model_commit: marker.to_string().repeat(40),
             model_repository: "unlisted-owner/compatible-model".into(),
-            recipe_id: policy.config().id.clone(),
+            engine_id: policy.config().id.clone(),
+            engine_fingerprint: policy.fingerprint().into(),
+            artifact_fingerprint: artifact_fingerprint(&artifacts).unwrap(),
+            artifacts,
             operation_id: "01K00000000000000000000000".into(),
         }
+    }
+
+    fn generic_input(marker: char) -> StartInstanceInput {
+        let policy = vllm_policy();
+        input_for(&policy, test_artifacts(), marker)
     }
 
     #[test]
@@ -3404,8 +3813,7 @@ mod tests {
     fn signed_executor_config_pins_catalog_and_exact_host_identity() {
         let config: ExecutorConfig =
             toml::from_str(include_str!("../../configs/sy/spark/executor.toml")).unwrap();
-        assert_eq!(config.recipes_dir, Path::new(RECIPE_CATALOG_DIR));
-        assert_eq!(config.engine_policy, Path::new(ENGINE_POLICY_PATH));
+        assert_eq!(config.engine_catalog, Path::new(ENGINE_CATALOG_PATH));
         assert_eq!(config.resources_policy, Path::new(RESOURCE_POLICY_PATH));
         assert_eq!(config.host.gpu_model, "NVIDIA GB10");
         assert_eq!(config.host.compute_capability, "12.1");
@@ -3426,9 +3834,7 @@ mod tests {
             hostname_path: root.path().join("hostname"),
             kernel_release: "6.17-test".into(),
             machine_id_path: root.path().join("machine-id"),
-            catalog: catalog(),
-            engine_policy: engine_policy(),
-            recipe_host: recipe_host(),
+            engine_catalog: engine_catalog(),
             resources: None,
         };
         assert_eq!(handler.inspect_host().unwrap().kernel_release, "6.17-test");
@@ -3453,6 +3859,37 @@ mod tests {
             .decode(&mut frame)
             .expect_err("oversized executor frame");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn configured_model_prepare_request_fits_executor_frame() {
+        let policy = EnginePolicy::parse(include_str!(
+            "../../configs/sy/spark/engines/vllm-qwen38-mmap.toml"
+        ))
+        .unwrap();
+        let models = super::super::model_catalog::ModelCatalog::parse(include_str!(
+            "../../configs/sy/spark/models.toml"
+        ))
+        .unwrap();
+        let model = models.resolve("qwen3.8:flash-next-nvfp4").unwrap();
+        let mut input = input_for(&policy, model.artifacts().clone(), 'f');
+        input.model_repository = model.repository().into();
+        input.model_commit = model.revision().into();
+        let request = Request {
+            schema_version: SCHEMA_VERSION,
+            request_id: Ulid::new(),
+            trace_id: None,
+            parent_span_id: None,
+            deadline_ms: Some(MAX_DEADLINE_MS),
+            priority: Priority::Interactive,
+            method: EXECUTOR_METHOD.into(),
+            params: serde_json::to_value(ExecutorAction {
+                action: ExecutorActionKind::PrepareInstance(input),
+            })
+            .unwrap(),
+        };
+
+        assert!(serde_json::to_vec(&request).unwrap().len() <= MAX_REQUEST_FRAME);
     }
 
     #[test]
@@ -3487,9 +3924,7 @@ mod tests {
             hostname_path: root.path().join("hostname"),
             kernel_release: "6.17-test".into(),
             machine_id_path: root.path().join("machine-id"),
-            catalog: catalog(),
-            engine_policy: engine_policy(),
-            recipe_host: recipe_host(),
+            engine_catalog: engine_catalog(),
             resources: None,
         });
         let request_id = Ulid::new();
@@ -3526,9 +3961,7 @@ mod tests {
             hostname_path: "/etc/hostname".into(),
             kernel_release: "6.17-test".into(),
             machine_id_path: "/etc/machine-id".into(),
-            catalog: catalog(),
-            engine_policy: engine_policy(),
-            recipe_host: recipe_host(),
+            engine_catalog: engine_catalog(),
             resources: None,
         };
         for deadline_ms in [None, Some(0), Some(MAX_DEADLINE_MS + 1)] {
@@ -3550,7 +3983,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exact_recipe_startup_deadline_above_180_seconds_is_accepted() {
+    async fn configured_maximum_startup_deadline_is_accepted() {
         let heartbeats = Arc::new(Heartbeats::default());
         heartbeats.mark_guard();
         heartbeats.mark_events();
@@ -3563,9 +3996,7 @@ mod tests {
             hostname_path: "/etc/hostname".into(),
             kernel_release: "6.17-test".into(),
             machine_id_path: "/etc/machine-id".into(),
-            catalog: catalog(),
-            engine_policy: engine_policy(),
-            recipe_host: recipe_host(),
+            engine_catalog: engine_catalog(),
             resources: None,
         };
         let request_id = Ulid::new();
@@ -3580,7 +4011,7 @@ mod tests {
                     action: ExecutorActionKind::Health,
                 })
                 .unwrap(),
-                deadline_ms: Some(900_000),
+                deadline_ms: Some(MAX_DEADLINE_MS),
                 priority: Priority::Interactive,
             })
             .await;
@@ -3588,117 +4019,12 @@ mod tests {
         assert!(matches!(response, Response::Ok { .. }));
     }
 
-    #[tokio::test]
-    async fn sqlite_cannot_supply_runtime_argv_or_mounts() {
-        let heartbeats = Arc::new(Heartbeats::default());
-        heartbeats.mark_guard();
-        heartbeats.mark_events();
-        let handler = ExecutorHandler {
-            agent_uid: 996,
-            cancellation: Arc::new(CancelRegistry::new()),
-            docker: Arc::new(BollardDockerInspector),
-            runtime: Arc::new(BollardContainerRuntime),
-            heartbeats,
-            hostname_path: "/etc/hostname".into(),
-            kernel_release: "6.17-test".into(),
-            machine_id_path: "/etc/machine-id".into(),
-            catalog: catalog(),
-            engine_policy: engine_policy(),
-            recipe_host: recipe_host(),
-            resources: None,
-        };
-        let result = handler
-            .execute(
-                ExecutorAction {
-                    action: ExecutorActionKind::InspectRecipes(RecipeQuery {
-                        model_repository: Some("ornith-ai/Ornith-1.5-9B".into()),
-                        model_commit: None,
-                        objective: "agent".into(),
-                    }),
-                },
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
-        let serialized = serde_json::to_string(&result).unwrap();
-        assert!(!serialized.contains("argv") && !serialized.contains("mounts"));
-        assert!(serde_json::from_value::<ExecutorAction>(serde_json::json!({
-            "action": {"inspect_recipes": {
-                "model_repository": "ornith-ai/Ornith-1.5-9B",
-                "model_commit": null,
-                "objective": "agent",
-                "argv": ["attacker"]
-            }}
-        }))
-        .is_err());
-    }
-
-    #[test]
-    fn legacy_spec_fixture_remains_locked_down_for_migration_checks() {
-        let catalog = RecipeCatalog::signed_for_test();
-        let recipe = catalog.recipe("ornith-1.5-9b-vllm-0.19.1").unwrap();
-        let spec = build_container_spec(
-            recipe,
-            &StartInstanceInput {
-                instance_id: format!("i_{}", "1".repeat(32)),
-                generation: 3,
-                model_commit: recipe.model.commits[0].clone(),
-                model_repository: recipe.model.repository.clone(),
-                recipe_id: recipe.identity.id.clone(),
-                operation_id: "01K00000000000000000000000".into(),
-            },
-            "test-internal-network",
-        )
-        .unwrap();
-        let value = serde_json::to_value(spec).unwrap();
-
-        assert_eq!(
-            value["image"],
-            format!(
-                "{}@{}",
-                recipe.engine.image_repository, recipe.engine.image_digest
-            )
-        );
-        assert_eq!(value["network"], "test-internal-network");
-        assert_eq!(value["restart"], "no");
-        assert_eq!(value["read_only_rootfs"], true);
-        assert_eq!(value["cap_drop"], serde_json::json!(["ALL"]));
-        assert_eq!(value["published_ports"], serde_json::json!([]));
-        assert_eq!(value["accelerator"], "nvidia");
-        assert_eq!(
-            value["gateway_profile"],
-            serde_json::to_value(recipe.gateway.profile()).unwrap()
-        );
-        assert_eq!(value["environment"], serde_json::json!([]));
-        assert!(value["mounts"].as_array().unwrap().iter().any(|mount| {
-            mount["source"]
-                .as_str()
-                .is_some_and(|source| source.contains("/sha256-") && !source.ends_with("/3"))
-        }));
-        assert!(value["mounts"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|mount| mount["source"]
-                .as_str()
-                .unwrap()
-                .starts_with("/var/lib/sy-spark/")));
-        assert!(!serde_json::to_string(&value)
-            .unwrap()
-            .contains("docker.sock"));
-    }
-
     #[test]
     fn generic_spec_accepts_unlisted_repository_and_owns_security_fields() {
-        let policy = engine_policy();
-        let input = StartInstanceInput {
-            instance_id: format!("i_{}", "2".repeat(32)),
-            generation: 1,
-            model_commit: "3".repeat(40),
-            model_repository: "new-owner/model-never-listed-in-sy".into(),
-            recipe_id: policy.config().id.clone(),
-            operation_id: "01K00000000000000000000000".into(),
-        };
+        let policy = vllm_policy();
+        let mut input = generic_input('2');
+        input.model_commit = "3".repeat(40);
+        input.model_repository = "new-owner/model-never-listed-in-sy".into();
         let spec = build_generic_container_spec(&policy, &input).unwrap();
 
         assert_eq!(spec.image, policy.image());
@@ -3717,7 +4043,10 @@ mod tests {
                 "generation": input.generation,
                 "model_commit": input.model_commit,
                 "model_repository": input.model_repository,
-                "recipe_id": input.recipe_id,
+                "engine_id": input.engine_id,
+                "engine_fingerprint": input.engine_fingerprint,
+                "artifacts": input.artifacts,
+                "artifact_fingerprint": input.artifact_fingerprint,
                 "operation_id": input.operation_id,
                 "image": "attacker/image",
                 "argv": ["sh", "-c", "id"],
@@ -3725,6 +4054,204 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn container_ipc_and_shared_memory_come_from_engine_configuration() {
+        let configured = include_str!("../../configs/sy/spark/engines/vllm.toml")
+            .replacen("ipc_mode = \"private\"", "ipc_mode = \"host\"", 1)
+            .replacen(
+                "shm_size_bytes = 67108864",
+                "shm_size_bytes = 17179869184",
+                1,
+            );
+        let policy = EnginePolicy::parse(&configured).unwrap();
+        let input = input_for(&policy, test_artifacts(), 'a');
+        let spec = build_generic_container_spec(&policy, &input).unwrap();
+
+        assert_eq!(spec.ipc_mode, "host");
+        assert_eq!(spec.shm_size_bytes, 17_179_869_184);
+    }
+
+    #[test]
+    fn container_limit_uses_the_selected_profile_resource_envelope() {
+        let configured = include_str!("../../configs/sy/spark/engines/llama-cpp.toml").replacen(
+            "id = \"qwen3.8-mtp\"",
+            "id = \"qwen3.8-mtp\"\nresources = { image_bytes = 6, startup_peak_bytes = 7, steady_peak_bytes = 8, compile_cache_bytes = 9 }",
+            1,
+        );
+        let policy = EnginePolicy::parse(&configured).unwrap();
+        let mut artifacts = gguf_artifacts();
+        artifacts.engine_profile = Some("qwen3.8-mtp".into());
+        let input = input_for(&policy, artifacts, '5');
+
+        assert_eq!(
+            build_generic_container_spec(&policy, &input)
+                .unwrap()
+                .memory_bytes,
+            7
+        );
+    }
+
+    #[test]
+    fn scheduling_metadata_preserves_compile_cache_namespace() {
+        let baseline = llama_policy();
+        let changed = include_str!("../../configs/sy/spark/engines/llama-cpp.toml").replacen(
+            "priority = 100",
+            "priority = 101",
+            1,
+        );
+        let changed = EnginePolicy::parse(&changed).unwrap();
+        let cache = |policy: &EnginePolicy| {
+            let input = input_for(policy, gguf_artifacts(), '5');
+            build_generic_container_spec(policy, &input)
+                .unwrap()
+                .mounts
+                .last()
+                .unwrap()
+                .source
+                .clone()
+        };
+
+        assert_eq!(cache(&baseline), cache(&changed));
+    }
+
+    #[test]
+    fn execution_compatibility_changes_isolate_compile_cache_namespace() {
+        let baseline = llama_policy();
+        let changed = include_str!("../../configs/sy/spark/engines/llama-cpp.toml").replacen(
+            &baseline.config().version,
+            "cache-incompatible",
+            1,
+        );
+        let changed = EnginePolicy::parse(&changed).unwrap();
+        let cache = |policy: &EnginePolicy| {
+            let input = input_for(policy, gguf_artifacts(), '5');
+            build_generic_container_spec(policy, &input)
+                .unwrap()
+                .mounts
+                .last()
+                .unwrap()
+                .source
+                .clone()
+        };
+
+        assert_ne!(cache(&baseline), cache(&changed));
+    }
+
+    #[test]
+    fn embedding_spec_selects_vllm_pooling_runner_and_model_dimensions() {
+        let policy = vllm_policy();
+        let mut artifacts = test_artifacts();
+        artifacts.capabilities = vec!["text_embeddings".into()];
+        let input = input_for(&policy, artifacts, 'e');
+
+        let spec = build_generic_container_spec_with(&policy, &input, |_, _, _| ModelConfig {
+            model_type: None,
+            hidden_size: Some(1024),
+        })
+        .unwrap();
+
+        assert!(spec
+            .argv
+            .windows(2)
+            .any(|pair| pair == ["--runner", "pooling"]));
+        assert!(!spec.argv.iter().any(|value| value == "--max-model-len"));
+        assert_eq!(spec.gateway_profile.embeddings.unwrap().dimensions, 1024);
+    }
+
+    #[test]
+    fn gguf_spec_mounts_only_verified_artifacts_read_only() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let policy = llama_policy();
+        let input = input_for(&policy, gguf_artifacts(), '4');
+        let mut spec = build_generic_container_spec(&policy, &input).unwrap();
+        let model_mounts = spec
+            .mounts
+            .iter()
+            .filter(|mount| mount.target != "/compile-cache")
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            model_mounts
+                .iter()
+                .map(|mount| mount.target.as_str())
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([
+                "/models/vision/mmproj.gguf",
+                "/models/weights/model-00002.gguf",
+                "/models/weights/model.gguf",
+            ])
+        );
+        assert!(model_mounts.iter().all(|mount| mount.read_only));
+        assert!(spec
+            .argv
+            .windows(2)
+            .any(|pair| pair == ["--model", "/models/weights/model.gguf"]));
+        assert!(spec
+            .argv
+            .windows(2)
+            .any(|pair| pair == ["--mmproj", "/models/vision/mmproj.gguf"]));
+        assert!(!spec.argv.iter().any(|value| value.contains("model-00002")));
+
+        let root = tempfile::tempdir().unwrap();
+        let model_root = root.path().join("models");
+        let cache_root = root.path().join("cache");
+        std::fs::create_dir(&model_root).unwrap();
+        std::fs::create_dir(&cache_root).unwrap();
+        std::fs::set_permissions(&model_root, std::fs::Permissions::from_mode(0o750)).unwrap();
+        std::fs::set_permissions(&cache_root, std::fs::Permissions::from_mode(0o750)).unwrap();
+        for (index, mount) in spec.mounts.iter_mut().enumerate() {
+            if let Some(bytes) = mount.expected_bytes {
+                let source = model_root.join(index.to_string());
+                std::fs::write(&source, vec![0; usize::try_from(bytes).unwrap()]).unwrap();
+                std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o640)).unwrap();
+                mount.source = source.to_string_lossy().into_owned();
+            } else {
+                mount.source = cache_root.join("compiled").to_string_lossy().into_owned();
+            }
+        }
+        let owner = cache_root.metadata().unwrap().uid();
+        assert!(validate_mount_sources_at(&spec, &model_root, &cache_root, owner).is_ok());
+    }
+
+    #[test]
+    fn container_identity_changes_when_engine_or_artifact_config_changes() {
+        let policy = llama_policy();
+        let baseline_artifacts = gguf_artifacts();
+        let mut variants = vec![baseline_artifacts.clone()];
+        let mut changed_path = baseline_artifacts.clone();
+        changed_path.primary.path = "weights/renamed.gguf".into();
+        variants.push(changed_path);
+        let mut changed_hash = baseline_artifacts.clone();
+        changed_hash.primary.sha256 = Some("d".repeat(64));
+        variants.push(changed_hash);
+        let mut changed_role = baseline_artifacts.clone();
+        changed_role.auxiliary[0].role = super::super::wire::ModelArtifactRole::WeightShard;
+        variants.push(changed_role);
+        let mut identities = variants
+            .into_iter()
+            .map(|artifacts| {
+                let input = input_for(&policy, artifacts, '5');
+                build_generic_container_spec(&policy, &input)
+                    .unwrap()
+                    .labels
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let changed = include_str!("../../configs/sy/spark/engines/llama-cpp.toml").replacen(
+            &format!("version = \"{}\"", policy.config().version),
+            "version = \"identity-test\"",
+            1,
+        );
+        let changed_policy = EnginePolicy::parse(&changed).unwrap();
+        let input = input_for(&changed_policy, baseline_artifacts, '5');
+        identities.insert(
+            build_generic_container_spec(&changed_policy, &input)
+                .unwrap()
+                .labels,
+        );
+
+        assert_eq!(identities.len(), 5);
     }
 
     #[test]
@@ -3805,8 +4332,13 @@ mod tests {
 
     #[test]
     fn docker_default_seccomp_is_selected_by_omitting_a_profile_override() {
-        let spec = build_generic_container_spec(&engine_policy(), &generic_input('1')).unwrap();
+        let spec = build_generic_container_spec(&vllm_policy(), &generic_input('1')).unwrap();
         assert_eq!(security_options(&spec), ["no-new-privileges=true"]);
+    }
+
+    #[test]
+    fn executor_disables_image_owned_healthcheck() {
+        assert_eq!(managed_healthcheck().test, Some(vec!["NONE".into()]));
     }
 
     #[test]
@@ -3821,21 +4353,7 @@ mod tests {
         std::fs::set_permissions(&cache_root, std::fs::Permissions::from_mode(0o750)).unwrap();
         let owner = cache_root.metadata().unwrap().uid();
         let group = cache_root.metadata().unwrap().gid();
-        let catalog = RecipeCatalog::signed_for_test();
-        let recipe = catalog.recipe("ornith-1.5-9b-vllm-0.19.1").unwrap();
-        let mut spec = build_container_spec(
-            recipe,
-            &StartInstanceInput {
-                instance_id: format!("i_{}", "1".repeat(32)),
-                generation: 3,
-                model_commit: recipe.model.commits[0].clone(),
-                model_repository: recipe.model.repository.clone(),
-                recipe_id: recipe.identity.id.clone(),
-                operation_id: "01K00000000000000000000000".into(),
-            },
-            "test-internal-network",
-        )
-        .unwrap();
+        let mut spec = build_generic_container_spec(&vllm_policy(), &generic_input('1')).unwrap();
         for mount in &mut spec.mounts {
             mount.source = if mount.read_only {
                 model_root.join("repository")
@@ -3852,6 +4370,55 @@ mod tests {
         assert_eq!(groups, [group.to_string()]);
         assert_eq!((metadata.uid(), metadata.gid()), (owner, group));
         assert_eq!(metadata.permissions().mode() & 0o777, 0o770);
+    }
+
+    #[test]
+    fn candidate_cache_inspection_credits_only_allocated_regular_storage() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("identity/instance");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("kernel.bin"), vec![0_u8; 8192]).unwrap();
+        assert!(allocated_tree_bytes(&cache, root.path()).unwrap() >= 8192);
+        assert_eq!(
+            allocated_tree_bytes(&root.path().join("missing"), root.path()).unwrap(),
+            0
+        );
+        std::os::unix::fs::symlink(&cache, root.path().join("linked")).unwrap();
+        assert!(allocated_tree_bytes(&root.path().join("linked"), root.path()).is_err());
+    }
+
+    #[test]
+    fn candidate_cache_inspection_leaves_unreadable_subtrees_uncredited() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("identity/instance");
+        let private = cache.join("private");
+        std::fs::create_dir_all(&private).unwrap();
+        std::fs::write(private.join("opaque.bin"), vec![0_u8; 8192]).unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = std::fs::read_dir(&private).is_err();
+
+        let measured = allocated_tree_bytes(&cache, root.path());
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let complete = allocated_tree_bytes(&cache, root.path()).unwrap();
+
+        assert!(measured.is_ok());
+        if unreadable {
+            assert!(measured.unwrap() < complete);
+        }
+    }
+
+    #[test]
+    fn candidate_cache_namespace_is_scoped_to_the_exact_instance() {
+        let policy = vllm_policy();
+        let first = generic_input('1');
+        let mut second = first.clone();
+        second.instance_id = format!("i_{}", "2".repeat(32));
+        let first_path =
+            candidate_cache_path(&policy, &CandidateStorageInput::from(&first)).unwrap();
+        let second_path =
+            candidate_cache_path(&policy, &CandidateStorageInput::from(&second)).unwrap();
+        assert_ne!(first_path, second_path);
+        assert!(first_path.starts_with(&policy.config().compile_cache_root));
     }
 
     #[test]
@@ -3932,9 +4499,7 @@ mod tests {
             hostname_path: "/etc/hostname".into(),
             kernel_release: "6.17-test".into(),
             machine_id_path: "/etc/machine-id".into(),
-            catalog: catalog(),
-            engine_policy: engine_policy(),
-            recipe_host: recipe_host(),
+            engine_catalog: engine_catalog(),
             resources: None,
         };
         let input = generic_input('1');
@@ -4001,21 +4566,23 @@ mod tests {
             hostname_path: "/etc/hostname".into(),
             kernel_release: "6.17-test".into(),
             machine_id_path: "/etc/machine-id".into(),
-            catalog: catalog(),
-            engine_policy: engine_policy(),
-            recipe_host: recipe_host(),
+            engine_catalog: engine_catalog(),
             resources: None,
         };
         let recipe = RecipeCatalog::signed_for_test()
             .recipe("spark-fixture-http-echo-1.0.0")
             .unwrap()
             .clone();
+        let artifacts = test_artifacts();
         let input = StartInstanceInput {
             instance_id: format!("i_{}", "1".repeat(32)),
             generation: 1,
             model_commit: recipe.model.commits[0].clone(),
             model_repository: recipe.model.repository,
-            recipe_id: recipe.identity.id,
+            engine_id: recipe.identity.id,
+            engine_fingerprint: format!("sha256:{}", "b".repeat(64)),
+            artifact_fingerprint: artifact_fingerprint(&artifacts).unwrap(),
+            artifacts,
             operation_id: "01K00000000000000000000000".into(),
         };
         for action in [
@@ -4034,15 +4601,18 @@ mod tests {
 
     #[tokio::test]
     async fn full_scan_matches_only_exact_catalogued_generation_and_quarantines_name_adoption() {
-        let recipes = RecipeCatalog::signed_for_test();
-        let recipe = recipes.recipe("spark-fixture-http-echo-1.0.0").unwrap();
+        let policy = vllm_policy();
+        let artifacts = test_artifacts();
         let instance_id = format!("i_{}", "1".repeat(32));
         let expected = ReconcileExpectation {
             instance_id: instance_id.clone(),
             generation: 1,
-            model_commit: recipe.model.commits[0].clone(),
-            model_repository: recipe.model.repository.clone(),
-            recipe_id: recipe.identity.id.clone(),
+            model_commit: "a".repeat(40),
+            model_repository: "owner/model".into(),
+            engine_id: policy.config().id.clone(),
+            engine_fingerprint: policy.fingerprint().into(),
+            artifact_fingerprint: artifact_fingerprint(&artifacts).unwrap(),
+            artifacts,
         };
         let runtime = FakeRuntime::new();
         let managed = runtime.managed.clone();
@@ -4054,12 +4624,11 @@ mod tests {
             role: Some("engine".into()),
             model_commit: Some(expected.model_commit.clone()),
             model_repository: Some(expected.model_repository.clone()),
-            recipe_id: Some(expected.recipe_id.clone()),
-            image: Some(format!(
-                "{}@{}",
-                recipe.engine.image_repository, recipe.engine.image_digest
-            )),
-            networks: vec!["legacy-internal-network".into()],
+            engine_id: Some(expected.engine_id.clone()),
+            engine_fingerprint: Some(expected.engine_fingerprint.clone()),
+            artifact_fingerprint: Some(expected.artifact_fingerprint.clone()),
+            image: Some(policy.image()),
+            networks: vec![policy.config().network.clone()],
             restart_policy: "unless-stopped".into(),
         });
         let handler = ExecutorHandler {
@@ -4071,9 +4640,7 @@ mod tests {
             hostname_path: "/etc/hostname".into(),
             kernel_release: "6.17-test".into(),
             machine_id_path: "/etc/machine-id".into(),
-            catalog: catalog(),
-            engine_policy: engine_policy(),
-            recipe_host: recipe_host(),
+            engine_catalog: engine_catalog(),
             resources: None,
         };
         let result = handler
@@ -4134,9 +4701,7 @@ mod tests {
             hostname_path: "/etc/hostname".into(),
             kernel_release: "6.17-test".into(),
             machine_id_path: "/etc/machine-id".into(),
-            catalog: catalog(),
-            engine_policy: engine_policy(),
-            recipe_host: recipe_host(),
+            engine_catalog: engine_catalog(),
             resources: Some(monitor.clone()),
         };
         let input = generic_input('1');

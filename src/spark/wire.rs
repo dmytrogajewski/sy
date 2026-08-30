@@ -6,6 +6,133 @@ use sha2::{Digest, Sha256};
 pub const INVENTORY_SCHEMA: &str = "sy.spark.bootstrap.inventory/v1";
 pub const MANIFEST_SCHEMA: &str = "sy.spark.install-manifest/v1";
 pub const FINGERPRINT_SCHEMA: &str = "sy.spark.protected-fingerprint/v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ModelArtifactFormat {
+    Gguf,
+    Safetensors,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
+pub enum ModelArtifactRole {
+    Projector,
+    WeightShard,
+    Custom(String),
+}
+
+impl ModelArtifactRole {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Projector => "projector",
+            Self::WeightShard => "weight_shard",
+            Self::Custom(value) => value,
+        }
+    }
+}
+
+impl std::str::FromStr for ModelArtifactRole {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "projector" => Ok(Self::Projector),
+            "weight_shard" => Ok(Self::WeightShard),
+            _ if !value.is_empty()
+                && value.len() <= 64
+                && value.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'
+                }) =>
+            {
+                Ok(Self::Custom(value.into()))
+            }
+            _ => Err("artifact role must be a lowercase identifier".into()),
+        }
+    }
+}
+
+impl Serialize for ModelArtifactRole {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ModelArtifactRole {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ModelArtifactFileDocument {
+    pub path: String,
+    pub bytes: u64,
+    pub sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ModelAuxiliaryArtifactDocument {
+    pub role: ModelArtifactRole,
+    pub path: String,
+    pub bytes: u64,
+    pub sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ModelArtifactSelectorDocument {
+    pub role: ModelArtifactRole,
+    pub path: String,
+}
+
+impl std::str::FromStr for ModelArtifactSelectorDocument {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (role, path) = value
+            .split_once('=')
+            .ok_or_else(|| "auxiliary artifact must use ROLE=PATH".to_owned())?;
+        if path.is_empty() || path.contains('=') {
+            return Err("auxiliary artifact must contain one non-empty path".into());
+        }
+        Ok(Self {
+            role: role.parse()?,
+            path: path.into(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ModelArtifactsDocument {
+    pub schema: String,
+    pub format: ModelArtifactFormat,
+    pub primary: ModelArtifactFileDocument,
+    pub auxiliary: Vec<ModelAuxiliaryArtifactDocument>,
+    pub quantization: Option<String>,
+    pub capabilities: Vec<String>,
+    pub configured_alias: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_profile: Option<String>,
+}
+
+pub fn artifact_fingerprint(artifacts: &ModelArtifactsDocument) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let encoded = serde_json::to_vec(artifacts)
+        .map_err(|error| format!("encode Spark artifact identity: {error}"))?;
+    Ok(format!("sha256:{:x}", Sha256::digest(encoded)))
+}
+
 #[cfg(feature = "spark-agent")]
 pub const STATUS_SCHEMA: &str = "sy.spark.status/v1";
 #[cfg(feature = "spark-agent")]
@@ -25,6 +152,7 @@ pub const TOKEN_SCHEMA: &str = "sy.spark.token/v1";
 #[cfg(feature = "spark-agent")]
 pub const TOKEN_LIST_SCHEMA: &str = "sy.spark.token-list/v1";
 #[cfg(feature = "spark-agent")]
+#[cfg(all(feature = "spark-agent", test))]
 pub const RECIPE_CATALOG_SCHEMA: &str = "sy.spark.recipe-catalog/v1";
 #[cfg(feature = "spark-agent")]
 pub const MODEL_SCHEMA: &str = "sy.spark.model/v1";
@@ -33,7 +161,7 @@ pub const MODEL_LIST_SCHEMA: &str = "sy.spark.model-list/v1";
 #[cfg(feature = "spark-agent")]
 pub const REMOVAL_PLAN_SCHEMA: &str = "sy.spark.removal-plan/v1";
 #[cfg(feature = "spark-agent")]
-pub const INSTANCE_SCHEMA: &str = "sy.spark.instance/v1";
+pub const INSTANCE_SCHEMA: &str = "sy.spark.instance/v2";
 #[cfg(feature = "spark-agent")]
 pub const INSTANCE_LIST_SCHEMA: &str = "sy.spark.instance-list/v1";
 #[cfg(feature = "spark-agent")]
@@ -202,6 +330,7 @@ pub struct ExecutorSnapshot {
 #[cfg(feature = "spark-agent")]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(rename_all = "kebab-case")]
+#[cfg(all(feature = "spark-agent", test))]
 pub enum RecipeStatus {
     LocalVerified,
     UpstreamVerified,
@@ -213,6 +342,7 @@ pub enum RecipeStatus {
 #[cfg(feature = "spark-agent")]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
+#[cfg(all(feature = "spark-agent", test))]
 pub enum RecipeSelectionReason {
     NamedCompatible,
     TunedWinner,
@@ -223,6 +353,7 @@ pub enum RecipeSelectionReason {
 #[cfg(feature = "spark-agent")]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
+#[cfg(all(feature = "spark-agent", test))]
 pub struct RecipeMismatchDocument {
     pub field: String,
     pub actual: String,
@@ -233,6 +364,7 @@ pub struct RecipeMismatchDocument {
 #[cfg(feature = "spark-agent")]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
+#[cfg(all(feature = "spark-agent", test))]
 pub struct RecipeEvidenceDocument {
     pub source_url: String,
     pub source_commit: String,
@@ -248,6 +380,7 @@ pub struct RecipeEvidenceDocument {
 #[cfg(feature = "spark-agent")]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
+#[cfg(all(feature = "spark-agent", test))]
 pub struct RecipeCompatibilityDocument {
     pub id: String,
     pub version: u32,
@@ -334,6 +467,7 @@ pub struct RecipeResourceEnvelopeDocument {
 #[cfg(feature = "spark-agent")]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
+#[cfg(all(feature = "spark-agent", test))]
 pub struct RecipeSelectionDocument {
     pub recipe_id: String,
     pub reason: RecipeSelectionReason,
@@ -344,6 +478,7 @@ pub struct RecipeSelectionDocument {
 #[cfg(feature = "spark-agent")]
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
+#[cfg(all(feature = "spark-agent", test))]
 pub struct RecipeCatalogDocument {
     pub schema: String,
     pub catalog_sha256: String,
@@ -362,6 +497,10 @@ pub struct DownloadRequest {
     #[serde(default = "default_model_revision")]
     pub revision: String,
     pub alias: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auxiliary: Vec<ModelArtifactSelectorDocument>,
     #[serde(default)]
     pub update_alias: bool,
     #[serde(default)]
@@ -433,12 +572,16 @@ pub struct InstanceDocument {
     pub model_id: String,
     pub model: String,
     pub model_commit: String,
-    #[serde(rename = "engine_id", alias = "recipe_id")]
-    pub recipe_id: String,
-    #[serde(rename = "engine_fingerprint", alias = "recipe_fingerprint")]
-    pub recipe_fingerprint: String,
+    pub engine_id: String,
+    pub engine_fingerprint: String,
+    pub artifacts: ModelArtifactsDocument,
+    pub artifact_fingerprint: String,
     pub objective: String,
     pub resources: RecipeResourceEnvelopeDocument,
+    #[serde(default)]
+    pub context_window: u64,
+    #[serde(default)]
+    pub default_reasoning_effort: Option<String>,
     pub generation: u64,
     pub desired: InstanceDesiredState,
     pub observed: InstanceObservedState,
@@ -484,6 +627,8 @@ pub struct DownloadPlanDocument {
     pub schema: String,
     pub repository: String,
     pub commit: String,
+    #[serde(default)]
+    pub artifacts: Option<ModelArtifactsDocument>,
     pub logical_bytes: u64,
     pub unique_bytes: u64,
     pub temporary_bytes: u64,
@@ -504,6 +649,8 @@ pub struct ModelDocument {
     pub repository: String,
     pub commit: String,
     pub snapshot: String,
+    #[serde(default)]
+    pub artifacts: Option<ModelArtifactsDocument>,
     pub logical_bytes: u64,
     pub unique_bytes: u64,
     pub aliases: Vec<String>,
@@ -1062,7 +1209,10 @@ pub struct InstallManifest {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_inventory;
+    use super::{
+        decode_inventory, ModelArtifactFileDocument, ModelArtifactFormat,
+        ModelArtifactSelectorDocument, ModelArtifactsDocument, ModelAuxiliaryArtifactDocument,
+    };
 
     const INVENTORY: &str = r#"{
         "schema":"sy.spark.bootstrap.inventory/v1",
@@ -1093,5 +1243,101 @@ mod tests {
         assert!(decode_inventory(unknown.as_bytes()).is_err());
         let missing = INVENTORY.replace("\"architecture\":\"aarch64\",", "");
         assert!(decode_inventory(missing.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn artifact_format_represents_gguf_and_safetensors() {
+        assert_eq!(
+            serde_json::to_string(&ModelArtifactFormat::Gguf).unwrap(),
+            "\"gguf\""
+        );
+        assert_eq!(
+            serde_json::from_str::<ModelArtifactFormat>("\"safetensors\"").unwrap(),
+            ModelArtifactFormat::Safetensors
+        );
+    }
+
+    #[test]
+    fn artifact_file_rejects_unknown_fields() {
+        let value = r#"{"path":"model.gguf","bytes":7,"sha256":null,"extra":true}"#;
+        assert!(serde_json::from_str::<ModelArtifactFileDocument>(value).is_err());
+    }
+
+    #[test]
+    fn model_artifacts_reject_unknown_catalog_fields() {
+        const JSON: &str = r#"{"schema":"sy.spark.model-artifacts/v2","format":"gguf","primary":{"path":"model.gguf","bytes":7,"sha256":null},"auxiliary":[],"quantization":null,"capabilities":[],"configured_alias":null,"engine":"hidden"}"#;
+        assert!(serde_json::from_str::<ModelArtifactsDocument>(JSON).is_err());
+    }
+
+    #[test]
+    fn model_artifacts_round_trip_without_losing_exact_files() {
+        const JSON: &str = r#"{"schema":"sy.spark.model-artifacts/v2","format":"gguf","primary":{"path":"model.gguf","bytes":7,"sha256":"aaa"},"auxiliary":[{"role":"projector","path":"mmproj.gguf","bytes":3,"sha256":"bbb"}],"quantization":"Q4_K_XL","capabilities":["text","vision"],"configured_alias":"qwen","engine_profile":"coding"}"#;
+        let artifacts: ModelArtifactsDocument = serde_json::from_str(JSON).unwrap();
+        assert_eq!(serde_json::to_string(&artifacts).unwrap(), JSON);
+    }
+
+    #[test]
+    fn auxiliary_roles_round_trip_and_unlabelled_files_fail_closed() {
+        let projector = r#"{"role":"projector","path":"mmproj.gguf","bytes":3,"sha256":null}"#;
+        let shard = r#"{"role":"weight_shard","path":"model-02.gguf","bytes":5,"sha256":null}"#;
+        let draft = r#"{"role":"draft_model","path":"mtp.gguf","bytes":7,"sha256":null}"#;
+        let future = r#"{"role":"future_adapter","path":"adapter.gguf","bytes":11,"sha256":null}"#;
+        assert!(serde_json::from_str::<ModelAuxiliaryArtifactDocument>(projector).is_ok());
+        assert!(serde_json::from_str::<ModelAuxiliaryArtifactDocument>(shard).is_ok());
+        assert!(serde_json::from_str::<ModelAuxiliaryArtifactDocument>(draft).is_ok());
+        assert!(serde_json::from_str::<ModelAuxiliaryArtifactDocument>(future).is_ok());
+        assert!(serde_json::from_str::<ModelAuxiliaryArtifactDocument>(
+            r#"{"path":"model-02.gguf","bytes":5,"sha256":null}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn model_document_without_artifacts_remains_readable_for_reindexing() {
+        const JSON: &str = r#"{"schema":"sy.spark.model/v1","id":"m_1","canonical":"huggingface:o/m@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repository":"o/m","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","snapshot":"models--o--m/snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","logical_bytes":1,"unique_bytes":1,"aliases":[],"active_instances":[],"transport":"fixture","verified_at":"2026-08-24T00:00:00Z","gated":false,"license":null}"#;
+        assert_eq!(
+            serde_json::from_str::<super::ModelDocument>(JSON)
+                .unwrap()
+                .artifacts,
+            None
+        );
+        let explicit = JSON.replacen(
+            "\"logical_bytes\"",
+            "\"artifacts\":null,\"logical_bytes\"",
+            1,
+        );
+        assert_eq!(
+            serde_json::from_str::<super::ModelDocument>(&explicit)
+                .unwrap()
+                .artifacts,
+            None
+        );
+    }
+
+    #[test]
+    fn download_plan_exposes_exact_artifacts() {
+        const JSON: &str = r#"{"schema":"plan/v1","repository":"o/m","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifacts":{"schema":"sy.spark.model-artifacts/v2","format":"safetensors","primary":{"path":"model.safetensors","bytes":7,"sha256":null},"auxiliary":[],"quantization":null,"capabilities":["text"],"configured_alias":null},"logical_bytes":7,"unique_bytes":7,"temporary_bytes":7,"disk_reserve_bytes":8}"#;
+        let plan: super::DownloadPlanDocument = serde_json::from_str(JSON).unwrap();
+        assert_eq!(plan.artifacts.unwrap().primary.path, "model.safetensors");
+    }
+
+    #[test]
+    fn download_request_round_trips_exact_artifact_selectors() {
+        const JSON: &str = r#"{"repository":"owner/model","revision":"main","alias":null,"artifact":"weights/model.gguf","auxiliary":[{"role":"projector","path":"vision/mmproj.gguf"}],"update_alias":false,"dry_run":true}"#;
+        let request: super::DownloadRequest = serde_json::from_str(JSON).unwrap();
+        assert_eq!(serde_json::to_string(&request).unwrap(), JSON);
+    }
+
+    #[test]
+    fn explicit_auxiliary_selector_requires_a_role() {
+        assert!("projector=vision/mmproj.gguf"
+            .parse::<ModelArtifactSelectorDocument>()
+            .is_ok());
+        assert!("weight_shard=model-00002.gguf"
+            .parse::<ModelArtifactSelectorDocument>()
+            .is_ok());
+        assert!("vision/mmproj.gguf"
+            .parse::<ModelArtifactSelectorDocument>()
+            .is_err());
     }
 }

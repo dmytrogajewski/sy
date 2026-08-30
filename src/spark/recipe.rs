@@ -6,15 +6,17 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::gateway::{EmbeddingPolicy, GatewayProfile, VisionPolicy};
+#[cfg(test)]
+use super::gateway::GatewayProfile;
+use super::gateway::{EmbeddingPolicy, VisionPolicy};
 use super::wire::{
     RecipeCatalogDocument, RecipeCompatibilityDocument, RecipeEvidenceDocument,
     RecipeMismatchDocument, RecipeResourceEnvelopeDocument, RecipeSelectionDocument,
     RecipeSelectionReason, RecipeStatus, RECIPE_CATALOG_SCHEMA,
 };
+use super::MAX_ENGINE_STARTUP_DEADLINE_SECONDS;
 
 const RECIPE_SCHEMA: &str = "sy.spark.recipe/v1";
-pub const MAX_STARTUP_DEADLINE_SECONDS: u64 = 900;
 const CATALOG_SCHEMA: &str = "sy.spark.recipe-catalog/v1";
 const FIXED_HOST_ROOTS: [&str; 2] = [
     "/var/lib/sy-spark/huggingface",
@@ -225,11 +227,16 @@ pub struct Gateway {
 }
 
 impl Gateway {
+    #[cfg(test)]
     pub fn profile(&self) -> GatewayProfile {
         GatewayProfile {
             capabilities: self.capabilities.iter().cloned().collect(),
             vision: self.vision.clone(),
             embeddings: self.embeddings.clone(),
+            startup_protocol_probe: true,
+            native_responses: false,
+            native_response_timeout_seconds: 0,
+            stream_idle_timeout_seconds: 0,
             sampling: super::gateway::SamplingPolicy::default(),
         }
     }
@@ -305,55 +312,6 @@ impl RecipeCatalog {
         .expect("embedded signed recipe catalog")
     }
 
-    /// Loads migration-only recipes from a root-owned directory.
-    ///
-    /// New instances never select this catalog. It exists solely so an
-    /// upgraded executor can identify, report, and stop generations created
-    /// by pre-engine-policy releases. An absent directory is the normal state
-    /// for a fresh installation.
-    pub fn load_legacy(directory: &Path) -> Result<Self, String> {
-        let entries = match std::fs::read_dir(directory) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Self::parse_documents(&[]);
-            }
-            Err(error) => return Err(format!("read legacy recipe directory: {error}")),
-        };
-        let mut names = entries
-            .map(|entry| {
-                entry
-                    .map_err(|error| format!("read legacy recipe entry: {error}"))
-                    .and_then(|entry| {
-                        entry
-                            .file_name()
-                            .into_string()
-                            .map_err(|_| "legacy recipe filename is not UTF-8".to_owned())
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        names.sort();
-        if names.len() > 32
-            || names.iter().any(|name| {
-                !name.ends_with(".toml")
-                    || name.len() > 128
-                    || !name.bytes().all(|byte| {
-                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
-                    })
-            })
-        {
-            return Err("legacy recipe directory contains an invalid file set".into());
-        }
-        let documents = names
-            .iter()
-            .map(|name| {
-                std::fs::read(directory.join(name))
-                    .map(|bytes| (name.as_str(), bytes))
-                    .map_err(|error| format!("read legacy recipe {name}: {error}"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Self::parse_documents(&documents)
-    }
-
     #[cfg(test)]
     pub fn load_signed(directory: &Path) -> Result<Self, String> {
         let actual_names = std::fs::read_dir(directory)
@@ -390,6 +348,7 @@ impl RecipeCatalog {
         Self::parse_documents(&documents)
     }
 
+    #[cfg(test)]
     pub fn recipe(&self, id: &str) -> Option<&Recipe> {
         self.recipes.iter().find(|recipe| recipe.identity.id == id)
     }
@@ -632,7 +591,8 @@ fn validate_recipe(recipe: &Recipe) -> Result<(), String> {
         return Err("gateway method allowlist is invalid".into());
     }
     validate_gateway(&recipe.gateway)?;
-    if !(1..=MAX_STARTUP_DEADLINE_SECONDS).contains(&recipe.health.startup_deadline_seconds) {
+    if !(1..=MAX_ENGINE_STARTUP_DEADLINE_SECONDS).contains(&recipe.health.startup_deadline_seconds)
+    {
         return Err("startup deadline is outside the signed safety ceiling".into());
     }
     validate_digest(&recipe.evidence.host_fingerprint)?;

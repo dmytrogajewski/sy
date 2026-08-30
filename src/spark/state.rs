@@ -1,7 +1,7 @@
 //! Crash-safe Spark control state owned by one bounded database actor.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     num::NonZeroUsize,
     os::unix::fs::OpenOptionsExt,
@@ -31,6 +31,7 @@ use super::wire::{
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_ACTIVE_TOKENS: i64 = 1024;
+pub const STATE_SCHEMA_VERSION: u32 = 6;
 const MIGRATION_1: &str = r#"
 CREATE TABLE models (id TEXT PRIMARY KEY, repository TEXT NOT NULL, commit_sha TEXT NOT NULL, metadata_json TEXT NOT NULL);
 CREATE TABLE aliases (name TEXT PRIMARY KEY, model_id TEXT NOT NULL REFERENCES models(id));
@@ -92,6 +93,9 @@ CREATE TABLE quarantine_evidence (
     cause TEXT NOT NULL,
     observed_at TEXT NOT NULL
 );
+"#;
+const MIGRATION_6: &str = r#"
+ALTER TABLE quarantine_evidence ADD COLUMN resolved_at TEXT;
 "#;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -271,8 +275,8 @@ enum Command {
         cause: String,
         reply: oneshot::Sender<Result<InstanceDocument, StateError>>,
     },
-    RecordQuarantine {
-        evidence: QuarantineEvidence,
+    ReconcileQuarantine {
+        evidence: Vec<QuarantineEvidence>,
         reply: oneshot::Sender<Result<(), StateError>>,
     },
     ListQuarantine(oneshot::Sender<Result<Vec<QuarantineEvidence>, StateError>>),
@@ -581,8 +585,11 @@ impl DbActor {
         .await
     }
 
-    pub async fn record_quarantine(&self, evidence: QuarantineEvidence) -> Result<(), StateError> {
-        self.submit(|reply| Command::RecordQuarantine { evidence, reply })
+    pub async fn reconcile_quarantine(
+        &self,
+        evidence: Vec<QuarantineEvidence>,
+    ) -> Result<(), StateError> {
+        self.submit(|reply| Command::ReconcileQuarantine { evidence, reply })
             .await
     }
 
@@ -692,6 +699,7 @@ fn open_connection(
         M::up(MIGRATION_3),
         M::up(MIGRATION_4),
         M::up(MIGRATION_5),
+        M::up(MIGRATION_6),
     ]);
     migrations.validate().map_err(state_migration)?;
     migrations
@@ -914,8 +922,8 @@ fn actor_loop(
             } => {
                 let _ = reply.send(mark_quarantine(&mut connection, &id, generation, &cause));
             }
-            Command::RecordQuarantine { evidence, reply } => {
-                let _ = reply.send(record_quarantine(&mut connection, &evidence));
+            Command::ReconcileQuarantine { evidence, reply } => {
+                let _ = reply.send(reconcile_quarantine(&mut connection, &evidence));
             }
             Command::ListQuarantine(reply) => {
                 let _ = reply.send(list_quarantine(&connection));
@@ -1559,9 +1567,13 @@ fn begin_serve(
 fn same_serve_identity(left: &InstanceDocument, right: &InstanceDocument) -> bool {
     left.model_id == right.model_id
         && left.model_commit == right.model_commit
-        && left.recipe_id == right.recipe_id
-        && left.recipe_fingerprint == right.recipe_fingerprint
+        && left.engine_id == right.engine_id
+        && left.engine_fingerprint == right.engine_fingerprint
+        && left.artifacts == right.artifacts
+        && left.artifact_fingerprint == right.artifact_fingerprint
         && left.objective == right.objective
+        && left.context_window == right.context_window
+        && left.default_reasoning_effort == right.default_reasoning_effort
 }
 
 fn list_instances(connection: &Connection) -> Result<Vec<InstanceDocument>, StateError> {
@@ -1751,10 +1763,7 @@ fn mark_quarantine(
     Ok(instance)
 }
 
-fn record_quarantine(
-    connection: &mut Connection,
-    evidence: &QuarantineEvidence,
-) -> Result<(), StateError> {
+fn validate_quarantine_evidence(evidence: &QuarantineEvidence) -> Result<(), StateError> {
     if evidence.container_id.len() != 64
         || !evidence
             .container_id
@@ -1769,23 +1778,54 @@ fn record_quarantine(
     {
         return Err(StateError::Invalid("quarantine evidence is invalid".into()));
     }
-    let generation = evidence
-        .generation
-        .map(i64::try_from)
-        .transpose()
-        .map_err(|_| StateError::Invalid("quarantine generation is out of range".into()))?;
-    connection
+    Ok(())
+}
+
+fn reconcile_quarantine(
+    connection: &mut Connection,
+    evidence: &[QuarantineEvidence],
+) -> Result<(), StateError> {
+    for item in evidence {
+        validate_quarantine_evidence(item)?;
+    }
+    let active_instances = evidence
+        .iter()
+        .filter_map(|item| item.instance_id.clone().zip(item.generation))
+        .collect::<BTreeSet<_>>();
+    let transaction = connection.transaction().map_err(state_sql)?;
+    transaction
         .execute(
-            "INSERT INTO quarantine_evidence(container_id,instance_id,generation,cause,observed_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(container_id) DO UPDATE SET instance_id=excluded.instance_id,generation=excluded.generation,cause=excluded.cause,observed_at=excluded.observed_at",
-            params![evidence.container_id, evidence.instance_id, generation, evidence.cause, now()],
+            "UPDATE quarantine_evidence SET resolved_at=?1 WHERE resolved_at IS NULL",
+            [now()],
         )
-        .map_err(state_sql)
-        .map(|_| ())
+        .map_err(state_sql)?;
+    for item in evidence {
+        let generation = item
+            .generation
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|_| StateError::Invalid("quarantine generation is out of range".into()))?;
+        transaction
+            .execute(
+                "INSERT INTO quarantine_evidence(container_id,instance_id,generation,cause,observed_at,resolved_at) VALUES(?1,?2,?3,?4,?5,NULL) ON CONFLICT(container_id) DO UPDATE SET instance_id=excluded.instance_id,generation=excluded.generation,cause=excluded.cause,observed_at=excluded.observed_at,resolved_at=NULL",
+                params![item.container_id, item.instance_id, generation, item.cause, now()],
+            )
+            .map_err(state_sql)?;
+    }
+    for mut instance in list_instances(&transaction)? {
+        if instance.quarantine.is_some()
+            && !active_instances.contains(&(instance.id.clone(), instance.generation))
+        {
+            instance.quarantine = None;
+            persist_instance(&transaction, &instance)?;
+        }
+    }
+    transaction.commit().map_err(state_sql)
 }
 
 fn list_quarantine(connection: &Connection) -> Result<Vec<QuarantineEvidence>, StateError> {
     let mut statement = connection
-        .prepare("SELECT container_id,instance_id,generation,cause FROM quarantine_evidence ORDER BY observed_at DESC,container_id LIMIT 256")
+        .prepare("SELECT container_id,instance_id,generation,cause FROM quarantine_evidence WHERE resolved_at IS NULL ORDER BY observed_at DESC,container_id LIMIT 256")
         .map_err(state_sql)?;
     let evidence = statement
         .query_map([], |row| {
@@ -1851,8 +1891,8 @@ fn validate_instance(instance: &InstanceDocument) -> Result<(), StateError> {
         && instance.name.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'.')
         });
-    let valid_recipe_fingerprint = instance
-        .recipe_fingerprint
+    let valid_engine_fingerprint = instance
+        .engine_fingerprint
         .strip_prefix("sha256:")
         .is_some_and(|value| {
             value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -1862,8 +1902,15 @@ fn validate_instance(instance: &InstanceDocument) -> Result<(), StateError> {
         || !valid_name
         || instance.model_id.is_empty()
         || instance.model_commit.len() != 40
-        || instance.recipe_id.is_empty()
-        || !valid_recipe_fingerprint
+        || instance.engine_id.is_empty()
+        || instance.context_window < 1_024
+        || instance
+            .default_reasoning_effort
+            .as_deref()
+            .is_some_and(|effort| !matches!(effort, "low" | "medium" | "high" | "max"))
+        || !valid_engine_fingerprint
+        || super::engine::artifact_fingerprint(&instance.artifacts).as_deref()
+            != Ok(instance.artifact_fingerprint.as_str())
         || !matches!(
             instance.objective.as_str(),
             "agent" | "inference" | "interactive" | "throughput" | "long-context"
@@ -2388,6 +2435,7 @@ mod tests {
                 "models--ornith-ai--Ornith-1.5-9B/snapshots/{}",
                 "a".repeat(40)
             ),
+            artifacts: None,
             logical_bytes: 1,
             unique_bytes: 1,
             aliases: vec![alias.into()],
@@ -2400,6 +2448,7 @@ mod tests {
     }
 
     fn instance_document(model: &ModelDocument, name: &str, recipe: &str) -> InstanceDocument {
+        let artifacts = serde_json::from_str(r#"{"schema":"sy.spark.model-artifacts/v2","format":"safetensors","primary":{"path":"model.safetensors","bytes":8,"sha256":null},"auxiliary":[],"quantization":"FP8","capabilities":["text_generation"],"configured_alias":null}"#).unwrap();
         InstanceDocument {
             schema: INSTANCE_SCHEMA.into(),
             id: format!("i_{}", "1".repeat(32)),
@@ -2407,8 +2456,10 @@ mod tests {
             model_id: model.id.clone(),
             model: model.canonical.clone(),
             model_commit: model.commit.clone(),
-            recipe_id: recipe.into(),
-            recipe_fingerprint: format!("sha256:{}", "b".repeat(64)),
+            engine_id: recipe.into(),
+            engine_fingerprint: format!("sha256:{}", "b".repeat(64)),
+            artifact_fingerprint: super::super::engine::artifact_fingerprint(&artifacts).unwrap(),
+            artifacts,
             objective: "agent".into(),
             resources: crate::spark::wire::RecipeResourceEnvelopeDocument {
                 image_bytes: 1,
@@ -2416,6 +2467,8 @@ mod tests {
                 steady_peak_bytes: 1,
                 compile_cache_bytes: 1,
             },
+            context_window: 65_536,
+            default_reasoning_effort: None,
             generation: 0,
             desired: InstanceDesiredState::Running,
             observed: InstanceObservedState::Creating,
@@ -2568,9 +2621,15 @@ mod tests {
         let conflict = actor
             .begin_serve(instance_document(&model, "ornith", "recipe-b"))
             .await;
+        let mut changed_artifact = instance_document(&model, "ornith", "recipe-a");
+        changed_artifact.artifacts.primary.path = "changed.safetensors".into();
+        changed_artifact.artifact_fingerprint =
+            super::super::engine::artifact_fingerprint(&changed_artifact.artifacts).unwrap();
+        let artifact_conflict = actor.begin_serve(changed_artifact).await;
 
         assert_eq!((first.generation, duplicate.generation), (1, 1));
         assert!(matches!(conflict, Err(StateError::Conflict(_))));
+        assert!(matches!(artifact_conflict, Err(StateError::Conflict(_))));
         actor.shutdown().unwrap();
     }
 
@@ -2633,8 +2692,44 @@ mod tests {
             generation: Some(99),
             cause: "future-generation".into(),
         };
-        actor.record_quarantine(evidence.clone()).await.unwrap();
+        actor
+            .reconcile_quarantine(vec![evidence.clone()])
+            .await
+            .unwrap();
         assert_eq!(actor.list_quarantine().await.unwrap(), vec![evidence]);
+        actor.shutdown().unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconcile_quarantine_resolves_absent_evidence_and_instance_state() {
+        let root = tempfile::tempdir().unwrap();
+        let actor = actor(root.path());
+        let model = model_document("m_0123456789abcdef0123456789abcdef", "ornith-1.5:9b");
+        actor.promote_model(model.clone(), false).await.unwrap();
+        let instance = actor
+            .begin_serve(instance_document(&model, "ornith", "recipe-a"))
+            .await
+            .unwrap()
+            .instance;
+        actor
+            .mark_quarantine(&instance.id, instance.generation, "untrusted-container")
+            .await
+            .unwrap();
+        let evidence = QuarantineEvidence {
+            container_id: "a".repeat(64),
+            instance_id: Some(instance.id.clone()),
+            generation: Some(instance.generation),
+            cause: "untrusted-container".into(),
+        };
+        actor
+            .reconcile_quarantine(vec![evidence.clone()])
+            .await
+            .unwrap();
+
+        actor.reconcile_quarantine(Vec::new()).await.unwrap();
+
+        assert!(actor.list_quarantine().await.unwrap().is_empty());
+        assert_eq!(actor.instance(&instance.id).await.unwrap().quarantine, None);
         actor.shutdown().unwrap();
     }
 
@@ -2833,6 +2928,7 @@ mod tests {
             commit: "1111111111111111111111111111111111111111".into(),
             snapshot: "models--owner--model/snapshots/1111111111111111111111111111111111111111"
                 .into(),
+            artifacts: None,
             logical_bytes: 10,
             unique_bytes: 10,
             aliases: vec!["model:latest".into()],
@@ -2854,6 +2950,38 @@ mod tests {
         ));
         actor.promote_model(second.clone(), true).await.unwrap();
         assert_eq!(actor.model("model:latest").await.unwrap().id, second.id);
+        actor.shutdown().unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_model_metadata_without_artifacts_remains_discoverable() {
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("state.sqlite3");
+        let connection = open_connection(&database, &root.path().join("backups"), 7).unwrap();
+        let model = model_document("m_legacy", "legacy");
+        let mut stale = serde_json::to_value(&model).unwrap();
+        stale.as_object_mut().unwrap().remove("artifacts");
+        connection
+            .execute(
+                "INSERT INTO models(id,repository,commit_sha,metadata_json) VALUES(?1,?2,?3,?4)",
+                params![model.id, model.repository, model.commit, stale.to_string()],
+            )
+            .unwrap();
+        drop(connection);
+        let actor = actor(root.path());
+        assert_eq!(actor.model("m_legacy").await.unwrap().artifacts, None);
+        actor.shutdown().unwrap();
+    }
+
+    #[tokio::test]
+    async fn artifact_model_metadata_round_trips_exactly() {
+        let root = tempfile::tempdir().unwrap();
+        let actor = actor(root.path());
+        let mut model = model_document("m_artifact", "artifact");
+        const JSON: &str = r#"{"schema":"sy.spark.model-artifacts/v2","format":"gguf","primary":{"path":"model.gguf","bytes":7,"sha256":"aaa"},"auxiliary":[{"role":"projector","path":"mmproj.gguf","bytes":3,"sha256":"bbb"}],"quantization":"Q4_K_XL","capabilities":["text","vision"],"configured_alias":"artifact"}"#;
+        model.artifacts = Some(serde_json::from_str(JSON).unwrap());
+        let stored = actor.promote_model(model.clone(), false).await.unwrap();
+        assert_eq!(stored, model);
         actor.shutdown().unwrap();
     }
 

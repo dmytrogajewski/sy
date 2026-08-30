@@ -447,6 +447,7 @@ async fn copy_one_stream(
     loop {
         let n = reader.read(&mut buf).await?;
         if n == 0 {
+            writer.flush().await?;
             let _ = tx
                 .send(OpEvent::Progress {
                     op_id,

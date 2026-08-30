@@ -20,6 +20,8 @@
 *.swp
 .idea/
 .vscode/
+__pycache__/
+*.py[cod]
 
 # Docs-lint caches and Vale-managed style packs. The custom Vale
 # vocabulary at .vale/styles/config/vocabularies/ IS checked in;

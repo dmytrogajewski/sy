@@ -9,7 +9,7 @@ mod upstream;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-async fn fake_vllm() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+async fn fake_openai_engine() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -37,8 +37,8 @@ async fn fake_vllm() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
 }
 
 #[tokio::test]
-async fn frozen_vllm_wire_identity_stream_start_stop_and_forbidden_route_are_exact() {
-    let (address, server) = fake_vllm().await;
+async fn engine_neutral_wire_identity_stream_start_stop_and_forbidden_route_are_exact() {
+    let (address, server) = fake_openai_engine().await;
     let route = upstream::ObservedRoute::new(
         "i_11111111111111111111111111111111",
         1,
@@ -92,7 +92,9 @@ async fn frozen_vllm_wire_identity_stream_start_stop_and_forbidden_route_are_exa
         "Ornith-1.5-9B",
     )
     .unwrap();
-    assert!(streaming && String::from_utf8_lossy(&rewritten).contains("Ornith-1.5-9B"));
+    let rewritten: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
+    assert!(streaming && rewritten["model"] == "Ornith-1.5-9B");
+    assert_eq!(rewritten["stream_options"]["include_usage"], true);
     assert_eq!(gateway::RETRY_AFTER_SECONDS, "1");
     assert_eq!(
         gateway::rewrite_completion_response(

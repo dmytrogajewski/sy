@@ -105,7 +105,7 @@ fn write_anthropic_sse(stream: &mut std::net::TcpStream, events: &[serde_json::V
 }
 
 #[test]
-fn system_text_and_identity_become_native_vllm_chat() {
+fn system_text_and_identity_become_native_openai_chat() {
     let request = gateway::rewrite_anthropic_request(
         br#"{"model":"ornith","system":[{"type":"text","text":"rules"}],"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}],"max_tokens":64,"top_k":12,"stream":true}"#,
         "Ornith-1.5-9B",
@@ -197,6 +197,7 @@ fn claude_code_2_1_241_payload_is_an_exact_compatibility_fixture() {
     .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
     assert_eq!(body["messages"][0]["role"], "system");
+    assert_eq!(body["reasoning_effort"], "high");
     assert!(body.get("thinking").is_none());
     assert!(body.get("metadata").is_none());
 }
@@ -218,7 +219,7 @@ fn claude_code_2_1_241_trailing_system_message_is_promoted() {
 }
 
 #[test]
-fn claude_code_2_1_241_title_schema_becomes_vllm_response_format() {
+fn claude_code_2_1_241_title_schema_becomes_openai_response_format() {
     let request = gateway::rewrite_anthropic_request(
         br#"{"model":"ornith","messages":[{"role":"user","content":"title this"}],"max_tokens":64,"output_config":{"effort":"high","format":{"type":"json_schema","schema":{"type":"object","properties":{"title":{"type":"string"}},"required":["title"]}}}}"#,
         "Ornith-1.5-9B",
@@ -277,6 +278,88 @@ fn equivalent_tool_task_preserves_stop_and_usage() {
     assert_eq!(openai.final_document()["usage"]["total_tokens"], 7);
     assert_eq!(anthropic.final_document()["stop_reason"], "tool_use");
     assert_eq!(anthropic.final_document()["content"][0]["name"], "lookup");
+}
+
+#[test]
+fn anthropic_stream_and_document_share_thinking_signature_text_and_usage() {
+    let mut encoder = gateway::AnthropicEncoder::new("fixture".into());
+    for event in [
+        upstream::GenerationEvent::ReasoningDelta {
+            text: "inspect".into(),
+        },
+        upstream::GenerationEvent::TextDelta {
+            text: "answer".into(),
+        },
+        upstream::GenerationEvent::Usage {
+            prompt_tokens: 7,
+            completion_tokens: 3,
+        },
+        upstream::GenerationEvent::Finished {
+            finish_reason: Some("stop".into()),
+        },
+        upstream::GenerationEvent::Done,
+    ] {
+        encoder.accept(event).unwrap();
+    }
+    let events = std::iter::from_fn(|| encoder.pop()).collect::<Vec<_>>();
+    let signature = &encoder.final_document()["content"][0]["signature"];
+    assert!(events
+        .iter()
+        .any(|event| event.data["delta"]["signature"] == *signature));
+    assert_eq!(encoder.final_document()["usage"]["output_tokens"], 3);
+}
+
+#[test]
+fn anthropic_stream_preserves_two_parallel_tool_inputs() {
+    let mut encoder = gateway::AnthropicEncoder::new("fixture".into());
+    for (index, id, name) in [(0, "tool_1", "lookup"), (1, "tool_2", "patch")] {
+        encoder
+            .accept(upstream::GenerationEvent::ToolCallDelta {
+                index,
+                call_id: Some(id.into()),
+                name: Some(name.into()),
+                arguments: format!(r#"{{"index":{index}}}"#),
+            })
+            .unwrap();
+    }
+    encoder
+        .accept(upstream::GenerationEvent::Finished {
+            finish_reason: Some("tool_calls".into()),
+        })
+        .unwrap();
+    encoder.accept(upstream::GenerationEvent::Done).unwrap();
+    let content = encoder.final_document()["content"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        content.iter().map(|item| &item["id"]).collect::<Vec<_>>(),
+        ["tool_1", "tool_2"]
+    );
+}
+
+#[test]
+fn anthropic_follow_up_accepts_its_signed_thinking_block() {
+    let mut encoder = gateway::AnthropicEncoder::new("fixture".into());
+    encoder
+        .accept(upstream::GenerationEvent::ReasoningDelta {
+            text: "inspect".into(),
+        })
+        .unwrap();
+    encoder
+        .accept(upstream::GenerationEvent::TextDelta {
+            text: "answer".into(),
+        })
+        .unwrap();
+    encoder.accept(upstream::GenerationEvent::Done).unwrap();
+    let body = serde_json::json!({"model":"fixture","max_tokens":8,"messages":[
+        {"role":"user","content":"start"},
+        {"role":"assistant","content":encoder.final_document()["content"]},
+        {"role":"user","content":"continue"}]});
+    let rewritten =
+        gateway::rewrite_anthropic_request(&serde_json::to_vec(&body).unwrap(), "served").unwrap();
+    let upstream: serde_json::Value = serde_json::from_slice(&rewritten.body).unwrap();
+    assert_eq!(upstream["messages"][1]["reasoning_content"], "inspect");
 }
 
 #[test]

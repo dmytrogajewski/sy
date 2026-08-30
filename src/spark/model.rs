@@ -12,7 +12,11 @@ use hf_hub::repository::RepoTreeEntry;
 use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest, Sha256};
 
-use super::wire::{ModelDocument, MODEL_SCHEMA};
+use super::wire::{
+    ModelArtifactFileDocument, ModelArtifactFormat, ModelArtifactRole,
+    ModelArtifactSelectorDocument, ModelArtifactsDocument, ModelAuxiliaryArtifactDocument,
+    ModelDocument, MODEL_SCHEMA,
+};
 
 const MODEL_PROGRESS_QUEUE_CAPACITY: usize = 64;
 
@@ -398,6 +402,367 @@ pub struct AcquisitionPlan {
     pub temporary_bytes: u64,
     pub gated: bool,
     pub license: Option<String>,
+    pub artifacts: ModelArtifactsDocument,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArtifactSelection {
+    primary: String,
+    auxiliary: Vec<ModelArtifactSelectorDocument>,
+    configured: Option<ModelArtifactsDocument>,
+    automatic: bool,
+}
+
+impl ArtifactSelection {
+    pub fn configured_artifacts(&self) -> Option<&ModelArtifactsDocument> {
+        self.configured.as_ref()
+    }
+
+    pub fn generic<I>(primary: &str, auxiliary: I) -> Result<Self, ModelInputError>
+    where
+        I: IntoIterator<Item = ModelArtifactSelectorDocument>,
+    {
+        let auxiliary = auxiliary.into_iter().collect::<Vec<_>>();
+        validate_selected_paths(primary, &auxiliary)?;
+        Ok(Self {
+            primary: primary.into(),
+            auxiliary,
+            configured: None,
+            automatic: false,
+        })
+    }
+
+    pub fn automatic() -> Self {
+        Self {
+            primary: String::new(),
+            auxiliary: Vec::new(),
+            configured: None,
+            automatic: true,
+        }
+    }
+
+    pub fn configured(artifacts: ModelArtifactsDocument) -> Result<Self, ModelInputError> {
+        if artifacts.schema != "sy.spark.model-artifacts/v2" {
+            return Err(ModelInputError("model artifact schema is unsupported"));
+        }
+        let auxiliary = artifacts
+            .auxiliary
+            .iter()
+            .map(|file| ModelArtifactSelectorDocument {
+                role: file.role.clone(),
+                path: file.path.clone(),
+            })
+            .collect::<Vec<_>>();
+        validate_selected_paths(&artifacts.primary.path, &auxiliary)?;
+        Ok(Self {
+            primary: artifacts.primary.path.clone(),
+            auxiliary,
+            configured: Some(artifacts),
+            automatic: false,
+        })
+    }
+
+    fn format(&self) -> Result<ModelArtifactFormat, ModelInputError> {
+        let format = if self.primary.ends_with(".gguf") {
+            ModelArtifactFormat::Gguf
+        } else if self.primary.ends_with(".safetensors")
+            || self.primary.ends_with(".safetensors.index.json")
+        {
+            ModelArtifactFormat::Safetensors
+        } else {
+            return Err(ModelInputError("primary artifact format is unsupported"));
+        };
+        let auxiliary_matches = self.auxiliary.iter().all(|file| match format {
+            ModelArtifactFormat::Gguf => file.path.ends_with(".gguf"),
+            ModelArtifactFormat::Safetensors => file.path.ends_with(".safetensors"),
+        });
+        if !auxiliary_matches {
+            return Err(ModelInputError("auxiliary artifact format is ambiguous"));
+        }
+        Ok(format)
+    }
+}
+
+fn infer_tree_selection(files: &[TreeFile]) -> Result<ArtifactSelection, ModelInputError> {
+    let mut weights = files
+        .iter()
+        .filter(|file| file.path.ends_with(".safetensors"))
+        .map(|file| file.path.as_str())
+        .collect::<Vec<_>>();
+    weights.sort_unstable();
+    let indexes = files
+        .iter()
+        .filter(|file| file.path.ends_with(".safetensors.index.json"))
+        .map(|file| file.path.as_str())
+        .collect::<Vec<_>>();
+    if indexes.len() == 1 && !weights.is_empty() {
+        return ArtifactSelection::generic(
+            indexes[0],
+            weights
+                .into_iter()
+                .map(|path| ModelArtifactSelectorDocument {
+                    role: ModelArtifactRole::WeightShard,
+                    path: path.into(),
+                }),
+        );
+    }
+    if weights.len() == 1 {
+        return ArtifactSelection::generic(weights[0], Vec::new());
+    }
+    let mut gguf = files
+        .iter()
+        .filter(|file| {
+            file.path.ends_with(".gguf") && !file.path.to_ascii_lowercase().contains("mmproj")
+        })
+        .map(|file| file.path.as_str())
+        .collect::<Vec<_>>();
+    gguf.sort_unstable();
+    for preferred in ["Q4_K_XL", "Q4_K_M"] {
+        let matches = gguf
+            .iter()
+            .filter(|path| path.contains(preferred))
+            .copied()
+            .collect::<Vec<_>>();
+        if let [selected] = matches.as_slice() {
+            return ArtifactSelection::generic(selected, Vec::new());
+        }
+    }
+    if let [selected] = gguf.as_slice() {
+        return ArtifactSelection::generic(selected, Vec::new());
+    }
+    Err(ModelInputError(
+        "model artifacts require an explicit selection",
+    ))
+}
+
+fn pipeline_capabilities(pipeline: Option<&str>) -> Vec<String> {
+    match pipeline {
+        Some("feature-extraction" | "sentence-similarity") => vec!["text_embeddings".into()],
+        _ => vec!["text_generation".into()],
+    }
+}
+
+fn validate_selected_paths(
+    primary: &str,
+    auxiliary: &[ModelArtifactSelectorDocument],
+) -> Result<(), ModelInputError> {
+    let mut paths = BTreeSet::new();
+    for path in std::iter::once(primary).chain(auxiliary.iter().map(|file| file.path.as_str())) {
+        ExpectedFile::new(path, 1, None)?;
+        if path
+            .bytes()
+            .any(|byte| matches!(byte, b'*' | b'?' | b'[' | b']' | b'{' | b'}'))
+            || !paths.insert(path)
+        {
+            return Err(ModelInputError(
+                "artifact selectors are unsafe or ambiguous",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct TreeFile {
+    path: String,
+    size: u64,
+    blob_key: String,
+    sha256: Option<String>,
+}
+
+impl TreeFile {
+    #[cfg(test)]
+    fn fixture((path, size): (&str, u64)) -> Self {
+        Self {
+            path: path.into(),
+            size,
+            blob_key: path.into(),
+            sha256: None,
+        }
+    }
+
+    fn expected(&self) -> Result<ExpectedFile, ModelInputError> {
+        ExpectedFile::new(&self.path, self.size, self.sha256.clone())
+    }
+}
+
+const SAFETENSORS_METADATA: &[&str] = &[
+    "added_tokens.json",
+    "chat_template.jinja",
+    "config.json",
+    "generation_config.json",
+    "merges.txt",
+    "preprocessor_config.json",
+    "processor_config.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer.model",
+    "tokenizer_config.json",
+    "video_preprocessor_config.json",
+    "vocab.json",
+    "vocab.txt",
+];
+
+fn select_tree_files(
+    files: &[TreeFile],
+    selection: ArtifactSelection,
+) -> Result<(Vec<ExpectedFile>, ModelArtifactsDocument), ModelInputError> {
+    let format = selection.format()?;
+    let requested = std::iter::once(selection.primary.as_str())
+        .chain(selection.auxiliary.iter().map(|file| file.path.as_str()))
+        .collect::<BTreeSet<_>>();
+    let mut selected = std::collections::BTreeMap::new();
+    for file in files {
+        let required_metadata = format == ModelArtifactFormat::Safetensors
+            && SAFETENSORS_METADATA.contains(&file.path.as_str());
+        if (requested.contains(file.path.as_str()) || required_metadata)
+            && selected.insert(file.path.as_str(), file).is_some()
+        {
+            return Err(ModelInputError("Hub tree contains an ambiguous artifact"));
+        }
+    }
+    if requested.iter().any(|path| !selected.contains_key(path)) {
+        return Err(ModelInputError(
+            "selected artifact is missing from the immutable Hub tree",
+        ));
+    }
+    if format == ModelArtifactFormat::Safetensors && !selected.contains_key("config.json") {
+        return Err(ModelInputError("safetensors metadata is incomplete"));
+    }
+    let artifacts = match selection.configured {
+        Some(configured) => {
+            verify_declared_file(
+                &configured.primary.path,
+                configured.primary.bytes,
+                configured.primary.sha256.as_ref(),
+                selected[configured.primary.path.as_str()],
+            )?;
+            for declared in &configured.auxiliary {
+                verify_declared_file(
+                    &declared.path,
+                    declared.bytes,
+                    declared.sha256.as_ref(),
+                    selected[declared.path.as_str()],
+                )?;
+            }
+            configured
+        }
+        None => ModelArtifactsDocument {
+            schema: "sy.spark.model-artifacts/v2".into(),
+            format,
+            primary: artifact_file(selected[selection.primary.as_str()]),
+            auxiliary: selection
+                .auxiliary
+                .iter()
+                .map(|file| {
+                    auxiliary_artifact_file(selected[file.path.as_str()], file.role.clone())
+                })
+                .collect(),
+            quantization: (format == ModelArtifactFormat::Gguf)
+                .then(|| {
+                    ["Q4_K_XL", "Q4_K_M", "Q8_0"]
+                        .into_iter()
+                        .find(|value| selection.primary.contains(value))
+                })
+                .flatten()
+                .map(str::to_owned),
+            capabilities: vec!["text_generation".into()],
+            configured_alias: None,
+            engine_profile: None,
+        },
+    };
+    let expected = selected
+        .into_values()
+        .map(TreeFile::expected)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((expected, artifacts))
+}
+
+fn artifact_file(file: &TreeFile) -> ModelArtifactFileDocument {
+    ModelArtifactFileDocument {
+        path: file.path.clone(),
+        bytes: file.size,
+        sha256: file.sha256.clone(),
+    }
+}
+
+fn linked_sha256(tree_sha256: Option<String>, etag: &str) -> Option<String> {
+    tree_sha256.or_else(|| {
+        (etag.len() == 64 && etag.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .then(|| etag.to_ascii_lowercase())
+    })
+}
+
+fn linked_headers(response: &reqwest::Response) -> Result<(u64, String), AcquisitionError> {
+    let headers = response.headers();
+    let size = headers
+        .get("x-linked-size")
+        .or_else(|| headers.get(reqwest::header::CONTENT_LENGTH))
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| acquisition_error(TransferFailure::Other, "Hub file size is missing"))?;
+    let etag = headers
+        .get("x-linked-etag")
+        .or_else(|| headers.get(reqwest::header::ETAG))
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .strip_prefix("W/")
+                .unwrap_or(value)
+                .trim_matches('"')
+                .to_owned()
+        })
+        .ok_or_else(|| acquisition_error(TransferFailure::Other, "Hub file digest is missing"))?;
+    Ok((size, etag))
+}
+
+fn auxiliary_artifact_file(
+    file: &TreeFile,
+    role: super::wire::ModelArtifactRole,
+) -> ModelAuxiliaryArtifactDocument {
+    ModelAuxiliaryArtifactDocument {
+        role,
+        path: file.path.clone(),
+        bytes: file.size,
+        sha256: file.sha256.clone(),
+    }
+}
+
+fn artifact_identity_sha256(
+    artifacts: &ModelArtifactsDocument,
+) -> Result<String, serde_json::Error> {
+    #[derive(serde::Serialize)]
+    struct ArtifactIdentity<'a> {
+        format: ModelArtifactFormat,
+        primary: &'a ModelArtifactFileDocument,
+        auxiliary: &'a [ModelAuxiliaryArtifactDocument],
+    }
+    let identity = ArtifactIdentity {
+        format: artifacts.format,
+        primary: &artifacts.primary,
+        auxiliary: &artifacts.auxiliary,
+    };
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&identity)?)
+    ))
+}
+
+fn verify_declared_file(
+    path: &str,
+    bytes: u64,
+    sha256: Option<&String>,
+    resolved: &TreeFile,
+) -> Result<(), ModelInputError> {
+    if path != resolved.path
+        || bytes != resolved.size
+        || sha256.is_some_and(|hash| resolved.sha256.as_ref() != Some(hash))
+    {
+        return Err(ModelInputError(
+            "catalog artifact differs from the immutable Hub tree",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -479,10 +844,45 @@ impl HubAcquirer {
         })
     }
 
-    pub async fn resolve(
+    async fn linked_file_metadata(
+        &self,
+        repository: &Repository,
+        commit: &CommitSha,
+        path: &str,
+    ) -> Result<(u64, String), AcquisitionError> {
+        let mut url = reqwest::Url::parse(&format!("{}/{}", self.endpoint, repository.as_str()))
+            .map_err(|_| acquisition_error(TransferFailure::Policy, "Hub endpoint is invalid"))?;
+        url.path_segments_mut()
+            .map_err(|_| acquisition_error(TransferFailure::Policy, "Hub endpoint is invalid"))?
+            .extend(["resolve", commit.as_str()])
+            .extend(path.split('/'));
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| {
+                acquisition_error(TransferFailure::Other, "Hugging Face request failed")
+            })?;
+        let mut request = client.head(url);
+        if let Some(token) = &self.token {
+            request = request.bearer_auth(token.expose_secret());
+        }
+        let response = request.send().await.map_err(|_| {
+            acquisition_error(TransferFailure::Other, "Hugging Face request failed")
+        })?;
+        if !response.status().is_success() && !response.status().is_redirection() {
+            return Err(acquisition_error(
+                TransferFailure::Other,
+                "Hugging Face request failed",
+            ));
+        }
+        linked_headers(&response)
+    }
+
+    pub async fn resolve_selected(
         &self,
         repository: Repository,
         revision: Revision,
+        selection: ArtifactSelection,
     ) -> Result<AcquisitionPlan, AcquisitionError> {
         fs::create_dir_all(&self.cache).map_err(|_| {
             acquisition_error(TransferFailure::DiskReserve, "model cache is unavailable")
@@ -503,6 +903,10 @@ impl HubAcquirer {
             acquisition_error(TransferFailure::Other, "Hub omitted the resolved commit")
         })?)
         .map_err(|_| acquisition_error(TransferFailure::Other, "Hub returned an invalid commit"))?;
+        let automatic = selection.automatic;
+        let selected_paths = std::iter::once(selection.primary.as_str())
+            .chain(selection.auxiliary.iter().map(|file| file.path.as_str()))
+            .collect::<BTreeSet<_>>();
         let stream = remote
             .list_tree()
             .revision(commit.as_str().to_owned())
@@ -511,13 +915,7 @@ impl HubAcquirer {
             .send()
             .map_err(classify_hub_error)?;
         futures_util::pin_mut!(stream);
-        let mut expected = Vec::new();
-        let mut logical_bytes = 0_u64;
-        let mut unique_bytes = 0_u64;
-        let blobs = self
-            .cache
-            .join(repository_cache_name(&repository))
-            .join("blobs");
+        let mut tree = Vec::new();
         while let Some(entry) = stream.next().await {
             if let RepoTreeEntry::File {
                 oid,
@@ -527,36 +925,76 @@ impl HubAcquirer {
                 ..
             } = entry.map_err(classify_hub_error)?
             {
-                logical_bytes = logical_bytes.checked_add(size).ok_or_else(|| {
+                let tree_sha256 = lfs.and_then(|item| item.sha256);
+                let sha256 = if tree_sha256.is_none() && selected_paths.contains(path.as_str()) {
+                    let (linked_size, etag) = self
+                        .linked_file_metadata(&repository, &commit, &path)
+                        .await?;
+                    (linked_size == size)
+                        .then(|| linked_sha256(None, &etag))
+                        .flatten()
+                } else {
+                    tree_sha256
+                };
+                let blob_key = sha256.as_deref().unwrap_or(&oid).to_owned();
+                tree.push(TreeFile {
+                    path,
+                    size,
+                    blob_key,
+                    sha256,
+                });
+            }
+        }
+        let selection = if selection.automatic {
+            infer_tree_selection(&tree)
+        } else {
+            Ok(selection)
+        }
+        .map_err(|_| {
+            acquisition_error(TransferFailure::Policy, "model artifact inference failed")
+        })?;
+        let (expected, mut artifacts) = select_tree_files(&tree, selection).map_err(|_| {
+            acquisition_error(
+                TransferFailure::Policy,
+                "artifact selection does not match the immutable Hub tree",
+            )
+        })?;
+        if automatic {
+            artifacts.capabilities = pipeline_capabilities(info.pipeline_tag.as_deref());
+        }
+        let logical_bytes = expected.iter().try_fold(0_u64, |sum, file| {
+            sum.checked_add(file.size).ok_or_else(|| {
+                acquisition_error(
+                    TransferFailure::Policy,
+                    "model size overflows byte accounting",
+                )
+            })
+        })?;
+        let blobs = self
+            .cache
+            .join(repository_cache_name(&repository))
+            .join("blobs");
+        let mut unique_bytes = 0_u64;
+        for file in &expected {
+            let path = file.path.to_string_lossy();
+            let resolved = tree
+                .iter()
+                .find(|entry| entry.path == path)
+                .expect("selected files originate in the resolved tree");
+            if !snapshot_file_is_complete(
+                &self.cache,
+                &repository,
+                &commit,
+                &resolved.path,
+                resolved.size,
+            ) && !blobs.join(&resolved.blob_key).is_file()
+            {
+                unique_bytes = unique_bytes.checked_add(resolved.size).ok_or_else(|| {
                     acquisition_error(
                         TransferFailure::Policy,
                         "model size overflows byte accounting",
                     )
                 })?;
-                let blob_key = lfs
-                    .as_ref()
-                    .and_then(|item| item.sha256.as_deref())
-                    .unwrap_or(&oid);
-                if !snapshot_file_is_complete(&self.cache, &repository, &commit, &path, size)
-                    && !blobs.join(blob_key).is_file()
-                {
-                    unique_bytes = unique_bytes.checked_add(size).ok_or_else(|| {
-                        acquisition_error(
-                            TransferFailure::Policy,
-                            "model size overflows byte accounting",
-                        )
-                    })?;
-                }
-                expected.push(
-                    ExpectedFile::new(&path, size, lfs.and_then(|item| item.sha256)).map_err(
-                        |_| {
-                            acquisition_error(
-                                TransferFailure::Policy,
-                                "Hub tree contains an unsafe file",
-                            )
-                        },
-                    )?,
-                );
             }
         }
         let temporary_bytes = unique_bytes.min(8 * 1024 * 1024 * 1024);
@@ -577,6 +1015,7 @@ impl HubAcquirer {
                 .gated
                 .is_some_and(|value| value != serde_json::Value::Bool(false)),
             license,
+            artifacts,
         })
     }
 
@@ -614,11 +1053,18 @@ impl HubAcquirer {
                     "downloaded snapshot failed independent verification",
                 )
             })?;
-        let canonical = format!(
+        let mut canonical = format!(
             "huggingface:{}@{}",
             plan.repository.as_str(),
             plan.commit.as_str()
         );
+        canonical.push_str("#sha256:");
+        canonical.push_str(&artifact_identity_sha256(&plan.artifacts).map_err(|_| {
+            acquisition_error(
+                TransferFailure::Policy,
+                "artifact identity cannot be canonicalized",
+            )
+        })?);
         let digest = format!("{:x}", Sha256::digest(canonical.as_bytes()));
         Ok(ModelDocument {
             schema: MODEL_SCHEMA.into(),
@@ -637,6 +1083,7 @@ impl HubAcquirer {
                 })?
                 .to_string_lossy()
                 .into_owned(),
+            artifacts: Some(plan.artifacts.clone()),
             logical_bytes: verified.logical_bytes,
             unique_bytes: plan.unique_bytes,
             aliases: alias
@@ -680,9 +1127,15 @@ impl HubAcquirer {
             sender: progress,
         };
         let remote = client.model(owner, name);
+        let allow_patterns = plan
+            .expected
+            .iter()
+            .map(|file| file.path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
         let download = remote
             .snapshot_download()
             .revision(plan.commit.as_str().to_owned())
+            .allow_patterns(allow_patterns)
             .max_workers(4)
             .progress(handler)
             .send();
@@ -718,13 +1171,13 @@ impl HubAcquirer {
             .env("HF_HUB_CACHE", &self.cache)
             .env("HF_TOKEN_PATH", &fallback.credential)
             .env("TMPDIR", "/tmp")
-            .args([
-                "download",
-                plan.repository.as_str(),
-                "--revision",
-                plan.commit.as_str(),
-                "--cache-dir",
-            ])
+            .arg("download")
+            .arg(plan.repository.as_str());
+        for file in &plan.expected {
+            command.arg(&file.path);
+        }
+        command
+            .args(["--revision", plan.commit.as_str(), "--cache-dir"])
             .arg(&self.cache)
             .kill_on_drop(true);
         let mut child = command.spawn().map_err(|_| {
@@ -867,6 +1320,13 @@ fn acquisition_error(failure: TransferFailure, detail: &'static str) -> Acquisit
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn linked_etag_recovers_missing_tree_lfs_sha256() {
+        const SHA256: &str = "3f227079003add2511437e5b1e94812e363385225bf6a9b47b0054a72bc8b01e";
+        assert_eq!(super::linked_sha256(None, SHA256), Some(SHA256.into()));
+        assert_eq!(super::linked_sha256(None, "git-oid"), None);
+    }
+
     use super::{
         plan_removal, should_run_fallback, verify_snapshot, Alias, CommitSha, ExpectedFile,
         Repository, Revision, TransferFailure,
@@ -876,6 +1336,16 @@ mod tests {
         fs,
         os::unix::fs::{symlink, MetadataExt},
     };
+
+    fn auxiliary(
+        role: crate::spark::wire::ModelArtifactRole,
+        path: &str,
+    ) -> crate::spark::wire::ModelArtifactSelectorDocument {
+        crate::spark::wire::ModelArtifactSelectorDocument {
+            role,
+            path: path.into(),
+        }
+    }
 
     #[test]
     fn repository_revision_and_alias_validation_resists_traversal() {
@@ -1056,8 +1526,171 @@ mod tests {
         assert_eq!(sender.max_capacity(), super::MODEL_PROGRESS_QUEUE_CAPACITY);
     }
 
+    #[test]
+    fn plan_selects_primary_auxiliary_and_required_metadata_only() {
+        let selection = super::ArtifactSelection::generic(
+            "model.safetensors.index.json",
+            vec![
+                auxiliary(
+                    crate::spark::wire::ModelArtifactRole::WeightShard,
+                    "model-00001-of-00002.safetensors",
+                ),
+                auxiliary(
+                    crate::spark::wire::ModelArtifactRole::WeightShard,
+                    "model-00002-of-00002.safetensors",
+                ),
+            ],
+        )
+        .unwrap();
+        let files = [
+            ("config.json", 11),
+            ("tokenizer.json", 12),
+            ("generation_config.json", 13),
+            ("model.safetensors.index.json", 14),
+            ("model-00001-of-00002.safetensors", 15),
+            ("model-00002-of-00002.safetensors", 16),
+            ("other-Q4.gguf", 17),
+            ("README.md", 18),
+        ]
+        .into_iter()
+        .map(super::TreeFile::fixture)
+        .collect::<Vec<_>>();
+
+        let (expected, artifacts) = super::select_tree_files(&files, selection).unwrap();
+
+        assert_eq!(
+            expected
+                .iter()
+                .map(|file| file.path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            [
+                "config.json",
+                "generation_config.json",
+                "model-00001-of-00002.safetensors",
+                "model-00002-of-00002.safetensors",
+                "model.safetensors.index.json",
+                "tokenizer.json",
+            ]
+        );
+        assert_eq!(artifacts.primary.path, "model.safetensors.index.json");
+    }
+
+    #[test]
+    fn automatic_selection_prefers_a_complete_safetensors_snapshot() {
+        let files = [
+            ("config.json", 11),
+            ("model.safetensors.index.json", 12),
+            ("model-00001-of-00002.safetensors", 13),
+            ("model-00002-of-00002.safetensors", 14),
+            ("model-Q4_K_XL.gguf", 15),
+        ]
+        .into_iter()
+        .map(super::TreeFile::fixture)
+        .collect::<Vec<_>>();
+        let selection = super::infer_tree_selection(&files).unwrap();
+        let (_, artifacts) = super::select_tree_files(&files, selection).unwrap();
+        assert_eq!(artifacts.primary.path, "model.safetensors.index.json");
+        assert_eq!(artifacts.auxiliary.len(), 2);
+    }
+
+    #[test]
+    fn automatic_gguf_selection_uses_the_spark_quantization_default() {
+        let files = [("model-Q8_0.gguf", 11), ("model-Q4_K_XL.gguf", 12)]
+            .into_iter()
+            .map(super::TreeFile::fixture)
+            .collect::<Vec<_>>();
+        let selection = super::infer_tree_selection(&files).unwrap();
+        let (_, artifacts) = super::select_tree_files(&files, selection).unwrap();
+        assert_eq!(artifacts.primary.path, "model-Q4_K_XL.gguf");
+    }
+
+    #[test]
+    fn hub_pipeline_metadata_distinguishes_embeddings_from_generation() {
+        assert_eq!(
+            super::pipeline_capabilities(Some("feature-extraction")),
+            ["text_embeddings"]
+        );
+        assert_eq!(
+            super::pipeline_capabilities(Some("text-generation")),
+            ["text_generation"]
+        );
+    }
+
+    #[test]
+    fn missing_or_ambiguous_artifact_fails_before_download() {
+        let files = vec![super::TreeFile::fixture(("model.gguf", 7))];
+        let missing = super::ArtifactSelection::generic("absent.gguf", Vec::new()).unwrap();
+        assert!(super::select_tree_files(&files, missing).is_err());
+
+        let ambiguous = super::ArtifactSelection::generic(
+            "model.gguf",
+            [auxiliary(
+                crate::spark::wire::ModelArtifactRole::WeightShard,
+                "model.gguf",
+            )],
+        );
+        assert!(ambiguous.is_err());
+        assert!(super::ArtifactSelection::generic("../model.gguf", Vec::new()).is_err());
+
+        let declared: crate::spark::wire::ModelArtifactsDocument = serde_json::from_str(
+            r#"{"schema":"sy.spark.model-artifacts/v2","format":"gguf","primary":{"path":"model.gguf","bytes":8,"sha256":null},"auxiliary":[],"quantization":"Q4","capabilities":["text_generation"],"configured_alias":"model:q4"}"#,
+        )
+        .unwrap();
+        let mismatched = super::ArtifactSelection::configured(declared).unwrap();
+        assert!(super::select_tree_files(&files, mismatched).is_err());
+    }
+
+    #[test]
+    fn model_identity_changes_with_the_auxiliary_artifact_set() {
+        let first: crate::spark::wire::ModelArtifactsDocument = serde_json::from_str(
+            r#"{"schema":"sy.spark.model-artifacts/v2","format":"gguf","primary":{"path":"model.gguf","bytes":8,"sha256":null},"auxiliary":[{"role":"projector","path":"vision-a.gguf","bytes":4,"sha256":null}],"quantization":"Q4","capabilities":["text_generation","vision"],"configured_alias":"model:q4"}"#,
+        )
+        .unwrap();
+        let mut second = first.clone();
+        second.auxiliary[0].path = "vision-b.gguf".into();
+
+        assert_ne!(
+            super::artifact_identity_sha256(&first).unwrap(),
+            super::artifact_identity_sha256(&second).unwrap()
+        );
+        second.auxiliary[0].path = first.auxiliary[0].path.clone();
+        second.auxiliary[0].role = crate::spark::wire::ModelArtifactRole::WeightShard;
+        assert_ne!(
+            super::artifact_identity_sha256(&first).unwrap(),
+            super::artifact_identity_sha256(&second).unwrap()
+        );
+    }
+
+    #[test]
+    fn split_gguf_selection_keeps_weight_shards_as_verified_inputs() {
+        let selection = super::ArtifactSelection::generic(
+            "model-00001-of-00002.gguf",
+            [auxiliary(
+                crate::spark::wire::ModelArtifactRole::WeightShard,
+                "model-00002-of-00002.gguf",
+            )],
+        )
+        .unwrap();
+        let files = [
+            ("model-00001-of-00002.gguf", 7),
+            ("model-00002-of-00002.gguf", 11),
+            ("other.gguf", 13),
+        ]
+        .into_iter()
+        .map(super::TreeFile::fixture)
+        .collect::<Vec<_>>();
+
+        let (expected, artifacts) = super::select_tree_files(&files, selection).unwrap();
+
+        assert_eq!(expected.len(), 2);
+        assert_eq!(
+            artifacts.auxiliary[0].role,
+            crate::spark::wire::ModelArtifactRole::WeightShard
+        );
+    }
+
     #[tokio::test]
-    async fn rust_hub_download_verifies_the_native_cache_end_to_end() {
+    async fn rust_hub_selective_download_verifies_the_native_cache_end_to_end() {
         use axum::{
             body::Body,
             http::{header, HeaderValue, Response},
@@ -1072,9 +1705,10 @@ mod tests {
             )
         }
         async fn tree() -> axum::Json<serde_json::Value> {
-            axum::Json(
-                serde_json::json!([{"type":"file","oid":"git-tree-oid","size":CONTENT.len(),"path":"config.json","lfs":null}]),
-            )
+            axum::Json(serde_json::json!([
+                {"type":"file","oid":"git-tree-oid","size":CONTENT.len(),"path":"model.gguf","lfs":null},
+                {"type":"file","oid":"unused-tree-oid","size":CONTENT.len(),"path":"other-Q2.gguf","lfs":null}
+            ]))
         }
         async fn file() -> Response<Body> {
             let mut response = Response::new(Body::from(CONTENT));
@@ -1098,7 +1732,7 @@ mod tests {
                     .route("/api/models/owner/model/revision/main", get(info))
                     .route(&format!("/api/models/owner/model/tree/{COMMIT}"), get(tree))
                     .route(
-                        &format!("/owner/model/resolve/{COMMIT}/config.json"),
+                        &format!("/owner/model/resolve/{COMMIT}/model.gguf"),
                         get(file),
                     ),
             )
@@ -1116,9 +1750,10 @@ mod tests {
         )
         .unwrap();
         let plan = acquirer
-            .resolve(
+            .resolve_selected(
                 Repository::parse("owner/model").unwrap(),
                 Revision::parse("main").unwrap(),
+                super::ArtifactSelection::generic("model.gguf", Vec::new()).unwrap(),
             )
             .await
             .unwrap();
@@ -1128,10 +1763,18 @@ mod tests {
             (model.commit.as_str(), model.logical_bytes),
             (COMMIT, CONTENT.len() as u64)
         );
+        assert_eq!(model.artifacts.unwrap().primary.path, "model.gguf");
+        assert!(!root
+            .path()
+            .join("models--owner--model/snapshots")
+            .join(COMMIT)
+            .join("other-Q2.gguf")
+            .exists());
         let resumed = acquirer
-            .resolve(
+            .resolve_selected(
                 Repository::parse("owner/model").unwrap(),
                 Revision::parse("main").unwrap(),
+                super::ArtifactSelection::generic("model.gguf", Vec::new()).unwrap(),
             )
             .await
             .unwrap();

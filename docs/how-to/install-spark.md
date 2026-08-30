@@ -14,8 +14,9 @@ answers from your laptop.
   `ssh dgx-spark true` must succeed with the keys, agent, or token
   you already use. `sy` does not accept passwords, keys, or tokens as
   arguments and does not store them.
-- A signed ARM64 `sy` release for the Spark: the binary, its minisign
-  signature, and the pinned minisign public key. `--yes` refuses to
+- A signed ARM64 `sy` release bundle for the Spark: `sy-aarch64`, the three
+  separate catalog TOMLs, `SHA256SUMS`, its minisign signature, and the pinned
+  minisign public key. `--yes` refuses to
   run without `--release-signature` and `--release-public-key`.
 - `sy` on your laptop `$PATH`.
 
@@ -44,8 +45,12 @@ a Docker socket.
    activation entrypoint. No arbitrary remote command is accepted:
 
    ```bash
+   scripts/package-spark-release.sh target/aarch64-unknown-linux-gnu/release/sy release
+   minisign -Sm release/SHA256SUMS -s sy-release.key
    sy spark dgx-spark install --yes \
-     --release-signature sy-aarch64.minisig \
+     --probe release/sy-aarch64 \
+     --release-manifest release/SHA256SUMS \
+     --release-signature release/SHA256SUMS.minisig \
      --release-public-key sy-release.pub
    ```
 
@@ -74,7 +79,9 @@ install:
 ```bash
 sy spark dgx-spark upgrade --dry-run --json
 sy spark dgx-spark upgrade --yes \
-  --release-signature sy-aarch64.minisig \
+  --probe release/sy-aarch64 \
+  --release-manifest release/SHA256SUMS \
+  --release-signature release/SHA256SUMS.minisig \
   --release-public-key sy-release.pub \
   --json
 ```

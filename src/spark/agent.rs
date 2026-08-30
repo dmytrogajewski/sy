@@ -11,7 +11,7 @@ use std::{
 
 use arc_swap::ArcSwap;
 use axum::{
-    body::Bytes,
+    body::{Body, Bytes},
     extract::{
         rejection::BytesRejection, ConnectInfo, DefaultBodyLimit, Extension, Path as AxumPath,
         Query, RawQuery, Request, State,
@@ -44,11 +44,14 @@ use super::wire::{
 };
 use super::{
     executor::{
-        ExecutorClient, LogInput, ObservedEngine, ReconcileExpectation, StartInstanceInput,
-        StopInstanceInput,
+        CandidateStorage, CandidateStorageInput, ExecutorClient, LogInput, ObservedEngine,
+        ReconcileExpectation, StartInstanceInput, StopInstanceInput,
     },
     gateway::{self, PublicAction, RouteLookup, RouteRegistry},
-    model::{self, Alias, FallbackConfig, HubAcquirer, Repository, Revision, TransferFailure},
+    model::{
+        self, Alias, ArtifactSelection, FallbackConfig, HubAcquirer, Repository, Revision,
+        TransferFailure,
+    },
     reconcile::{decide, DesiredIntent, ReconcileAction, ValidatedObservation},
     resources::{
         evaluate_admission, persistent_set_fits_reboot_envelope, unix_millis, AdmissionRequest,
@@ -62,6 +65,7 @@ use super::{
 
 const API_BASE: &str = "/api/sy.spark/v1";
 const ENGINE_READINESS_INTERVAL: Duration = Duration::from_millis(100);
+const STOP_COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 const EVENT_EPOCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
 type HmacSha256 = Hmac<Sha256>;
@@ -77,7 +81,8 @@ pub struct AgentConfig {
     pub allowed_client_cidrs: Vec<String>,
     pub plain_http_loopback_only: bool,
     pub executor_socket: PathBuf,
-    pub engine_policy: PathBuf,
+    pub engine_catalog: PathBuf,
+    pub model_catalog: PathBuf,
     pub operations: OperationsConfig,
     pub resources: ResourcePolicyConfig,
     pub retention: RetentionConfig,
@@ -117,7 +122,8 @@ pub struct AgentState {
     auth: Arc<ArcSwap<AuthSnapshot>>,
     limiter: Arc<TokenLimiter>,
     executor: Option<ExecutorClient>,
-    engine_policy: Option<Arc<super::engine::EnginePolicy>>,
+    engine_catalog: Option<Arc<super::engine::EngineCatalog>>,
+    model_catalog: Option<Arc<super::model_catalog::ModelCatalog>>,
     models: Option<Arc<HubAcquirer>>,
     download_slots: Arc<tokio::sync::Semaphore>,
     start_slots: Arc<tokio::sync::Semaphore>,
@@ -148,14 +154,36 @@ impl AgentState {
                 NonZeroU32::new(30).expect("static non-zero quota"),
             ))),
             executor: None,
-            engine_policy: {
+            engine_catalog: {
                 #[cfg(test)]
                 {
                     Some(Arc::new(
-                        super::engine::EnginePolicy::parse(include_str!(
-                            "../../configs/sy/spark/engine.toml"
+                        super::engine::EngineCatalog::parse_files([
+                            (
+                                "llama-cpp.toml",
+                                include_str!("../../configs/sy/spark/engines/llama-cpp.toml"),
+                            ),
+                            (
+                                "vllm.toml",
+                                include_str!("../../configs/sy/spark/engines/vllm.toml"),
+                            ),
+                        ])
+                        .expect("test engine catalog"),
+                    ))
+                }
+                #[cfg(not(test))]
+                {
+                    None
+                }
+            },
+            model_catalog: {
+                #[cfg(test)]
+                {
+                    Some(Arc::new(
+                        super::model_catalog::ModelCatalog::parse(include_str!(
+                            "../../configs/sy/spark/models.toml"
                         ))
-                        .expect("test engine policy"),
+                        .expect("test model catalog"),
                     ))
                 }
                 #[cfg(not(test))]
@@ -174,8 +202,13 @@ impl AgentState {
         }
     }
 
-    fn with_engine_policy(mut self, policy: super::engine::EnginePolicy) -> Self {
-        self.engine_policy = Some(Arc::new(policy));
+    fn with_engine_catalog(mut self, catalog: super::engine::EngineCatalog) -> Self {
+        self.engine_catalog = Some(Arc::new(catalog));
+        self
+    }
+
+    fn with_model_catalog(mut self, catalog: super::model_catalog::ModelCatalog) -> Self {
+        self.model_catalog = Some(Arc::new(catalog));
         self
     }
 
@@ -549,7 +582,11 @@ async fn gateway_anthropic_messages(
         Ok(permit) => permit,
         Err(_) => return anthropic_upstream_unavailable(),
     };
-    let upstream = match route.upstream.chat_stream(&request.body).await {
+    let upstream = match route
+        .upstream
+        .chat_stream_with_idle_timeout(&request.body, route.profile.stream_idle_timeout())
+        .await
+    {
         Ok(upstream) => upstream,
         Err(_) => return anthropic_upstream_unavailable(),
     };
@@ -603,6 +640,11 @@ async fn gateway_anthropic_count_tokens(
     if !route.profile.allows(PublicAction::Responses) {
         return anthropic_not_found().await;
     }
+    let native_body =
+        match gateway::rewrite_anthropic_native_count_request(&body, &route.served_model) {
+            Ok(body) => body,
+            Err(error) => return anthropic_error(StatusCode::BAD_REQUEST, error),
+        };
     let tokenizer_body = match gateway::rewrite_anthropic_count_request(&body, &route.served_model)
     {
         Ok(body) => body,
@@ -616,14 +658,21 @@ async fn gateway_anthropic_count_tokens(
         Ok(permit) => permit,
         Err(_) => return anthropic_upstream_unavailable(),
     };
-    let request = match route
-        .upstream
-        .request("POST", "/tokenize", tokenizer_body.len())
-    {
-        Ok(request) => request,
-        Err(_) => return anthropic_upstream_unavailable(),
-    };
-    match route.upstream.send(&request, &tokenizer_body).await {
+    let (request, upstream_body) =
+        match route
+            .upstream
+            .request("POST", "/v1/messages/count_tokens", native_body.len())
+        {
+            Ok(request) => (request, native_body),
+            Err(_) => match route
+                .upstream
+                .request("POST", "/tokenize", tokenizer_body.len())
+            {
+                Ok(request) => (request, tokenizer_body),
+                Err(_) => return anthropic_upstream_unavailable(),
+            },
+        };
+    match route.upstream.send(&request, &upstream_body).await {
         Ok(response) if (200..300).contains(&response.status) => {
             gateway::rewrite_anthropic_count_response(&response.bytes)
                 .map(|input_tokens| AnthropicTokenCountDocument { input_tokens })
@@ -919,6 +968,21 @@ async fn gateway_responses(
     if !route.profile.allows(PublicAction::Responses) {
         return openai_not_found().await;
     }
+    if route.profile.native_responses {
+        let request = match gateway::rewrite_native_responses_request_with_profile(
+            &body,
+            &route.public_model,
+            &route.profile,
+        ) {
+            Ok(request) => request,
+            Err(error) => return openai_error(StatusCode::BAD_REQUEST, error),
+        };
+        let token_permit = match auth.acquire_inference().await {
+            Ok(permit) => permit,
+            Err(()) => return gateway_upstream_unavailable(),
+        };
+        return gateway_native_responses(route, request, token_permit).await;
+    }
     let request = match gateway::rewrite_responses_request_with_profile(
         &body,
         &route.served_model,
@@ -932,6 +996,69 @@ async fn gateway_responses(
         Err(()) => return gateway_upstream_unavailable(),
     };
     gateway_responses_stream(route, request, token_permit).await
+}
+
+async fn gateway_native_responses(
+    route: Arc<gateway::HealthyRoute>,
+    request: gateway::NativeResponsesRequest,
+    token_permit: tokio::sync::OwnedSemaphorePermit,
+) -> Response {
+    let permit = match route.acquire().await {
+        Ok(permit) => permit,
+        Err(error) => return openai_error(StatusCode::SERVICE_UNAVAILABLE, error),
+    };
+    if request.stream {
+        let upstream = match route
+            .upstream
+            .raw_stream("/v1/responses", &request.body)
+            .await
+        {
+            Ok(upstream) => upstream,
+            Err(_) => return gateway_upstream_unavailable(),
+        };
+        let stream = futures_util::stream::unfold(
+            (upstream, permit, token_permit),
+            |(mut upstream, permit, token_permit)| async move {
+                let chunk = upstream.next().await?.ok()?;
+                Some((
+                    Ok::<_, std::convert::Infallible>(chunk),
+                    (upstream, permit, token_permit),
+                ))
+            },
+        );
+        return Response::builder()
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .header(header::CACHE_CONTROL, "no-cache")
+            .body(Body::from_stream(stream))
+            .unwrap_or_else(|_| gateway_upstream_unavailable());
+    }
+    let upstream_request = match route
+        .upstream
+        .request("POST", "/v1/responses", request.body.len())
+    {
+        Ok(request) => request,
+        Err(_) => return gateway_upstream_unavailable(),
+    };
+    let response = route
+        .upstream
+        .send_with_timeout(
+            &upstream_request,
+            &request.body,
+            Duration::from_secs(route.profile.native_response_timeout_seconds),
+        )
+        .await;
+    drop(permit);
+    drop(token_permit);
+    match response {
+        Ok(response) => Response::builder()
+            .status(
+                StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            )
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(response.bytes))
+            .unwrap_or_else(|_| gateway_upstream_unavailable()),
+        Err(_) => gateway_upstream_unavailable(),
+    }
 }
 
 #[utoipa::path(post, path = "/openai/{instance}/v1/embeddings", params(("instance" = String, Path)), request_body = OpenAiEmbeddingRequest, responses((status = 200, body = OpenAiEmbeddingDocument)))]
@@ -1054,7 +1181,11 @@ async fn gateway_chat(
         Err(error) => return openai_error(StatusCode::SERVICE_UNAVAILABLE, error),
     };
     if request.stream {
-        let upstream = match route.upstream.chat_stream(&request.body).await {
+        let upstream = match route
+            .upstream
+            .chat_stream_with_idle_timeout(&request.body, route.profile.stream_idle_timeout())
+            .await
+        {
             Ok(upstream) => upstream,
             Err(_) => return gateway_upstream_unavailable(),
         };
@@ -1118,7 +1249,11 @@ async fn gateway_responses_stream(
         Ok(permit) => permit,
         Err(error) => return openai_error(StatusCode::SERVICE_UNAVAILABLE, error),
     };
-    let upstream = match route.upstream.chat_stream(&request.body).await {
+    let upstream = match route
+        .upstream
+        .chat_stream_with_idle_timeout(&request.body, route.profile.stream_idle_timeout())
+        .await
+    {
         Ok(upstream) => upstream,
         Err(_) => return gateway_upstream_unavailable(),
     };
@@ -1264,18 +1399,39 @@ async fn admission(
     let Some(executor) = &state.executor else {
         return executor_unavailable();
     };
-    let Some(policy) = &state.engine_policy else {
+    let Some(catalog) = &state.engine_catalog else {
         return executor_unavailable();
+    };
+    let Some(artifacts) = model.artifacts.as_ref() else {
+        return problem(
+            StatusCode::CONFLICT,
+            "spark.engine.artifacts-required",
+            "model has no verified artifact traits for engine selection",
+        );
+    };
+    let policy = match catalog.select(artifacts) {
+        Ok(policy) => policy,
+        Err(error) => return problem(StatusCode::CONFLICT, "spark.engine.unsupported", &error),
+    };
+    let artifact_fingerprint = match super::engine::artifact_fingerprint(artifacts) {
+        Ok(fingerprint) => fingerprint,
+        Err(error) => {
+            return problem(
+                StatusCode::CONFLICT,
+                "spark.engine.artifacts-invalid",
+                &error,
+            )
+        }
     };
     let snapshot = match executor.snapshot().await {
         Ok(snapshot) => snapshot,
         Err(_) => return executor_unavailable(),
     };
-    let resources = policy.resources();
+    let resources = match policy.resources_for(None, artifacts) {
+        Ok(resources) => resources,
+        Err(error) => return problem(StatusCode::CONFLICT, "spark.engine.profile-invalid", &error),
+    };
     let startup_peak = resources.startup_peak_bytes;
-    let required_disk = resources
-        .image_bytes
-        .saturating_add(resources.compile_cache_bytes);
     let desired: Vec<DeclaredEnvelope> = match database.desired_resource_envelopes().await {
         Ok(envelopes) => envelopes,
         Err(error) => return state_problem(error),
@@ -1292,6 +1448,20 @@ async fn admission(
             "instance name is invalid",
         );
     };
+    let storage = match candidate_storage(
+        executor,
+        policy,
+        &model,
+        artifacts,
+        &artifact_fingerprint,
+        &candidate_name,
+    )
+    .await
+    {
+        Ok(storage) => storage,
+        Err(_) => return executor_unavailable(),
+    };
+    let required_disk = required_disk_growth(&resources, &storage);
     let mut report = evaluate_admission(
         &snapshot.resource_policy,
         &snapshot.resources,
@@ -1309,11 +1479,14 @@ async fn admission(
         unix_millis(),
     );
     report.selection = Some(super::resources::AdmissionSelection {
-        recipe_id: policy.config().id.clone(),
+        engine_id: policy.config().id.clone(),
         selection_kind: "configured_engine".into(),
         engine: policy.config().family.clone(),
         image: policy.image(),
         fingerprint: policy.fingerprint().into(),
+        artifacts: artifacts.clone(),
+        artifact_fingerprint,
+        compile_cache_namespace: storage.compile_cache_namespace,
     });
     Json(report).into_response()
 }
@@ -1345,14 +1518,44 @@ async fn serve_instance(
     let Some(executor) = state.executor.clone() else {
         return executor_unavailable();
     };
-    let Some(policy) = state.engine_policy.clone() else {
+    let Some(catalog) = state.engine_catalog.clone() else {
         return executor_unavailable();
     };
     let model = match database.model(&body.model).await {
         Ok(model) => model,
         Err(error) => return state_problem(error),
     };
-    let resources = policy.resources();
+    let Some(artifacts) = model.artifacts.as_ref() else {
+        return problem(
+            StatusCode::CONFLICT,
+            "spark.engine.artifacts-required",
+            "model has no verified artifact traits for engine selection",
+        );
+    };
+    let policy = match catalog.select(artifacts) {
+        Ok(policy) => policy,
+        Err(error) => return problem(StatusCode::CONFLICT, "spark.engine.unsupported", &error),
+    };
+    let artifact_fingerprint = match super::engine::artifact_fingerprint(artifacts) {
+        Ok(fingerprint) => fingerprint,
+        Err(error) => {
+            return problem(
+                StatusCode::CONFLICT,
+                "spark.engine.artifacts-invalid",
+                &error,
+            )
+        }
+    };
+    let resources = match policy.resources_for(None, artifacts) {
+        Ok(resources) => resources,
+        Err(error) => return problem(StatusCode::CONFLICT, "spark.engine.profile-invalid", &error),
+    };
+    let profile = match policy.profile_for(None, artifacts) {
+        Ok(profile) => profile,
+        Err(error) => return problem(StatusCode::CONFLICT, "spark.engine.profile-invalid", &error),
+    };
+    let context_window = profile.context_window;
+    let default_reasoning_effort = profile.sampling.default_reasoning_effort.clone();
     let snapshot = match executor.snapshot().await {
         Ok(snapshot) => snapshot,
         Err(_) => return executor_unavailable(),
@@ -1376,6 +1579,20 @@ async fn serve_instance(
             );
         }
     };
+    let storage = match candidate_storage(
+        &executor,
+        policy,
+        &model,
+        artifacts,
+        &artifact_fingerprint,
+        &name,
+    )
+    .await
+    {
+        Ok(storage) => storage,
+        Err(_) => return executor_unavailable(),
+    };
+    let required_disk = required_disk_growth(&resources, &storage);
     let report = evaluate_admission(
         &snapshot.resource_policy,
         &snapshot.resources,
@@ -1385,9 +1602,7 @@ async fn serve_instance(
                 name.clone(),
                 resources.startup_peak_bytes,
                 resources.startup_peak_bytes,
-                resources
-                    .image_bytes
-                    .saturating_add(resources.compile_cache_bytes),
+                required_disk,
             ),
             compatibility_verified: true,
             guard_healthy: snapshot.health.guard_heartbeat,
@@ -1455,10 +1670,14 @@ async fn serve_instance(
         model_id: model.id.clone(),
         model: model.canonical.clone(),
         model_commit: model.commit.clone(),
-        recipe_id: policy.config().id.clone(),
-        recipe_fingerprint: policy.fingerprint().into(),
+        engine_id: policy.config().id.clone(),
+        engine_fingerprint: policy.fingerprint().into(),
+        artifacts: artifacts.clone(),
+        artifact_fingerprint,
         objective: "inference".into(),
         resources,
+        context_window,
+        default_reasoning_effort,
         generation: 0,
         desired: InstanceDesiredState::Running,
         observed: InstanceObservedState::Creating,
@@ -1575,7 +1794,10 @@ async fn run_serve(
                 .map(|(repository, _)| repository)
                 .unwrap_or_default()
                 .to_owned(),
-            recipe_id: instance.recipe_id.clone(),
+            engine_id: instance.engine_id.clone(),
+            engine_fingerprint: instance.engine_fingerprint.clone(),
+            artifacts: instance.artifacts.clone(),
+            artifact_fingerprint: instance.artifact_fingerprint.clone(),
             operation_id: operation_id.clone(),
         })
         .await
@@ -1667,16 +1889,36 @@ async fn run_serve(
             .request(&observed.health_method, &observed.health_path, 0)
             .map(|request| (route, request))
     });
+    let readiness_interrupt = ReadinessInterrupt::new(
+        database.clone(),
+        operation_id.clone(),
+        instance.id.clone(),
+        executor.clone(),
+        instance.generation,
+    );
     let ready_route = match health {
         Ok((route, request)) => {
             let deadline = Duration::from_secs(observed.startup_deadline_seconds);
             let remaining = deadline.saturating_sub(startup_started.elapsed());
-            wait_until_engine_ready(&route, &request, remaining)
-                .await
-                .then_some(route)
+            wait_until_engine_ready(
+                &route,
+                &request,
+                observed.health_body.as_ref(),
+                remaining,
+                Some(&readiness_interrupt),
+            )
+            .await
+            .then_some(route)
         }
         Err(_) => None,
     };
+    if readiness_interrupt.instance_stopped().await {
+        return;
+    }
+    if readiness_interrupt.operation_cancelled().await {
+        cancel_prehealth_serve(&database, &executor, &instance).await;
+        return;
+    }
     let semantic_failure = match ready_route.as_ref() {
         Some(route) => {
             let failure = semantic_probe_result(
@@ -1829,17 +2071,75 @@ async fn cancel_prehealth_serve(
         .await;
 }
 
+struct ReadinessInterrupt {
+    database: DbActor,
+    operation_id: String,
+    instance_id: String,
+    executor: ExecutorClient,
+    generation: u64,
+}
+
+impl ReadinessInterrupt {
+    fn new(
+        database: DbActor,
+        operation_id: String,
+        instance_id: String,
+        executor: ExecutorClient,
+        generation: u64,
+    ) -> Self {
+        Self {
+            database,
+            operation_id,
+            instance_id,
+            executor,
+            generation,
+        }
+    }
+
+    async fn operation_cancelled(&self) -> bool {
+        serve_cancelled(&self.database, &self.operation_id).await
+    }
+
+    async fn instance_stopped(&self) -> bool {
+        self.database
+            .instance(&self.instance_id)
+            .await
+            .is_ok_and(|instance| instance.desired == InstanceDesiredState::Stopped)
+    }
+
+    async fn triggered(&self) -> bool {
+        self.operation_cancelled().await
+            || self.instance_stopped().await
+            || self
+                .executor
+                .inspect_instance(StopInstanceInput {
+                    instance_id: self.instance_id.clone(),
+                    generation: self.generation,
+                    grace_seconds: 0,
+                })
+                .await
+                .is_ok_and(|running| running != Some(true))
+    }
+}
+
 async fn wait_until_engine_ready(
     route: &ObservedRoute,
     request: &super::upstream::UpstreamRequest,
+    health_body: Option<&super::engine::EngineHealthBody>,
     timeout: Duration,
+    interrupt: Option<&ReadinessInterrupt>,
 ) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
+        if let Some(interrupt) = interrupt {
+            if interrupt.triggered().await {
+                return false;
+            }
+        }
         if route
             .send(request, &[])
             .await
-            .is_ok_and(|response| (200..300).contains(&response.status))
+            .is_ok_and(|response| health_response_is_ready(&response, health_body))
         {
             return true;
         }
@@ -1848,6 +2148,23 @@ async fn wait_until_engine_ready(
         }
         tokio::time::sleep(ENGINE_READINESS_INTERVAL).await;
     }
+}
+
+fn health_response_is_ready(
+    response: &super::upstream::UpstreamResponse,
+    health_body: Option<&super::engine::EngineHealthBody>,
+) -> bool {
+    if !(200..300).contains(&response.status) {
+        return false;
+    }
+    let Some(rule) = health_body else {
+        return true;
+    };
+    serde_json::from_slice::<serde_json::Value>(&response.bytes)
+        .ok()
+        .and_then(|body| body.pointer(&rule.json_pointer).cloned())
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .is_some_and(|value| value == rule.equals)
 }
 
 fn semantic_probe_timeout(startup_deadline: Duration, elapsed: Duration) -> Duration {
@@ -1865,6 +2182,7 @@ async fn reconcile_once(
     let instances = database.list_instances().await.map_err(|_| ())?;
     let expected = instances
         .iter()
+        .filter(|instance| reconcile_expects_container(instance))
         .map(|instance| ReconcileExpectation {
             instance_id: instance.id.clone(),
             generation: instance.generation,
@@ -1876,24 +2194,33 @@ async fn reconcile_once(
                 .map(|(repository, _)| repository)
                 .unwrap_or_default()
                 .to_owned(),
-            recipe_id: instance.recipe_id.clone(),
+            engine_id: instance.engine_id.clone(),
+            engine_fingerprint: instance.engine_fingerprint.clone(),
+            artifacts: instance.artifacts.clone(),
+            artifact_fingerprint: instance.artifact_fingerprint.clone(),
         })
         .collect();
     let scan = executor.reconcile_scan(expected).await.map_err(|_| ())?;
-    for quarantine in scan.quarantined {
+    let quarantined = scan
+        .quarantined
+        .into_iter()
+        .map(|quarantine| QuarantineEvidence {
+            container_id: quarantine.container_id,
+            instance_id: quarantine.instance_id,
+            generation: quarantine.generation,
+            cause: quarantine.cause,
+        })
+        .collect::<Vec<_>>();
+    database
+        .reconcile_quarantine(quarantined.clone())
+        .await
+        .map_err(|_| ())?;
+    for quarantine in quarantined {
         let Ok(_transition) =
             coordinator.try_acquire(format!("reconcile-quarantine:{}", quarantine.container_id))
         else {
             continue;
         };
-        let _ = database
-            .record_quarantine(QuarantineEvidence {
-                container_id: quarantine.container_id,
-                instance_id: quarantine.instance_id.clone(),
-                generation: quarantine.generation,
-                cause: quarantine.cause.clone(),
-            })
-            .await;
         if let Some((instance_id, generation)) = quarantine.instance_id.zip(quarantine.generation) {
             let _ = database
                 .mark_quarantine(&instance_id, generation, &quarantine.cause)
@@ -2004,7 +2331,10 @@ async fn reconcile_once(
                     .map(|(repository, _)| repository)
                     .unwrap_or_default()
                     .to_owned(),
-                recipe_id: instance.recipe_id.clone(),
+                engine_id: instance.engine_id.clone(),
+                engine_fingerprint: instance.engine_fingerprint.clone(),
+                artifacts: instance.artifacts.clone(),
+                artifact_fingerprint: instance.artifact_fingerprint.clone(),
                 operation_id,
             })
             .await
@@ -2019,6 +2349,10 @@ async fn reconcile_once(
             .await;
     }
     Ok(())
+}
+
+fn reconcile_expects_container(instance: &InstanceDocument) -> bool {
+    instance.desired == InstanceDesiredState::Running
 }
 
 async fn complete_recovered_operation(
@@ -2153,7 +2487,14 @@ async fn reconcile_running_engine(
         .map_err(|_| ())?;
     let deadline = Duration::from_secs(observed.startup_deadline_seconds);
     let readiness_started = tokio::time::Instant::now();
-    if !wait_until_engine_ready(&route, &request, deadline).await
+    if !wait_until_engine_ready(
+        &route,
+        &request,
+        observed.health_body.as_ref(),
+        deadline,
+        None,
+    )
+    .await
         || semantic_probe_result(
             &route,
             &observed,
@@ -2222,8 +2563,9 @@ async fn semantic_probe_result(
     observed: &ObservedEngine,
     timeout: Duration,
 ) -> Result<(), &'static str> {
+    let started = tokio::time::Instant::now();
     if let Some(policy) = &observed.gateway_profile.embeddings {
-        route
+        return route
             .embedding_probe(
                 &observed.served_model,
                 &observed.semantic_prompt,
@@ -2233,7 +2575,7 @@ async fn semantic_probe_result(
                 timeout,
             )
             .await
-            .map_err(|error| error.diagnostic())
+            .map_err(|error| error.diagnostic());
     } else if let Some(policy) = &observed.gateway_profile.vision {
         let image = gateway::vision_health_image(policy).map_err(|error| error.message)?;
         route
@@ -2249,7 +2591,7 @@ async fn semantic_probe_result(
                 timeout,
             )
             .await
-            .map_err(|error| error.diagnostic())
+            .map_err(|error| error.diagnostic())?;
     } else {
         route
             .semantic_probe(
@@ -2259,8 +2601,20 @@ async fn semantic_probe_result(
                 timeout,
             )
             .await
-            .map_err(|error| error.diagnostic())
+            .map_err(|error| error.diagnostic())?;
     }
+    if !observed.gateway_profile.startup_protocol_probe {
+        return Ok(());
+    }
+    let remaining = timeout.saturating_sub(started.elapsed());
+    let require_tools = observed
+        .gateway_profile
+        .capabilities
+        .contains("tool_calling");
+    route
+        .protocol_probe(&observed.served_model, require_tools, remaining)
+        .await
+        .map_err(|error| error.diagnostic())
 }
 
 fn semantic_failure_detail(reason: &'static str) -> String {
@@ -2347,12 +2701,26 @@ async fn list_instances(State(state): State<AgentState>, RawQuery(query): RawQue
         return database_unavailable();
     };
     match database.list_instances().await {
-        Ok(instances) => Json(InstanceListDocument {
-            schema: INSTANCE_LIST_SCHEMA.into(),
-            instances,
-        })
-        .into_response(),
+        Ok(mut instances) => {
+            project_route_health(&state.routes, &mut instances);
+            Json(InstanceListDocument {
+                schema: INSTANCE_LIST_SCHEMA.into(),
+                instances,
+            })
+            .into_response()
+        }
         Err(error) => state_problem(error),
+    }
+}
+
+fn project_route_health(routes: &RouteRegistry, instances: &mut [InstanceDocument]) {
+    for instance in instances.iter_mut().filter(|instance| instance.healthy) {
+        if !matches!(routes.lookup(&instance.name), RouteLookup::Healthy(route) if route.generation == instance.generation)
+        {
+            instance.observed = InstanceObservedState::Degraded;
+            instance.healthy = false;
+            instance.endpoint = None;
+        }
     }
 }
 
@@ -2421,7 +2789,7 @@ async fn stop_instance(
         };
         let operation_id = accepted.operation.id.clone();
         let routes = state.routes.clone();
-        if stopping.observed == InstanceObservedState::Absent {
+        if stopping.observed == InstanceObservedState::Absent && stopping.quarantine.is_none() {
             routes.drain(&stopping.name, stopping.generation);
             complete_absent_stop(&database, &operation_id, &stopping).await;
         } else {
@@ -2456,15 +2824,14 @@ async fn run_stop(
             None,
         )
         .await;
-    let result = executor
-        .stop_instance(StopInstanceInput {
-            instance_id: instance.id.clone(),
-            generation: instance.generation,
-            grace_seconds: timeout_seconds,
-        })
-        .await;
-    match result {
-        Ok(()) => {
+    let input = StopInstanceInput {
+        instance_id: instance.id.clone(),
+        generation: instance.generation,
+        grace_seconds: timeout_seconds,
+    };
+    let stopped = stop_exact_generation(&executor, input, timeout_seconds).await;
+    match stopped {
+        true => {
             let stopped = database
                 .set_instance_observed(
                     &instance.id,
@@ -2486,7 +2853,7 @@ async fn run_stop(
                 )
                 .await;
         }
-        Err(_) => {
+        false => {
             let problem = ProblemDocument {
                 schema: PROBLEM_SCHEMA.into(),
                 r#type: "https://sy.local/problems/spark-engine-stop".into(),
@@ -2505,6 +2872,30 @@ async fn run_stop(
                     Some(problem),
                 )
                 .await;
+        }
+    }
+}
+
+async fn stop_exact_generation(
+    executor: &ExecutorClient,
+    input: StopInstanceInput,
+    timeout_seconds: u64,
+) -> bool {
+    if executor.stop_instance(input.clone()).await.is_ok() {
+        return true;
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_seconds);
+    loop {
+        match executor.inspect_instance(input.clone()).await {
+            Ok(None) => return true,
+            Ok(Some(false)) => {
+                return executor.stop_instance(input.clone()).await.is_ok()
+                    || matches!(executor.inspect_instance(input).await, Ok(None));
+            }
+            Ok(Some(true)) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(STOP_COMPLETION_POLL_INTERVAL).await;
+            }
+            _ => return false,
         }
     }
 }
@@ -2606,6 +2997,41 @@ fn instance_id(name: &str) -> String {
     format!("i_{:x}", sha2::Sha256::digest(name.as_bytes()))[..34].into()
 }
 
+fn required_disk_growth(
+    resources: &super::wire::RecipeResourceEnvelopeDocument,
+    storage: &CandidateStorage,
+) -> u64 {
+    let image = (!storage.image_present)
+        .then_some(resources.image_bytes)
+        .unwrap_or(0);
+    let cache = resources
+        .compile_cache_bytes
+        .checked_sub(storage.compile_cache_allocated_bytes)
+        .unwrap_or(resources.compile_cache_bytes);
+    image.saturating_add(cache)
+}
+
+async fn candidate_storage(
+    executor: &ExecutorClient,
+    policy: &super::engine::EnginePolicy,
+    model: &ModelDocument,
+    artifacts: &super::wire::ModelArtifactsDocument,
+    artifact_fingerprint: &str,
+    name: &str,
+) -> Result<CandidateStorage, super::executor::ExecutorClientError> {
+    executor
+        .candidate_storage(CandidateStorageInput {
+            instance_id: instance_id(name),
+            model_commit: model.commit.clone(),
+            model_repository: model.repository.clone(),
+            engine_id: policy.config().id.clone(),
+            engine_fingerprint: policy.fingerprint().into(),
+            artifacts: artifacts.clone(),
+            artifact_fingerprint: artifact_fingerprint.into(),
+        })
+        .await
+}
+
 fn lifecycle_progress(stage: &str, message: &str) -> OperationProgress {
     OperationProgress {
         stage: stage.into(),
@@ -2667,6 +3093,102 @@ async fn get_model(
     }
 }
 
+struct DownloadTarget {
+    repository: Repository,
+    revision: Revision,
+    alias: Option<Alias>,
+    selection: ArtifactSelection,
+}
+
+#[derive(Debug)]
+struct DownloadTargetError {
+    code: &'static str,
+    detail: &'static str,
+}
+
+fn resolve_download_target(
+    request: &DownloadRequest,
+    catalog: Option<&super::model_catalog::ModelCatalog>,
+) -> Result<DownloadTarget, DownloadTargetError> {
+    if let Some(configured) = catalog.and_then(|catalog| catalog.resolve(&request.repository)) {
+        if request.revision != "main"
+            || request.alias.is_some()
+            || request.artifact.is_some()
+            || !request.auxiliary.is_empty()
+        {
+            return Err(DownloadTargetError {
+                code: "spark.model.catalog-override",
+                detail: "configured model aliases cannot override revision or artifacts",
+            });
+        }
+        let selection =
+            ArtifactSelection::configured(configured.artifacts().clone()).map_err(|_| {
+                DownloadTargetError {
+                    code: "spark.model.invalid-catalog",
+                    detail: "configured model artifacts are invalid",
+                }
+            })?;
+        let configured_alias = selection
+            .configured_artifacts()
+            .and_then(|artifacts| artifacts.configured_alias.as_deref())
+            .ok_or(DownloadTargetError {
+                code: "spark.model.invalid-catalog",
+                detail: "configured model artifact alias is missing",
+            })?;
+        return Ok(DownloadTarget {
+            repository: Repository::parse(configured.repository()).map_err(|_| {
+                DownloadTargetError {
+                    code: "spark.model.invalid-catalog",
+                    detail: "configured model repository is invalid",
+                }
+            })?,
+            revision: Revision::parse(configured.revision()).map_err(|_| DownloadTargetError {
+                code: "spark.model.invalid-catalog",
+                detail: "configured model revision is invalid",
+            })?,
+            alias: Some(
+                Alias::parse(configured_alias).map_err(|_| DownloadTargetError {
+                    code: "spark.model.invalid-catalog",
+                    detail: "configured model alias is invalid",
+                })?,
+            ),
+            selection,
+        });
+    }
+    let repository = Repository::parse(&request.repository).map_err(|_| DownloadTargetError {
+        code: "spark.model.invalid-repository",
+        detail: "model repository is invalid",
+    })?;
+    let revision = Revision::parse(&request.revision).map_err(|_| DownloadTargetError {
+        code: "spark.model.invalid-revision",
+        detail: "model revision is invalid",
+    })?;
+    let alias = request
+        .alias
+        .as_deref()
+        .map(Alias::parse)
+        .transpose()
+        .map_err(|_| DownloadTargetError {
+            code: "spark.model.invalid-alias",
+            detail: "model alias is invalid",
+        })?;
+    let selection =
+        match request.artifact.as_deref() {
+            Some(primary) => ArtifactSelection::generic(primary, request.auxiliary.clone())
+                .map_err(|_| DownloadTargetError {
+                    code: "spark.model.invalid-artifacts",
+                    detail: "model artifact selectors are invalid or ambiguous",
+                })?,
+            None => ArtifactSelection::automatic(),
+        };
+    Ok(DownloadTarget {
+        repository,
+        revision,
+        alias,
+        selection,
+    })
+}
+
 #[utoipa::path(post, path = "/api/sy.spark/v1/downloads", request_body = DownloadRequest, responses((status = 200, body = DownloadPlanDocument), (status = 202, body = OperationDocument)))]
 async fn download_model(
     State(state): State<AgentState>,
@@ -2674,34 +3196,10 @@ async fn download_model(
     Extension(auth): Extension<AuthenticatedToken>,
     Json(body): Json<DownloadRequest>,
 ) -> Response {
-    let repository = match Repository::parse(&body.repository) {
+    let target = match resolve_download_target(&body, state.model_catalog.as_deref()) {
         Ok(value) => value,
-        Err(_) => {
-            return problem(
-                StatusCode::BAD_REQUEST,
-                "spark.model.invalid-repository",
-                "model repository is invalid",
-            );
-        }
-    };
-    let revision = match Revision::parse(&body.revision) {
-        Ok(value) => value,
-        Err(_) => {
-            return problem(
-                StatusCode::BAD_REQUEST,
-                "spark.model.invalid-revision",
-                "model revision is invalid",
-            );
-        }
-    };
-    let alias = match body.alias.as_deref().map(Alias::parse).transpose() {
-        Ok(value) => value,
-        Err(_) => {
-            return problem(
-                StatusCode::BAD_REQUEST,
-                "spark.model.invalid-alias",
-                "model alias is invalid",
-            );
+        Err(error) => {
+            return problem(StatusCode::BAD_REQUEST, error.code, error.detail);
         }
     };
     let Some(acquirer) = state.models.clone() else {
@@ -2712,11 +3210,15 @@ async fn download_model(
         );
     };
     if body.dry_run {
-        return match acquirer.resolve(repository, revision).await {
+        return match acquirer
+            .resolve_selected(target.repository, target.revision, target.selection)
+            .await
+        {
             Ok(plan) => Json(DownloadPlanDocument {
                 schema: "sy.spark.download-plan/v1".into(),
                 repository: plan.repository.as_str().into(),
                 commit: plan.commit.as_str().into(),
+                artifacts: Some(plan.artifacts),
                 logical_bytes: plan.logical_bytes,
                 unique_bytes: plan.unique_bytes,
                 temporary_bytes: plan.temporary_bytes,
@@ -2765,9 +3267,10 @@ async fn download_model(
                 acquirer,
                 slots,
                 operation_id,
-                repository,
-                revision,
-                alias,
+                repository: target.repository,
+                revision: target.revision,
+                alias: target.alias,
+                selection: target.selection,
                 update_alias: body.update_alias,
             })
             .await;
@@ -2784,6 +3287,7 @@ struct DownloadJob {
     repository: Repository,
     revision: Revision,
     alias: Option<Alias>,
+    selection: ArtifactSelection,
     update_alias: bool,
 }
 
@@ -2796,12 +3300,16 @@ async fn run_download(job: DownloadJob) {
         repository,
         revision,
         alias,
+        selection,
         update_alias,
     } = job;
     let Ok(_permit) = slots.acquire_owned().await else {
         return;
     };
-    let plan = match acquirer.resolve(repository, revision).await {
+    let plan = match acquirer
+        .resolve_selected(repository, revision, selection)
+        .await
+    {
         Ok(plan) => plan,
         Err(error) => {
             fail_download(&database, &operation_id, error).await;
@@ -3958,11 +4466,17 @@ pub async fn serve(
         "unsupported Spark agent configuration schema"
     );
     anyhow::ensure!(
-        config.engine_policy == Path::new("/etc/sy/spark/engine.toml"),
-        "engine policy must use the fixed root-owned path"
+        config.engine_catalog == Path::new("/etc/sy/spark/engines"),
+        "engine catalog must use the fixed root-owned path"
     );
-    let engine_policy =
-        super::engine::EnginePolicy::load(&config.engine_policy).map_err(anyhow::Error::msg)?;
+    anyhow::ensure!(
+        config.model_catalog == Path::new("/etc/sy/spark/models.toml"),
+        "model catalog must use the fixed root-owned path"
+    );
+    let engine_catalog =
+        super::engine::EngineCatalog::load(&config.engine_catalog).map_err(anyhow::Error::msg)?;
+    let model_catalog = super::model_catalog::ModelCatalog::load(&config.model_catalog)
+        .map_err(anyhow::Error::msg)?;
     anyhow::ensure!(
         config.models.endpoint.starts_with("https://")
             && config.models.cache_root.is_absolute()
@@ -4039,7 +4553,8 @@ pub async fn serve(
         Err(_) => None,
     };
     let mut state = AgentState::new(token.trim(), Vec::new(), Vec::new())
-        .with_engine_policy(engine_policy)
+        .with_engine_catalog(engine_catalog)
+        .with_model_catalog(model_catalog)
         .with_database(database.clone())
         .await?
         .with_models(
@@ -4203,7 +4718,7 @@ async fn tls13_config(
 
 #[cfg(test)]
 mod tests {
-    use super::{router, AgentState, ApiDoc, API_BASE};
+    use super::{resolve_download_target, router, AgentState, ApiDoc, API_BASE};
     use axum::{
         body::Body,
         http::{header, Request},
@@ -4220,7 +4735,77 @@ mod tests {
     use tower::ServiceExt;
     use utoipa::OpenApi;
 
+    #[test]
+    fn configured_alias_download_persists_exact_artifact_identity() {
+        let catalog = crate::spark::model_catalog::ModelCatalog::parse(include_str!(
+            "../../configs/sy/spark/models.toml"
+        ))
+        .unwrap();
+        let request = crate::spark::wire::DownloadRequest {
+            repository: "qwen3.8:27b".into(),
+            revision: "main".into(),
+            alias: None,
+            artifact: None,
+            auxiliary: Vec::new(),
+            update_alias: false,
+            dry_run: false,
+        };
+
+        let target = resolve_download_target(&request, Some(&catalog)).unwrap();
+
+        assert_eq!(target.alias.unwrap().as_str(), "qwen3.8:27b");
+        assert_eq!(
+            target.selection.configured_artifacts().unwrap(),
+            catalog.resolve("qwen3.8:27b").unwrap().artifacts()
+        );
+    }
+
+    #[test]
+    fn arbitrary_repository_download_uses_automatic_artifact_selection() {
+        let request = crate::spark::wire::DownloadRequest {
+            repository: "owner/model".into(),
+            revision: "main".into(),
+            alias: None,
+            artifact: None,
+            auxiliary: Vec::new(),
+            update_alias: false,
+            dry_run: false,
+        };
+        assert!(resolve_download_target(&request, None).is_ok());
+    }
+
     const TOKEN: &str = "test-bootstrap-token-with-at-least-256-bits-of-random-material";
+
+    fn llama_chat_sse() -> String {
+        [
+            r#"{"choices":[{"delta":{"reasoning_content":"inspect"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"ready"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"lookup","arguments":"{\"q\":\"x\"}"}},{"index":1,"id":"call_2","function":{"name":"patch","arguments":"{\"path\":\"a\"}"}}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            r#"{"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3}}"#,
+        ]
+        .into_iter()
+        .map(|event| format!("data: {event}\n\n"))
+        .collect::<String>()
+            + "data: [DONE]\n\n"
+    }
+
+    async fn llama_chat_server() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0; 16_384];
+            let count = socket.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..count]);
+            assert!(request.starts_with("POST /v1/chat/completions "));
+            assert!(request.contains(r#""stream_options":{"include_usage":true}"#));
+            let body = llama_chat_sse();
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        });
+        (address, task)
+    }
 
     #[test]
     fn legacy_recipe_benchmark_and_tuning_paths_are_not_public() {
@@ -4305,6 +4890,434 @@ mod tests {
         let document: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(document["data"][0]["id"], "ornith-1.5:9b");
         assert!(!String::from_utf8_lossy(&body).contains("172.30.0.2"));
+    }
+
+    #[tokio::test]
+    async fn openai_stream_from_llama_fixture_is_protocol_complete() {
+        let (address, server) = llama_chat_server().await;
+        let state = AgentState::new(TOKEN, Vec::new(), Vec::new());
+        let upstream = crate::spark::upstream::ObservedRoute::new(
+            "i_11111111111111111111111111111111",
+            1,
+            address.ip(),
+            address.port(),
+            [("POST", "/v1/chat/completions")],
+        )
+        .unwrap();
+        state.routes.publish(
+            "fixture",
+            "public-model".into(),
+            "served-model".into(),
+            upstream,
+        );
+        let request = Request::post("/openai/fixture/v1/chat/completions")
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .body(Body::from(r#"{"model":"public-model","messages":[{"role":"user","content":"work"}],"stream":true}"#))
+            .unwrap();
+        let response = router(state).oneshot(request).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .unwrap();
+        let body = String::from_utf8(bytes.to_vec()).unwrap();
+        let fields = [
+            "reasoning_content",
+            "ready",
+            "call_1",
+            "call_2",
+            "tool_calls",
+            "prompt_tokens",
+            "[DONE]",
+        ];
+        assert!(
+            fields
+                .windows(2)
+                .all(|pair| body.find(pair[0]).unwrap() < body.rfind(pair[1]).unwrap()),
+            "{body}"
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn native_responses_route_preserves_tool_history_and_engine_sse() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0; 16_384];
+            let count = socket.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..count]);
+            assert!(request.starts_with("POST /v1/responses "));
+            assert!(request.contains(r#""model":"public-model""#));
+            assert!(request.contains(r#""type":"function_call_output""#));
+            let body = "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n";
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        });
+        let state = AgentState::new(TOKEN, Vec::new(), Vec::new());
+        let upstream = crate::spark::upstream::ObservedRoute::new(
+            "i_11111111111111111111111111111111",
+            1,
+            address.ip(),
+            address.port(),
+            [("POST", "/v1/responses")],
+        )
+        .unwrap();
+        let mut profile = crate::spark::gateway::GatewayProfile::text();
+        profile.native_responses = true;
+        state.routes.publish_with_profile(
+            "fixture",
+            "public-model".into(),
+            "served-model".into(),
+            profile,
+            upstream,
+        );
+        let request = Request::post("/openai/fixture/v1/responses")
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .body(Body::from(r#"{"model":"client-model","input":[{"type":"message","role":"user","content":"use the tool"},{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_1","output":"VALUE-42"}],"stream":true}"#))
+            .unwrap();
+        let response = router(state).oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .unwrap();
+        assert_eq!(
+            status,
+            axum::http::StatusCode::OK,
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
+        assert!(String::from_utf8_lossy(&body).contains("response.completed"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn anthropic_stream_from_llama_fixture_is_protocol_complete() {
+        let (address, server) = llama_chat_server().await;
+        let state = AgentState::new(TOKEN, Vec::new(), Vec::new());
+        let upstream = crate::spark::upstream::ObservedRoute::new(
+            "i_11111111111111111111111111111111",
+            1,
+            address.ip(),
+            address.port(),
+            [("POST", "/v1/chat/completions")],
+        )
+        .unwrap();
+        state.routes.publish(
+            "fixture",
+            "public-model".into(),
+            "served-model".into(),
+            upstream,
+        );
+        let request = Request::post("/anthropic/fixture/v1/messages")
+            .header("x-api-key", TOKEN)
+            .header("anthropic-version", "2023-06-01")
+            .body(Body::from(r#"{"model":"public-model","messages":[{"role":"user","content":"work"}],"max_tokens":64,"stream":true}"#))
+            .unwrap();
+        let response = router(state).oneshot(request).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .unwrap();
+        let body = String::from_utf8(bytes.to_vec()).unwrap();
+        let fields = [
+            "message_start",
+            "thinking_delta",
+            "text_delta",
+            "call_1",
+            "call_2",
+            "input_tokens",
+            "message_stop",
+        ];
+        assert!(
+            fields
+                .windows(2)
+                .all(|pair| body.find(pair[0]).unwrap() < body.rfind(pair[1]).unwrap()),
+            "{body}"
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn client_cancellation_closes_the_llama_upstream() {
+        use http_body_util::BodyExt as _;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (closed, close_seen) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0; 8192];
+            let _ = socket.read(&mut request).await.unwrap();
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"ready\"},\"finish_reason\":null}]}\n\n").await.unwrap();
+            let mut byte = [0; 1];
+            assert_eq!(socket.read(&mut byte).await.unwrap(), 0);
+            let _ = closed.send(());
+        });
+        let state = AgentState::new(TOKEN, Vec::new(), Vec::new());
+        let upstream = crate::spark::upstream::ObservedRoute::new(
+            "i_11111111111111111111111111111111",
+            1,
+            address.ip(),
+            address.port(),
+            [("POST", "/v1/chat/completions")],
+        )
+        .unwrap();
+        state.routes.publish(
+            "fixture",
+            "public-model".into(),
+            "served-model".into(),
+            upstream,
+        );
+        let request = Request::post("/openai/fixture/v1/chat/completions")
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .body(Body::from(
+                r#"{"messages":[{"role":"user","content":"work"}],"stream":true}"#,
+            ))
+            .unwrap();
+        let response = router(state).oneshot(request).await.unwrap();
+        let mut body = response.into_body();
+        assert!(body.frame().await.is_some());
+        drop(body);
+        tokio::time::timeout(Duration::from_secs(1), close_seen)
+            .await
+            .unwrap()
+            .unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn incomplete_protocol_probe_cannot_publish_route() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for index in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = vec![0; 8192];
+                let _ = socket.read(&mut request).await.unwrap();
+                let body = match index {
+                    0 => r#"{"data":[{"id":"served-model"}]}"#,
+                    1 => r#"{"id":"cmpl-probe","object":"text_completion","model":"served-model","choices":[{"index":0,"text":"OK","finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1}}"#,
+                    _ => "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                };
+                let content_type = if index == 2 {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                };
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let route = crate::spark::upstream::ObservedRoute::new(
+            "i_11111111111111111111111111111111",
+            1,
+            address.ip(),
+            address.port(),
+            [
+                ("GET", "/v1/models"),
+                ("POST", "/v1/completions"),
+                ("POST", "/v1/chat/completions"),
+            ],
+        )
+        .unwrap();
+        let observed: crate::spark::executor::ObservedEngine = serde_json::from_value(serde_json::json!({
+            "instance_id":"i_11111111111111111111111111111111","generation":1,
+            "container_id":"container","network_id":"network","address":address.ip().to_string(),"port":address.port(),
+            "running":true,"restart_policy":"no","health_method":"GET","health_path":"/health",
+            "allowed_routes":[],"gateway_profile":{"capabilities":["text_generation"],"vision":null,"embeddings":null,"startup_protocol_probe":true,"sampling":{"defaults":{}}},
+            "served_model":"served-model","semantic_prompt":"probe","semantic_max_tokens":1,
+            "startup_deadline_seconds":5,"init_pid":1,"pid_start_time_ticks":1,"cgroup_path":"/fixture"
+        })).unwrap();
+        let routes = crate::spark::gateway::RouteRegistry::default();
+        routes.mark_warming("fixture", 1);
+        assert!(
+            super::semantic_probe_result(&route, &observed, Duration::from_secs(1))
+                .await
+                .is_err()
+        );
+        assert!(matches!(
+            routes.lookup("fixture"),
+            crate::spark::gateway::RouteLookup::Warming
+        ));
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn configured_health_body_rejects_loading_and_accepts_ok() {
+        let rule = crate::spark::engine::EngineHealthBody {
+            json_pointer: "/status".into(),
+            equals: "ok".into(),
+        };
+        let response = |status| crate::spark::upstream::UpstreamResponse {
+            status: 200,
+            bytes: format!(r#"{{"status":"{status}"}}"#).into_bytes(),
+        };
+
+        assert!(!super::health_response_is_ready(
+            &response("loading"),
+            Some(&rule)
+        ));
+        assert!(super::health_response_is_ready(
+            &response("ok"),
+            Some(&rule)
+        ));
+    }
+
+    #[tokio::test]
+    async fn stopped_intent_interrupts_engine_readiness_wait() {
+        let (_state, database, _root) = durable_state().await;
+        let model = ornith_model();
+        database.promote_model(model.clone(), false).await.unwrap();
+        let operation = database
+            .accept_operation(
+                "bootstrap",
+                "instance.serve",
+                "readiness-stop",
+                &"a".repeat(64),
+                Some("ornith".into()),
+            )
+            .await
+            .unwrap()
+            .operation;
+        let instance = database
+            .begin_serve(creating_instance(&model))
+            .await
+            .unwrap()
+            .instance;
+        database.begin_stop(&instance.id).await.unwrap();
+        let route = crate::spark::upstream::ObservedRoute::new(
+            &instance.id,
+            instance.generation,
+            "127.0.0.1".parse().unwrap(),
+            9,
+            [("GET", "/health")],
+        )
+        .unwrap();
+        let request = route.request("GET", "/health", 0).unwrap();
+        let socket = _root.join("executor.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(sy_ipc::Server::new(ResourceExecutor).serve(listener));
+        let interrupt = super::ReadinessInterrupt::new(
+            database.clone(),
+            operation.id,
+            instance.id,
+            crate::spark::executor::ExecutorClient::new(socket),
+            instance.generation,
+        );
+
+        let ready = tokio::time::timeout(
+            Duration::from_millis(100),
+            super::wait_until_engine_ready(
+                &route,
+                &request,
+                None,
+                Duration::from_secs(5),
+                Some(&interrupt),
+            ),
+        )
+        .await
+        .expect("stopped intent must interrupt readiness");
+
+        assert!(!ready);
+        database.shutdown().unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn exited_container_interrupts_engine_readiness_wait() {
+        let (_state, database, root) = durable_state().await;
+        let socket = root.join("executor.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(sy_ipc::Server::new(StoppedResourceExecutor).serve(listener));
+        let instance_id = "i_11111111111111111111111111111111";
+        let route = crate::spark::upstream::ObservedRoute::new(
+            instance_id,
+            1,
+            "127.0.0.1".parse().unwrap(),
+            9,
+            [("GET", "/health")],
+        )
+        .unwrap();
+        let request = route.request("GET", "/health", 0).unwrap();
+        let interrupt = super::ReadinessInterrupt::new(
+            database.clone(),
+            "readiness-exit".into(),
+            instance_id.into(),
+            crate::spark::executor::ExecutorClient::new(socket),
+            1,
+        );
+
+        assert!(!tokio::time::timeout(
+            Duration::from_millis(100),
+            super::wait_until_engine_ready(
+                &route,
+                &request,
+                None,
+                Duration::from_secs(5),
+                Some(&interrupt),
+            ),
+        )
+        .await
+        .expect("container exit must interrupt readiness"));
+        database.shutdown().unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn disabled_startup_protocol_probe_stops_after_semantic_health() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for index in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = vec![0; 8192];
+                let _ = socket.read(&mut request).await.unwrap();
+                let body = if index == 0 {
+                    r#"{"data":[{"id":"served-model"}]}"#
+                } else {
+                    r#"{"id":"cmpl-probe","object":"text_completion","model":"served-model","choices":[{"index":0,"text":"OK","finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1}}"#
+                };
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let route = crate::spark::upstream::ObservedRoute::new(
+            "i_11111111111111111111111111111111",
+            1,
+            address.ip(),
+            address.port(),
+            [
+                ("GET", "/v1/models"),
+                ("POST", "/v1/completions"),
+                ("POST", "/v1/chat/completions"),
+            ],
+        )
+        .unwrap();
+        let mut observed: crate::spark::executor::ObservedEngine =
+            serde_json::from_value(serde_json::json!({
+                "instance_id":"i_11111111111111111111111111111111","generation":1,
+                "container_id":"container","network_id":"network","address":address.ip().to_string(),"port":address.port(),
+                "running":true,"restart_policy":"no","health_method":"GET","health_path":"/health",
+                "allowed_routes":[],"gateway_profile":crate::spark::gateway::GatewayProfile::text(),
+                "served_model":"served-model","semantic_prompt":"probe","semantic_max_tokens":1,
+                "startup_deadline_seconds":5,"init_pid":1,"pid_start_time_ticks":1,"cgroup_path":"/fixture"
+            }))
+            .unwrap();
+        observed.gateway_profile.startup_protocol_probe = false;
+        assert!(
+            super::semantic_probe_result(&route, &observed, Duration::from_secs(1))
+                .await
+                .is_ok()
+        );
+        server.await.unwrap();
     }
 
     #[tokio::test]
@@ -4568,7 +5581,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn warm_candidate_disk_growth_counts_only_unallocated_capacity() {
+        let resources = crate::spark::wire::RecipeResourceEnvelopeDocument {
+            image_bytes: 20,
+            startup_peak_bytes: 30,
+            steady_peak_bytes: 25,
+            compile_cache_bytes: 100,
+        };
+        let storage = crate::spark::executor::CandidateStorage {
+            image_present: true,
+            compile_cache_allocated_bytes: 80,
+            compile_cache_namespace: "opaque-cache-namespace".into(),
+        };
+        assert_eq!(super::required_disk_growth(&resources, &storage), 20);
+    }
+
     struct ResourceExecutor;
+
+    struct StoppedResourceExecutor;
+
+    impl sy_ipc::Handler for StoppedResourceExecutor {
+        async fn handle(&self, request: sy_ipc::Request) -> sy_ipc::Response {
+            if request.params["action"].get("inspect_instance").is_some() {
+                return sy_ipc::Response::Ok {
+                    schema_version: sy_ipc::SCHEMA_VERSION,
+                    request_id: request.request_id,
+                    result: serde_json::json!({"action":"inspect_instance","running":false}),
+                    blob: None,
+                };
+            }
+            ResourceExecutor.handle(request).await
+        }
+    }
 
     impl sy_ipc::Handler for ResourceExecutor {
         async fn handle(&self, request: sy_ipc::Request) -> sy_ipc::Response {
@@ -4581,8 +5626,12 @@ mod tests {
                 serde_json::json!({"action":"inspect_docker_version","docker":{"schema":"sy.spark.executor.docker/v1","transport":"unix","version":"29.2.1","api_version":"1.53","minimum_api_version":"1.44","os":"linux","architecture":"aarch64","experimental":false}})
             } else if action == "inspect_resources" {
                 serde_json::json!({"action":"inspect_resources","snapshot":{"schema":"sy.spark.resources.snapshot/v1","observed_at_unix_ms":crate::spark::resources::unix_millis(),"mem_total_bytes":127775277056_u64,"mem_available_bytes":107374182400_u64,"memory_full_psi_avg10_percent":0.0,"swap_in_pages_delta":0,"disk_available_bytes":700_u64*1024*1024*1024},"policy":{"system_reserve_bytes":8_u64*1024*1024*1024,"emergency_available_floor_bytes":8_u64*1024*1024*1024,"disk_reserve_bytes":100_u64*1024*1024*1024,"startup_guard_interval_ms":500,"steady_guard_interval_ms":2000,"emergency_consecutive_samples":3,"memory_full_psi_avg10_percent":2.0}})
+            } else if action.get("inspect_candidate_storage").is_some() {
+                serde_json::json!({"action":"inspect_candidate_storage","storage":{"image_present":true,"compile_cache_allocated_bytes":0,"compile_cache_namespace":"opaque-authoritative-cache-namespace"}})
             } else if action == "inspect_emergency_records" {
                 serde_json::json!({"action":"inspect_emergency_records","records":[]})
+            } else if action.get("inspect_instance").is_some() {
+                serde_json::json!({"action":"inspect_instance","running":null})
             } else if let Some(expected) = action.get("reconcile_scan") {
                 serde_json::json!({"action":"reconcile_scan","scan":{"matched":[],"missing":expected,"quarantined":[]}})
             } else {
@@ -4618,6 +5667,7 @@ mod tests {
     struct CountingReconcileExecutor {
         scans: Arc<AtomicUsize>,
         prepares: Arc<AtomicUsize>,
+        prepared: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
     }
 
     impl sy_ipc::Handler for CountingReconcileExecutor {
@@ -4628,6 +5678,10 @@ mod tests {
             }
             if action.get("prepare_instance").is_some() {
                 self.prepares.fetch_add(1, Ordering::SeqCst);
+                self.prepared
+                    .lock()
+                    .unwrap()
+                    .push(action["prepare_instance"].clone());
                 return sy_ipc::Response::Ok {
                     schema_version: sy_ipc::SCHEMA_VERSION,
                     request_id: request.request_id,
@@ -4654,13 +5708,18 @@ mod tests {
     struct StopRaceExecutor {
         stops: Arc<AtomicUsize>,
         removed: Arc<std::sync::atomic::AtomicBool>,
+        fail_after_removal: bool,
+        fail_while_stopping: bool,
+        stopping_inspections: Arc<AtomicUsize>,
     }
 
     impl sy_ipc::Handler for StopRaceExecutor {
         async fn handle(&self, request: sy_ipc::Request) -> sy_ipc::Response {
             let action = &request.params["action"];
             let result = if let Some(expected) = action.get("reconcile_scan") {
-                let matched = if self.removed.load(Ordering::SeqCst) {
+                let matched = if self.removed.load(Ordering::SeqCst)
+                    || expected.as_array().is_none_or(Vec::is_empty)
+                {
                     Vec::new()
                 } else {
                     let identity = &expected[0];
@@ -4677,9 +5736,36 @@ mod tests {
                 serde_json::json!({"action":"reconcile_scan","scan":{
                     "matched":matched,"missing":[],"quarantined":[]}})
             } else if action.get("stop_instance").is_some() {
-                self.stops.fetch_add(1, Ordering::SeqCst);
+                let attempt = self.stops.fetch_add(1, Ordering::SeqCst);
+                if self.fail_while_stopping && attempt == 0 {
+                    return sy_ipc::Response::Err {
+                        schema_version: sy_ipc::SCHEMA_VERSION,
+                        request_id: request.request_id,
+                        error: sy_ipc::ErrorBody {
+                            code: sy_core::ErrorCode::Internal,
+                            message: "stop still completing".into(),
+                            retry_after_ms: None,
+                            details: serde_json::Value::Null,
+                        },
+                    };
+                }
                 self.removed.store(true, Ordering::SeqCst);
+                if self.fail_after_removal {
+                    return sy_ipc::Response::Err {
+                        schema_version: sy_ipc::SCHEMA_VERSION,
+                        request_id: request.request_id,
+                        error: sy_ipc::ErrorBody {
+                            code: sy_core::ErrorCode::Internal,
+                            message: "late remove race".into(),
+                            retry_after_ms: None,
+                            details: serde_json::Value::Null,
+                        },
+                    };
+                }
                 serde_json::json!({"action":"stop_instance"})
+            } else if action.get("inspect_instance").is_some() && self.fail_while_stopping {
+                let inspection = self.stopping_inspections.fetch_add(1, Ordering::SeqCst);
+                serde_json::json!({"action":"inspect_instance","running":inspection == 0})
             } else {
                 return ResourceExecutor.handle(request).await;
             };
@@ -4725,6 +5811,10 @@ mod tests {
         }
     }
 
+    fn test_artifacts() -> crate::spark::wire::ModelArtifactsDocument {
+        serde_json::from_str(r#"{"schema":"sy.spark.model-artifacts/v2","format":"safetensors","primary":{"path":"model.safetensors","bytes":8,"sha256":null},"auxiliary":[],"quantization":"FP8","capabilities":["text_generation"],"configured_alias":null}"#).unwrap()
+    }
+
     fn ornith_model() -> crate::spark::wire::ModelDocument {
         crate::spark::wire::ModelDocument {
             schema: crate::spark::wire::MODEL_SCHEMA.into(),
@@ -4733,6 +5823,7 @@ mod tests {
             repository: "ornith-ai/Ornith-1.5-9B".into(),
             commit: "489cb97981b8654bcfcf30ce1f94ed1b62e07b53".into(),
             snapshot: "models--ornith-ai--Ornith-1.5-9B/snapshots/489cb97981b8654bcfcf30ce1f94ed1b62e07b53".into(),
+            artifacts: Some(test_artifacts()),
             logical_bytes: 1,
             unique_bytes: 1,
             aliases: vec!["ornith-1.5:9b".into()],
@@ -4747,6 +5838,7 @@ mod tests {
     fn creating_instance(
         model: &crate::spark::wire::ModelDocument,
     ) -> crate::spark::wire::InstanceDocument {
+        let artifacts = model.artifacts.clone().unwrap();
         crate::spark::wire::InstanceDocument {
             schema: crate::spark::wire::INSTANCE_SCHEMA.into(),
             id: format!("i_{}", "1".repeat(32)),
@@ -4754,8 +5846,10 @@ mod tests {
             model_id: model.id.clone(),
             model: model.canonical.clone(),
             model_commit: model.commit.clone(),
-            recipe_id: "ornith-1.5-9b-vllm-0.19.1".into(),
-            recipe_fingerprint: format!("sha256:{}", "b".repeat(64)),
+            engine_id: "vllm-arm64".into(),
+            engine_fingerprint: format!("sha256:{}", "b".repeat(64)),
+            artifact_fingerprint: crate::spark::engine::artifact_fingerprint(&artifacts).unwrap(),
+            artifacts,
             objective: "agent".into(),
             resources: crate::spark::wire::RecipeResourceEnvelopeDocument {
                 image_bytes: 1,
@@ -4763,6 +5857,8 @@ mod tests {
                 steady_peak_bytes: 1,
                 compile_cache_bytes: 1,
             },
+            context_window: 65_536,
+            default_reasoning_effort: None,
             generation: 0,
             desired: crate::spark::wire::InstanceDesiredState::Running,
             observed: crate::spark::wire::InstanceObservedState::Creating,
@@ -4802,17 +5898,45 @@ mod tests {
         assert!(!super::exact_route_is_published(&routes, &instance));
     }
 
+    #[test]
+    fn instance_list_never_advertises_an_unpublished_route_as_healthy() {
+        let routes = crate::spark::gateway::RouteRegistry::default();
+        let mut instance = creating_instance(&ornith_model());
+        instance.generation = 1;
+        instance.observed = crate::spark::wire::InstanceObservedState::Healthy;
+        instance.healthy = true;
+        instance.endpoint = Some("/openai/ornith/v1".into());
+
+        super::project_route_health(&routes, std::slice::from_mut(&mut instance));
+
+        assert_eq!(
+            instance.observed,
+            crate::spark::wire::InstanceObservedState::Degraded
+        );
+        assert!(!instance.healthy);
+        assert!(instance.endpoint.is_none());
+    }
+
+    #[test]
+    fn stopped_instances_are_not_executor_reconcile_expectations() {
+        let mut instance = creating_instance(&ornith_model());
+        instance.desired = crate::spark::wire::InstanceDesiredState::Stopped;
+        assert!(!super::reconcile_expects_container(&instance));
+    }
+
     #[tokio::test]
-    async fn image_event_scan_cannot_restart_while_foreground_serve_owns_transition() {
+    async fn reconcile_restarts_the_same_engine_and_artifact_generation() {
         let (state, database, root) = durable_state().await;
         let socket = root.join("executor.sock");
         let listener = tokio::net::UnixListener::bind(&socket).unwrap();
         let scans = Arc::new(AtomicUsize::new(0));
         let prepares = Arc::new(AtomicUsize::new(0));
+        let prepared = Arc::new(std::sync::Mutex::new(Vec::new()));
         let server = tokio::spawn(
             sy_ipc::Server::new(CountingReconcileExecutor {
                 scans: Arc::clone(&scans),
                 prepares: Arc::clone(&prepares),
+                prepared: Arc::clone(&prepared),
             })
             .serve(listener),
         );
@@ -4856,6 +5980,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(prepares.load(Ordering::SeqCst), 1);
+        let prepared = prepared.lock().unwrap().clone();
+        assert_eq!(prepared[0]["engine_id"], instance.engine_id);
+        assert_eq!(
+            prepared[0]["engine_fingerprint"],
+            instance.engine_fingerprint
+        );
+        assert_eq!(
+            prepared[0]["artifact_fingerprint"],
+            instance.artifact_fingerprint
+        );
+        assert_eq!(prepared[0]["generation"], instance.generation);
         assert_eq!(
             database
                 .instance(&instance.id)
@@ -4996,6 +6131,7 @@ mod tests {
             repository: "owner/model".into(),
             commit: "a".repeat(40),
             snapshot: format!("models--owner--model/snapshots/{}", "a".repeat(40)),
+            artifacts: Some(test_artifacts()),
             logical_bytes: 1,
             unique_bytes: 1,
             aliases: vec!["model:one".into()],
@@ -5006,6 +6142,7 @@ mod tests {
             license: Some("mit".into()),
         };
         database.promote_model(model.clone(), false).await.unwrap();
+        let artifacts = model.artifacts.clone().unwrap();
         let instance = crate::spark::wire::InstanceDocument {
             schema: crate::spark::wire::INSTANCE_SCHEMA.into(),
             id: format!("i_{}", "1".repeat(32)),
@@ -5013,8 +6150,10 @@ mod tests {
             model_id: model.id.clone(),
             model: model.canonical.clone(),
             model_commit: model.commit.clone(),
-            recipe_id: "spark-fixture-http-echo-1.0.0".into(),
-            recipe_fingerprint: format!("sha256:{}", "b".repeat(64)),
+            engine_id: "vllm-arm64".into(),
+            engine_fingerprint: format!("sha256:{}", "b".repeat(64)),
+            artifact_fingerprint: crate::spark::engine::artifact_fingerprint(&artifacts).unwrap(),
+            artifacts,
             objective: "agent".into(),
             resources: crate::spark::wire::RecipeResourceEnvelopeDocument {
                 image_bytes: 1,
@@ -5022,6 +6161,8 @@ mod tests {
                 steady_peak_bytes: 1,
                 compile_cache_bytes: 1,
             },
+            context_window: 65_536,
+            default_reasoning_effort: None,
             generation: 0,
             desired: crate::spark::wire::InstanceDesiredState::Running,
             observed: crate::spark::wire::InstanceObservedState::Creating,
@@ -5060,6 +6201,9 @@ mod tests {
             sy_ipc::Server::new(StopRaceExecutor {
                 stops: Arc::clone(&stops),
                 removed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                fail_after_removal: true,
+                fail_while_stopping: false,
+                stopping_inspections: Arc::new(AtomicUsize::new(0)),
             })
             .serve(listener),
         );
@@ -5109,6 +6253,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicit_stop_reaps_the_same_generation_after_delayed_shutdown() {
+        let (state, database, root) = durable_state().await;
+        let socket = root.join("executor.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let stops = Arc::new(AtomicUsize::new(0));
+        let server = tokio::spawn(
+            sy_ipc::Server::new(StopRaceExecutor {
+                stops: Arc::clone(&stops),
+                removed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                fail_after_removal: false,
+                fail_while_stopping: true,
+                stopping_inspections: Arc::new(AtomicUsize::new(0)),
+            })
+            .serve(listener),
+        );
+        let model = ornith_model();
+        database.promote_model(model.clone(), false).await.unwrap();
+        let instance = database
+            .begin_serve(creating_instance(&model))
+            .await
+            .unwrap()
+            .instance;
+        let operation = database
+            .accept_operation(
+                "bootstrap",
+                "instance.stop",
+                "delayed-stop",
+                &"a".repeat(64),
+                Some(instance.id.clone()),
+            )
+            .await
+            .unwrap()
+            .operation;
+        let stopping = database.begin_stop(&instance.id).await.unwrap();
+
+        super::run_stop(
+            database.clone(),
+            crate::spark::executor::ExecutorClient::new(socket),
+            state.routes.clone(),
+            operation.id.clone(),
+            stopping,
+            5,
+        )
+        .await;
+
+        assert_eq!(stops.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            database.operation(&operation.id).await.unwrap().state,
+            crate::spark::wire::OperationState::Succeeded
+        );
+        database.shutdown().unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn explicit_stop_preempts_a_busy_high_memory_transition() {
         let (state, database, root) = durable_state().await;
         let socket = root.join("executor.sock");
@@ -5117,6 +6316,9 @@ mod tests {
             sy_ipc::Server::new(StopRaceExecutor {
                 stops: Arc::new(AtomicUsize::new(0)),
                 removed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                fail_after_removal: false,
+                fail_while_stopping: false,
+                stopping_inspections: Arc::new(AtomicUsize::new(0)),
             })
             .serve(listener),
         );
@@ -5195,6 +6397,72 @@ mod tests {
         database.shutdown().unwrap();
     }
 
+    #[tokio::test]
+    async fn explicit_stop_reaps_quarantined_evidence_even_when_state_is_absent() {
+        let (state, database, root) = durable_state().await;
+        let socket = root.join("executor.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let stops = Arc::new(AtomicUsize::new(0));
+        let server = tokio::spawn(
+            sy_ipc::Server::new(StopRaceExecutor {
+                stops: Arc::clone(&stops),
+                removed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                fail_after_removal: false,
+                fail_while_stopping: false,
+                stopping_inspections: Arc::new(AtomicUsize::new(0)),
+            })
+            .serve(listener),
+        );
+        let model = ornith_model();
+        database.promote_model(model.clone(), false).await.unwrap();
+        let instance = database
+            .begin_serve(creating_instance(&model))
+            .await
+            .unwrap()
+            .instance;
+        database
+            .mark_quarantine(&instance.id, instance.generation, "stale-container")
+            .await
+            .unwrap();
+        database
+            .set_instance_observed(
+                &instance.id,
+                instance.generation,
+                crate::spark::wire::InstanceObservedState::Absent,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let state = state.with_executor(crate::spark::executor::ExecutorClient::new(socket));
+        let request = Request::delete(format!("{API_BASE}/instances/{}", instance.id))
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("idempotency-key", "quarantined-absent-stop")
+            .body(Body::from(r#"{"timeout_seconds":5,"dry_run":false}"#))
+            .unwrap();
+
+        let response = router(state).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::ACCEPTED);
+        for _ in 0..20 {
+            if database.list_operations().await.unwrap()[0]
+                .state
+                .is_terminal()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(stops.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            database.list_operations().await.unwrap()[0].state,
+            crate::spark::wire::OperationState::Succeeded
+        );
+        database.shutdown().unwrap();
+        server.abort();
+    }
+
     async fn durable_state() -> (super::AgentState, crate::spark::state::DbActor, PathBuf) {
         let root = tempfile::tempdir().unwrap().keep();
         let database = crate::spark::state::DbActor::open(
@@ -5214,7 +6482,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn serve_dry_run_uses_fresh_executor_telemetry_without_side_effects() {
+    async fn dry_run_reports_engine_artifact_and_reserve_without_side_effects() {
+        const CACHE_NAMESPACE: &str = "opaque-authoritative-cache-namespace";
         let (state, database, root) = durable_state().await;
         let socket = root.join("executor.sock");
         let listener = tokio::net::UnixListener::bind(&socket).unwrap();
@@ -5226,13 +6495,27 @@ mod tests {
                 crate::spark::wire::ModelDocument {
                     schema: crate::spark::wire::MODEL_SCHEMA.into(),
                     id: "m_0123456789abcdef0123456789abcdef".into(),
-                    canonical: "huggingface:ornith-ai/Ornith-1.5-9B@489cb97981b8654bcfcf30ce1f94ed1b62e07b53".into(),
-                    repository: "ornith-ai/Ornith-1.5-9B".into(),
-                    commit: "489cb97981b8654bcfcf30ce1f94ed1b62e07b53".into(),
-                    snapshot: "models--ornith-ai--Ornith-1.5-9B/snapshots/489cb97981b8654bcfcf30ce1f94ed1b62e07b53".into(),
+                    canonical: "huggingface:ornith-ai/Ornith-1.5-35B-A3B-GGUF@12393612fd4f730ff5aadc23e9b8f9648aa49ceb".into(),
+                    repository: "ornith-ai/Ornith-1.5-35B-A3B-GGUF".into(),
+                    commit: "12393612fd4f730ff5aadc23e9b8f9648aa49ceb".into(),
+                    snapshot: "models--ornith-ai--Ornith-1.5-35B-A3B-GGUF/snapshots/12393612fd4f730ff5aadc23e9b8f9648aa49ceb".into(),
+                    artifacts: Some(crate::spark::wire::ModelArtifactsDocument {
+                        schema: "sy.spark.model-artifacts/v2".into(),
+                        format: crate::spark::wire::ModelArtifactFormat::Gguf,
+                        primary: crate::spark::wire::ModelArtifactFileDocument {
+                            path: "Ornith-1.5-35B-Q4_K_M.gguf".into(),
+                            bytes: 1,
+                            sha256: None,
+                        },
+                        auxiliary: Vec::new(),
+                        quantization: Some("Q4_K_M".into()),
+                        capabilities: vec!["text_generation".into()],
+                        configured_alias: None,
+                        engine_profile: None,
+                    }),
                     logical_bytes: 1,
                     unique_bytes: 1,
-                    aliases: vec!["ornith-1.5:9b".into()],
+                    aliases: vec!["ornith-1.5:35b".into()],
                     active_instances: Vec::new(),
                     transport: "rust-xet".into(),
                     verified_at: "2026-08-24T00:00:00Z".into(),
@@ -5248,7 +6531,7 @@ mod tests {
             .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(
-                r#"{"model":"ornith-1.5:9b","name":null,"dry_run":true}"#,
+                r#"{"model":"ornith-1.5:35b","name":null,"dry_run":true}"#,
             ))
             .unwrap();
         let response = router(state).oneshot(request).await.unwrap();
@@ -5261,11 +6544,19 @@ mod tests {
         .unwrap();
         assert!(report.admitted);
         let selection = report.selection.unwrap();
-        assert_eq!(selection.recipe_id, "vllm-arm64");
+        assert_eq!(selection.engine_id, "llama-cpp-cuda13-arm64");
         assert_eq!(selection.selection_kind, "configured_engine");
-        assert_eq!(selection.engine, "vllm");
-        assert!(selection.image.starts_with("vllm/vllm-openai@sha256:"));
+        assert_eq!(selection.engine, "llama.cpp");
+        assert_eq!(
+            selection.artifacts.primary.path,
+            "Ornith-1.5-35B-Q4_K_M.gguf"
+        );
+        assert!(selection.artifact_fingerprint.starts_with("sha256:"));
+        assert_eq!(report.policy.system_reserve_bytes, 8 * 1024 * 1024 * 1024);
+        assert!(selection.image.starts_with("sha256:"));
+        assert_eq!(selection.image.len(), 71);
         assert!(selection.fingerprint.starts_with("sha256:"));
+        assert_eq!(selection.compile_cache_namespace, CACHE_NAMESPACE);
         server.abort();
         database.shutdown().unwrap();
     }
@@ -5490,6 +6781,7 @@ mod tests {
             commit: "0123456789abcdef0123456789abcdef01234567".into(),
             snapshot: "models--owner--model/snapshots/0123456789abcdef0123456789abcdef01234567"
                 .into(),
+            artifacts: None,
             logical_bytes: 1024,
             unique_bytes: 1024,
             aliases: vec!["model:one".into()],

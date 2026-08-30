@@ -1,8 +1,7 @@
 schema = "sy.spark.executor/v1"
 socket = "/run/sy-spark/executor.sock"
 agent_uid = 996
-recipes_dir = "/etc/sy/spark-recipes.d"
-engine_policy = "/etc/sy/spark/engine.toml"
+engine_catalog = "/etc/sy/spark/engines"
 resources_policy = "/etc/sy/spark-agent.toml"
 
 [host]

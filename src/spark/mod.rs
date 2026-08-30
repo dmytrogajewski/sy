@@ -21,6 +21,8 @@ pub mod gateway;
 #[cfg(feature = "spark-agent")]
 pub mod model;
 #[cfg(feature = "spark-agent")]
+pub mod model_catalog;
+#[cfg(all(feature = "spark-agent", test))]
 pub mod recipe;
 pub mod resources;
 #[cfg(feature = "spark-agent")]
@@ -33,3 +35,5 @@ pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_REJECTED: i32 = 3;
 pub const EXIT_UNREACHABLE: i32 = 4;
 pub const EXIT_OPERATION_FAILED: i32 = 5;
+#[cfg(feature = "spark-agent")]
+pub const MAX_ENGINE_STARTUP_DEADLINE_SECONDS: u64 = 1_800;

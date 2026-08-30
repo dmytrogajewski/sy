@@ -12,7 +12,10 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::upstream::{decode_embedding_response, GenerationEvent, ImagePart, ObservedRoute};
+use super::upstream::{
+    decode_embedding_response, GenerationEvent, ImagePart, ObservedRoute,
+    DEFAULT_STREAM_IDLE_TIMEOUT,
+};
 
 pub const MAX_COMPLETION_BODY_BYTES: usize = 1024 * 1024;
 pub const RETRY_AFTER_SECONDS: &str = "1";
@@ -23,6 +26,10 @@ const MAX_INSTANCE_CONCURRENCY: usize = 4;
 #[serde(deny_unknown_fields)]
 pub struct SamplingPolicy {
     pub defaults: BTreeMap<String, serde_json::Number>,
+    #[serde(default)]
+    pub reasoning_effort_map: BTreeMap<String, String>,
+    #[serde(default)]
+    pub chat_template_kwargs: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -60,16 +67,35 @@ pub struct GatewayProfile {
     pub capabilities: BTreeSet<String>,
     pub vision: Option<VisionPolicy>,
     pub embeddings: Option<EmbeddingPolicy>,
+    pub startup_protocol_probe: bool,
+    #[serde(default)]
+    pub native_responses: bool,
+    #[serde(default)]
+    pub native_response_timeout_seconds: u64,
+    #[serde(default)]
+    pub stream_idle_timeout_seconds: u64,
     #[serde(default)]
     pub sampling: SamplingPolicy,
 }
 
 impl GatewayProfile {
+    pub fn stream_idle_timeout(&self) -> std::time::Duration {
+        if self.stream_idle_timeout_seconds == 0 {
+            DEFAULT_STREAM_IDLE_TIMEOUT
+        } else {
+            std::time::Duration::from_secs(self.stream_idle_timeout_seconds)
+        }
+    }
+
     pub fn text() -> Self {
         Self {
             capabilities: ["text_generation".into(), "tool_calling".into()].into(),
             vision: None,
             embeddings: None,
+            startup_protocol_probe: true,
+            native_responses: false,
+            native_response_timeout_seconds: 0,
+            stream_idle_timeout_seconds: 0,
             sampling: SamplingPolicy::default(),
         }
     }
@@ -92,6 +118,10 @@ impl GatewayProfile {
                 normalized,
                 normalization_tolerance_ppm,
             }),
+            startup_protocol_probe: true,
+            native_responses: false,
+            native_response_timeout_seconds: 0,
+            stream_idle_timeout_seconds: 0,
             sampling: SamplingPolicy::default(),
         }
     }
@@ -113,6 +143,12 @@ pub struct GenerationRequest {
     pub stream: bool,
     pub custom_tools: BTreeSet<String>,
     pub omit_reasoning: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct NativeResponsesRequest {
+    pub body: Vec<u8>,
+    pub stream: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -616,7 +652,7 @@ impl AnthropicEncoder {
         }
         self.event("message_delta", serde_json::json!({"delta":{
             "stop_reason":anthropic_stop_reason(self.finish_reason.as_deref()),"stop_sequence":null},
-            "usage":{"output_tokens":self.usage.1}}));
+            "usage":{"input_tokens":self.usage.0,"output_tokens":self.usage.1}}));
         self.event("message_stop", serde_json::json!({}));
         Ok(())
     }
@@ -674,6 +710,17 @@ fn apply_sampling_defaults(object: &mut serde_json::Map<String, Value>, policy: 
     for (key, value) in &policy.defaults {
         if object.get(key).is_none_or(Value::is_null) {
             object.insert(key.clone(), Value::Number(value.clone()));
+        }
+    }
+    if policy.chat_template_kwargs.is_empty() {
+        return;
+    }
+    let template = object
+        .entry("chat_template_kwargs")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if let Some(template) = template.as_object_mut() {
+        for (key, value) in &policy.chat_template_kwargs {
+            template.entry(key.clone()).or_insert_with(|| value.clone());
         }
     }
 }
@@ -775,7 +822,7 @@ pub fn vision_health_image(policy: &VisionPolicy) -> Result<ImagePart, OpenAiErr
         || policy.health_prompt.len() > 256
         || policy.health_expected_text.is_empty()
         || policy.health_expected_text.len() > 64
-        || !(1..=128).contains(&policy.health_max_tokens)
+        || !(1..=256).contains(&policy.health_max_tokens)
         || !policy.health_disable_thinking
     {
         return Err(invalid_request("vision health contract is invalid"));
@@ -1131,6 +1178,13 @@ impl ResponsesEncoder {
     }
 
     fn done(&mut self) -> Result<(), OpenAiError> {
+        if self.tools.values().any(|tool| {
+            tool.call_id.is_empty()
+                || tool.name.is_empty()
+                || serde_json::from_str::<Value>(&tool.arguments).is_err()
+        }) {
+            return Err(invalid_request("upstream tool arguments are invalid"));
+        }
         self.finish_reasoning();
         self.finish_text();
         self.finish_tools();
@@ -1427,6 +1481,12 @@ pub fn rewrite_completion_request(bytes: &[u8], served_model: &str) -> Result<(V
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    if streaming {
+        object.insert(
+            "stream_options".into(),
+            serde_json::json!({"include_usage":true}),
+        );
+    }
     serde_json::to_vec(&value)
         .map(|bytes| (bytes, streaming))
         .map_err(|_| ())
@@ -1485,10 +1545,14 @@ pub fn rewrite_chat_request_with_profile(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     object.insert("model".into(), Value::String(served_model.into()));
-    object.insert(
-        "stream_options".into(),
-        serde_json::json!({"include_usage":true}),
-    );
+    if stream {
+        object.insert(
+            "stream_options".into(),
+            serde_json::json!({"include_usage":true}),
+        );
+    } else {
+        object.remove("stream_options");
+    }
     omit_empty_tool_controls(object);
     apply_sampling_defaults(object, &profile.sampling);
     let body =
@@ -1526,6 +1590,10 @@ pub fn rewrite_anthropic_request_with_profile(
         return Err(anthropic_invalid("model or output token limit is invalid"));
     }
     validate_anthropic_options(&request)?;
+    let thinking_token_budget = request
+        .thinking
+        .as_ref()
+        .and_then(|thinking| thinking.budget_tokens);
     let mut messages = Vec::new();
     if let Some(system) = request.system {
         messages
@@ -1543,10 +1611,23 @@ pub fn rewrite_anthropic_request_with_profile(
     let tools = anthropic_tools(request.tools)?;
     let tool_choice = anthropic_tool_choice(request.tool_choice)?;
     let response_format = anthropic_response_format(request.output_config.as_ref())?;
+    let reasoning_effort = request
+        .output_config
+        .as_ref()
+        .and_then(|output| output.effort.as_deref())
+        .map(|effort| {
+            profile
+                .sampling
+                .reasoning_effort_map
+                .get(effort)
+                .cloned()
+                .unwrap_or_else(|| effort.into())
+        });
     let enable_thinking = request
         .thinking
         .as_ref()
         .is_none_or(|thinking| thinking.kind != "disabled");
+    let effort_controls_budget = reasoning_effort.is_some() && thinking_token_budget.is_none();
     let omit_reasoning = request
         .thinking
         .as_ref()
@@ -1563,8 +1644,17 @@ pub fn rewrite_anthropic_request_with_profile(
     let body = body
         .as_object_mut()
         .ok_or_else(|| anthropic_invalid("request cannot be encoded"))?;
+    if let Some(budget) = thinking_token_budget {
+        body.insert("thinking_token_budget".into(), budget.into());
+    }
+    if let Some(effort) = reasoning_effort {
+        body.insert("reasoning_effort".into(), effort.into());
+    }
     omit_empty_tool_controls(body);
     apply_sampling_defaults(body, &profile.sampling);
+    if effort_controls_budget {
+        body.remove("thinking_token_budget");
+    }
     let body =
         serde_json::to_vec(&body).map_err(|_| anthropic_invalid("request cannot be encoded"))?;
     Ok(GenerationRequest {
@@ -1575,17 +1665,14 @@ pub fn rewrite_anthropic_request_with_profile(
     })
 }
 
-pub fn rewrite_anthropic_count_request(
-    bytes: &[u8],
-    served_model: &str,
-) -> Result<Vec<u8>, AnthropicError> {
+fn parse_anthropic_count_request(bytes: &[u8]) -> Result<Value, AnthropicError> {
     if bytes.len() > MAX_COMPLETION_BODY_BYTES {
         return Err(anthropic_invalid("request body is too large"));
     }
-    let mut value: Value =
+    let value: Value =
         serde_json::from_slice(bytes).map_err(|_| anthropic_invalid("request JSON is invalid"))?;
     let object = value
-        .as_object_mut()
+        .as_object()
         .ok_or_else(|| anthropic_invalid("request must be an object"))?;
     const KEYS: &[&str] = &[
         "model",
@@ -1602,6 +1689,26 @@ pub fn rewrite_anthropic_count_request(
     if object.keys().any(|key| !KEYS.contains(&key.as_str())) {
         return Err(anthropic_invalid("count request contains an unknown field"));
     }
+    Ok(value)
+}
+
+pub fn rewrite_anthropic_native_count_request(
+    bytes: &[u8],
+    served_model: &str,
+) -> Result<Vec<u8>, AnthropicError> {
+    let mut value = parse_anthropic_count_request(bytes)?;
+    value["model"] = Value::String(served_model.into());
+    serde_json::to_vec(&value).map_err(|_| anthropic_invalid("count request cannot be encoded"))
+}
+
+pub fn rewrite_anthropic_count_request(
+    bytes: &[u8],
+    served_model: &str,
+) -> Result<Vec<u8>, AnthropicError> {
+    let mut value = parse_anthropic_count_request(bytes)?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| anthropic_invalid("request must be an object"))?;
     object.remove("thinking");
     object.insert("max_tokens".into(), Value::from(1));
     object.insert("stream".into(), Value::Bool(false));
@@ -1623,8 +1730,10 @@ pub fn rewrite_anthropic_count_response(bytes: &[u8]) -> Result<u64, AnthropicEr
     }
     let value: Value = serde_json::from_slice(bytes)
         .map_err(|_| anthropic_invalid("tokenizer response is invalid"))?;
-    let count = value["count"]
-        .as_u64()
+    let count = value
+        .get("input_tokens")
+        .or_else(|| value.get("count"))
+        .and_then(Value::as_u64)
         .ok_or_else(|| anthropic_invalid("tokenizer response is invalid"))?;
     Ok(count)
 }
@@ -2076,6 +2185,18 @@ pub fn rewrite_responses_request_with_profile(
     }
     let max_tokens = response_max_tokens(object.get("max_output_tokens"))?;
     let tool_choice = response_tool_choice(object.get("tool_choice"))?;
+    let reasoning_effort = object
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(Value::as_str)
+        .map(|effort| {
+            profile
+                .sampling
+                .reasoning_effort_map
+                .get(effort)
+                .map_or_else(|| effort.to_owned(), Clone::clone)
+        });
+    let disable_thinking = reasoning_effort.as_deref() == Some("none");
     let stream = object
         .get("stream")
         .and_then(Value::as_bool)
@@ -2083,10 +2204,12 @@ pub fn rewrite_responses_request_with_profile(
     let mut body = serde_json::json!({
         "model": served_model, "messages": messages,
         "stream": true, "stream_options": {"include_usage": true},
-        "max_tokens": max_tokens,
         "temperature":object.get("temperature").cloned().unwrap_or(Value::Null),
         "top_p":object.get("top_p").cloned().unwrap_or(Value::Null)
     });
+    if let Some(max_tokens) = max_tokens {
+        body["max_tokens"] = Value::from(max_tokens);
+    }
     if !tools.is_empty() {
         let body = body
             .as_object_mut()
@@ -2101,11 +2224,22 @@ pub fn rewrite_responses_request_with_profile(
                 .unwrap_or(Value::Bool(true)),
         );
     }
-    apply_sampling_defaults(
-        body.as_object_mut()
-            .ok_or_else(|| invalid_request("request cannot be encoded"))?,
-        &profile.sampling,
-    );
+    let body = body
+        .as_object_mut()
+        .ok_or_else(|| invalid_request("request cannot be encoded"))?;
+    if let Some(effort) = reasoning_effort {
+        body.insert("reasoning_effort".into(), effort.into());
+    }
+    if disable_thinking {
+        body.insert(
+            "chat_template_kwargs".into(),
+            serde_json::json!({"enable_thinking":false}),
+        );
+    }
+    apply_sampling_defaults(body, &profile.sampling);
+    if body.contains_key("reasoning_effort") {
+        body.remove("thinking_token_budget");
+    }
     let body =
         serde_json::to_vec(&body).map_err(|_| invalid_request("request cannot be encoded"))?;
     Ok(GenerationRequest {
@@ -2114,6 +2248,43 @@ pub fn rewrite_responses_request_with_profile(
         custom_tools,
         omit_reasoning: false,
     })
+}
+
+pub fn rewrite_native_responses_request_with_profile(
+    bytes: &[u8],
+    public_model: &str,
+    profile: &GatewayProfile,
+) -> Result<NativeResponsesRequest, OpenAiError> {
+    if !profile.native_responses {
+        return Err(invalid_request("native Responses transport is unavailable"));
+    }
+    rewrite_responses_request_with_profile(bytes, public_model, profile)?;
+    let mut value: Value =
+        serde_json::from_slice(bytes).map_err(|_| invalid_request("request JSON is invalid"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| invalid_request("request must be an object"))?;
+    object.insert("model".into(), Value::String(public_model.into()));
+    apply_sampling_defaults(object, &profile.sampling);
+    if let Some(effort) = object
+        .get_mut("reasoning")
+        .and_then(Value::as_object_mut)
+        .and_then(|reasoning| reasoning.get_mut("effort"))
+    {
+        if let Some(mapped) = effort
+            .as_str()
+            .and_then(|value| profile.sampling.reasoning_effort_map.get(value))
+        {
+            *effort = Value::String(mapped.clone());
+        }
+    }
+    let stream = object
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let body =
+        serde_json::to_vec(&value).map_err(|_| invalid_request("request cannot be encoded"))?;
+    Ok(NativeResponsesRequest { body, stream })
 }
 
 /// A single leading system message is accepted across the supported vLLM chat
@@ -2414,15 +2585,16 @@ fn response_tool_output(item: &Value) -> Result<Value, OpenAiError> {
     Ok(serde_json::json!({"role": "tool", "tool_call_id": call_id, "content": content}))
 }
 
-fn response_max_tokens(value: Option<&Value>) -> Result<u64, OpenAiError> {
-    let tokens = value.and_then(Value::as_u64).unwrap_or(4_096);
+fn response_max_tokens(value: Option<&Value>) -> Result<Option<u64>, OpenAiError> {
+    let Some(tokens) = value.and_then(Value::as_u64) else {
+        return Ok(None);
+    };
     if tokens == 0 || tokens > MAX_OUTPUT_TOKENS {
-        Err(invalid_request(
+        return Err(invalid_request(
             "max_output_tokens exceeds the configured ceiling",
-        ))
-    } else {
-        Ok(tokens)
+        ));
     }
+    Ok(Some(tokens))
 }
 
 fn response_tool_choice(value: Option<&Value>) -> Result<Value, OpenAiError> {
@@ -2469,7 +2641,10 @@ mod tests {
                 "repetition_penalty".into(),
                 serde_json::Number::from_f64(1.0).unwrap(),
             ),
+            ("thinking_token_budget".into(), 8192.into()),
         ]);
+        profile.sampling.chat_template_kwargs =
+            BTreeMap::from([("preserve_thinking".into(), Value::Bool(true))]);
         profile
     }
 
@@ -2542,7 +2717,19 @@ mod tests {
         let value: Value = serde_json::from_slice(&request.body).unwrap();
         assert_eq!(value["model"], "Ornith-1.5-9B");
         assert_eq!(value["messages"][0]["content"], "hello");
+        assert!(value.get("max_tokens").is_none());
         assert!(request.stream);
+    }
+
+    #[test]
+    fn responses_forwards_an_explicit_output_limit_without_inventing_a_default() {
+        let request = rewrite_responses_request(
+            br#"{"model":"ornith","input":"hello","max_output_tokens":8192}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let value: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(value["max_tokens"], 8192);
     }
 
     #[test]
@@ -2656,6 +2843,16 @@ mod tests {
     }
 
     #[test]
+    fn chat_stream_options_are_only_sent_for_streaming_requests() {
+        for (stream, expected) in [(false, false), (true, true)] {
+            let body = format!(r#"{{"messages":[],"stream":{stream}}}"#);
+            let request = rewrite_chat_request(body.as_bytes(), "model").unwrap();
+            let value: Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(value.get("stream_options").is_some(), expected);
+        }
+    }
+
+    #[test]
     fn configured_chat_sampling_defaults_do_not_override_client_values() {
         let profile = configured_sampling_profile();
         let defaults = rewrite_chat_request_with_profile(
@@ -2692,8 +2889,27 @@ mod tests {
     }
 
     #[test]
+    fn configured_template_defaults_do_not_override_existing_values() {
+        let profile = configured_sampling_profile();
+        let mut body = serde_json::json!({
+            "chat_template_kwargs": {"preserve_thinking": false}
+        });
+
+        apply_sampling_defaults(body.as_object_mut().unwrap(), &profile.sampling);
+
+        assert_eq!(body["chat_template_kwargs"]["preserve_thinking"], false);
+    }
+
+    #[test]
     fn configured_responses_and_anthropic_share_sampling_defaults() {
         let profile = configured_sampling_profile();
+        let chat = rewrite_chat_request_with_profile(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}]}"#,
+            "Ornith-1.5-9B",
+            &profile,
+        )
+        .unwrap();
+        let chat: Value = serde_json::from_slice(&chat.body).unwrap();
         let responses = rewrite_responses_request_with_profile(
             br#"{"model":"ornith","input":"hi"}"#,
             "Ornith-1.5-9B",
@@ -2721,6 +2937,101 @@ mod tests {
             )
         );
         assert_eq!(responses["temperature"], 0.6);
+        assert_eq!(chat["thinking_token_budget"], 8192);
+        assert_eq!(responses["thinking_token_budget"], 8192);
+        assert_eq!(anthropic["thinking_token_budget"], 8192);
+        assert_eq!(chat["chat_template_kwargs"]["preserve_thinking"], true);
+        assert_eq!(responses["chat_template_kwargs"]["preserve_thinking"], true);
+        assert_eq!(anthropic["chat_template_kwargs"]["preserve_thinking"], true);
+    }
+
+    #[test]
+    fn native_responses_preserves_wire_items_and_applies_profile_defaults() {
+        let mut profile = configured_sampling_profile();
+        profile.native_responses = true;
+        let request = rewrite_native_responses_request_with_profile(
+            br#"{"model":"client","input":"hi","stream":true}"#,
+            "public-model",
+            &profile,
+        )
+        .unwrap();
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+
+        assert!(request.stream);
+        assert_eq!(body["model"], "public-model");
+        assert_eq!(body["input"], "hi");
+        assert_eq!(body["chat_template_kwargs"]["preserve_thinking"], true);
+    }
+
+    #[test]
+    fn anthropic_explicit_thinking_budget_overrides_profile_default() {
+        let request = rewrite_anthropic_request_with_profile(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"max_tokens":8192,"thinking":{"type":"enabled","budget_tokens":4096}}"#,
+            "Ornith-1.5-9B",
+            &configured_sampling_profile(),
+        )
+        .unwrap();
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+
+        assert_eq!(body["thinking_token_budget"], 4096);
+    }
+
+    #[test]
+    fn anthropic_effort_reaches_openai_upstream() {
+        let request = rewrite_anthropic_request_with_profile(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"max_tokens":8192,"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}}"#,
+            "Ornith-1.5-9B",
+            &configured_sampling_profile(),
+        )
+        .unwrap();
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+
+        assert_eq!(body["reasoning_effort"], "low");
+        assert!(body.get("thinking_token_budget").is_none());
+    }
+
+    #[test]
+    fn anthropic_effort_is_mapped_by_the_engine_profile() {
+        let mut profile = configured_sampling_profile();
+        profile
+            .sampling
+            .reasoning_effort_map
+            .insert("high".into(), "xhigh".into());
+        let request = rewrite_anthropic_request_with_profile(
+            br#"{"model":"ornith","messages":[{"role":"user","content":"hi"}],"max_tokens":8192,"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}"#,
+            "Ornith-1.5-9B",
+            &profile,
+        )
+        .unwrap();
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+
+        assert_eq!(body["reasoning_effort"], "xhigh");
+    }
+
+    #[test]
+    fn responses_effort_controls_reasoning_without_a_fixed_budget() {
+        let request = rewrite_responses_request_with_profile(
+            br#"{"model":"ornith","input":"hi","reasoning":{"effort":"low"}}"#,
+            "Ornith-1.5-9B",
+            &configured_sampling_profile(),
+        )
+        .unwrap();
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+
+        assert_eq!(body["reasoning_effort"], "low");
+        assert!(body.get("thinking_token_budget").is_none());
+    }
+
+    #[test]
+    fn responses_none_effort_disables_thinking_for_one_request() {
+        let request = rewrite_responses_request(
+            br#"{"model":"ornith","input":"hi","reasoning":{"effort":"none"}}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
     }
 
     #[test]
@@ -2887,6 +3198,27 @@ mod tests {
             "Ornith-1.5-9B",
         );
         assert!(rewritten.is_ok());
+    }
+
+    #[test]
+    fn anthropic_count_response_accepts_native_shape() {
+        assert_eq!(
+            rewrite_anthropic_count_response(br#"{"input_tokens":7}"#).unwrap(),
+            7
+        );
+    }
+
+    #[test]
+    fn anthropic_native_count_rewrites_only_model_identity() {
+        let rewritten = rewrite_anthropic_native_count_request(
+            br#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"thinking":{"type":"enabled","budget_tokens":32}}"#,
+            "served-model",
+        )
+        .unwrap();
+        let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+        assert_eq!(rewritten["model"], "served-model");
+        assert_eq!(rewritten["messages"][0]["content"], "hi");
+        assert_eq!(rewritten["thinking"]["type"], "enabled");
     }
 
     #[test]

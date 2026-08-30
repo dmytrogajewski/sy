@@ -123,9 +123,10 @@ pub fn run(host: &str, config_dir: &Path, args: LaunchArgs) -> Result<(), Client
     let client = SparkClient::load(config_dir, host)?;
     let models = client.list_models()?;
     let model_reference = choose_model_reference(args.model.as_deref(), saved.as_ref(), &models)?;
-    let model = resolve_model(&models.models, &model_reference)?;
     let instances = client.instances()?;
-    let owned_name = launch_instance_name(&model);
+    let (model, selected_name) =
+        resolve_launch_model(&models.models, &instances.instances, &model_reference)?;
+    let owned_name = selected_name.unwrap_or_else(|| launch_instance_name(&model));
     let mut instance = resolve_instance(
         &instances.instances,
         &model,
@@ -139,7 +140,7 @@ pub fn run(host: &str, config_dir: &Path, args: LaunchArgs) -> Result<(), Client
             let report = client.admission_plan(
                 &uuid::Uuid::new_v4().to_string(),
                 &ServeAdmissionRequest {
-                    model: model_reference.clone(),
+                    model: serve_model_reference(&model).into(),
                     name: Some(owned_name.clone()),
                     dry_run: true,
                 },
@@ -177,7 +178,7 @@ pub fn run(host: &str, config_dir: &Path, args: LaunchArgs) -> Result<(), Client
         let operation = client.serve(
             &uuid::Uuid::new_v4().to_string(),
             &ServeRequest {
-                model: model_reference.clone(),
+                model: serve_model_reference(&model).into(),
                 name: Some(owned_name.clone()),
                 dry_run: false,
             },
@@ -370,6 +371,25 @@ fn resolve_model(models: &[ModelDocument], reference: &str) -> Result<ModelDocum
     }
 }
 
+fn resolve_launch_model(
+    models: &[ModelDocument],
+    instances: &[InstanceDocument],
+    reference: &str,
+) -> Result<(ModelDocument, Option<String>), ClientError> {
+    let instance = instances.iter().find(|value| value.name == reference);
+    let model_reference = instance
+        .map(|value| value.model_id.as_str())
+        .unwrap_or(reference);
+    Ok((
+        resolve_model(models, model_reference)?,
+        instance.map(|value| value.name.clone()),
+    ))
+}
+
+fn serve_model_reference(model: &ModelDocument) -> &str {
+    &model.id
+}
+
 fn resolve_instance(
     instances: &[InstanceDocument],
     model: &ModelDocument,
@@ -535,33 +555,51 @@ fn configure_integration(
     let profile = home.join(format!("{CODEX_PROFILE}.config.toml"));
     let catalog = home.join(format!("{CODEX_PROFILE}-models.json"));
     let profile_text = format!("# {OWNED_MARKER}\n{}", config.toml);
-    let catalog_value = codex_catalog(model);
+    if instance.context_window == 0 {
+        return Err(failure(
+            EXIT_REJECTED,
+            "Spark instance has no declared context window; restart it with the current engine configuration",
+        ));
+    }
+    let catalog_value = codex_catalog(model, instance.context_window);
     let catalog_text = serde_json::to_vec_pretty(&catalog_value)
         .map_err(|_| failure(EXIT_INTERNAL, "could not encode Codex model catalog"))?;
     write_private_atomic(&profile, profile_text.as_bytes())?;
     write_private_atomic(&catalog, &catalog_text)
 }
 
-fn codex_catalog(model: &ModelDocument) -> Value {
+fn codex_catalog(model: &ModelDocument, context_window: u64) -> Value {
     serde_json::json!({
         "owned_by": OWNED_MARKER,
         "models": [{
             "slug": model.canonical,
             "display_name": model.aliases.first().unwrap_or(&model.repository),
-            "context_window": 65536,
+            "description": model.canonical,
+            "context_window": context_window,
+            "max_context_window": context_window,
+            "effective_context_window_percent": 100,
             "shell_type": "default",
             "visibility": "list",
             "supported_in_api": true,
             "priority": 0,
-            "truncation_policy": { "mode": "tokens", "limit": 10000 },
+            "additional_speed_tiers": [],
+            "service_tiers": [],
+            "truncation_policy": { "mode": "bytes", "limit": 10000 },
             "input_modalities": ["text"],
             "base_instructions": "",
+            "default_reasoning_summary": "none",
             "support_verbosity": true,
             "default_verbosity": "low",
             "supports_parallel_tool_calls": false,
-            "supports_reasoning_summaries": true,
+            "supports_reasoning_summaries": false,
             "supported_reasoning_levels": [],
-            "experimental_supported_tools": []
+            "experimental_supported_tools": [],
+            "supports_search_tool": false,
+            "web_search_tool_type": "text",
+            "supports_image_detail_original": false,
+            "use_responses_lite": false,
+            "model_messages": null,
+            "upgrade": null
         }]
     })
 }
@@ -659,7 +697,7 @@ fn configure_codex_command(
     let config = client::codex_client_config(config_dir, host, &instance.name, &model.canonical)?;
     let catalog = codex_home()?.join(format!("{CODEX_PROFILE}-models.json"));
     command.arg("--profile").arg(CODEX_PROFILE);
-    for value in [
+    let mut overrides = vec![
         format!("model_provider={:?}", provider_name(&instance.name)),
         format!(
             "model_providers.{}.name={:?}",
@@ -682,7 +720,11 @@ fn configure_codex_command(
             "responses"
         ),
         format!("model_catalog_json={:?}", catalog),
-    ] {
+    ];
+    if let Some(effort) = &instance.default_reasoning_effort {
+        overrides.push(format!("model_reasoning_effort={effort:?}"));
+    }
+    for value in overrides {
         command.arg("-c").arg(value);
     }
     command
@@ -1165,6 +1207,7 @@ mod tests {
             repository: format!("org/{alias}"),
             commit: "commit".into(),
             snapshot: "/models/snapshot".into(),
+            artifacts: None,
             logical_bytes: 1,
             unique_bytes: 1,
             aliases: vec![alias.into()],
@@ -1176,16 +1219,23 @@ mod tests {
         }
     }
 
+    fn artifacts() -> crate::spark::wire::ModelArtifactsDocument {
+        serde_json::from_str(r#"{"schema":"sy.spark.model-artifacts/v2","format":"gguf","primary":{"path":"model.gguf","bytes":8,"sha256":null},"auxiliary":[],"quantization":"Q4_K_XL","capabilities":["text_generation"],"configured_alias":null}"#).unwrap()
+    }
+
     fn instance(name: &str, model_id: &str) -> InstanceDocument {
+        let artifacts = artifacts();
         InstanceDocument {
-            schema: "sy.spark.instance/v1".into(),
+            schema: "sy.spark.instance/v2".into(),
             id: format!("i_{name}"),
             name: name.into(),
             model_id: model_id.into(),
             model: "huggingface:org/model@commit".into(),
             model_commit: "commit".into(),
-            recipe_id: "recipe".into(),
-            recipe_fingerprint: "sha256:recipe".into(),
+            engine_id: "llama-cpp".into(),
+            engine_fingerprint: format!("sha256:{}", "a".repeat(64)),
+            artifact_fingerprint: format!("sha256:{}", "b".repeat(64)),
+            artifacts,
             objective: "agent".into(),
             resources: RecipeResourceEnvelopeDocument {
                 image_bytes: 1,
@@ -1193,6 +1243,8 @@ mod tests {
                 steady_peak_bytes: 1,
                 compile_cache_bytes: 0,
             },
+            context_window: 65_536,
+            default_reasoning_effort: None,
             generation: 1,
             desired: InstanceDesiredState::Running,
             observed: InstanceObservedState::Healthy,
@@ -1212,6 +1264,26 @@ mod tests {
         let expected = model("m_one", "ornith-1.5:9b");
         let actual = resolve_model(std::slice::from_ref(&expected), "ornith-1.5:9b").unwrap();
         assert_eq!(actual.id, expected.id);
+    }
+
+    #[test]
+    fn stopped_instance_name_resolves_its_installed_model() {
+        let expected = model("m_one", "ornith-1.5:35b");
+        let mut stopped = instance("ornith-1-5-35b", &expected.id);
+        stopped.healthy = false;
+        let (actual, name) = resolve_launch_model(
+            std::slice::from_ref(&expected),
+            std::slice::from_ref(&stopped),
+            &stopped.name,
+        )
+        .unwrap();
+        assert_eq!((actual.id, name), (expected.id, Some(stopped.name)));
+    }
+
+    #[test]
+    fn stopped_instance_serve_uses_resolved_model_id() {
+        let model = model("m_one", "ornith-1.5:35b");
+        assert_eq!(serve_model_reference(&model), "m_one");
     }
 
     #[test]
@@ -1287,6 +1359,35 @@ mod tests {
     }
 
     #[test]
+    fn codex_adapter_uses_the_instances_declarative_reasoning_effort() {
+        let root = tempfile::tempdir().unwrap();
+        client_config(root.path());
+        let model = model("m_one", "ornith");
+        let mut instance = instance("ornith", &model.id);
+        instance.default_reasoning_effort = Some("medium".into());
+        let mut command = Command::new("codex");
+
+        configure_codex_command(
+            &mut command,
+            root.path(),
+            "dgx",
+            &instance,
+            &model,
+            &LaunchSecret("inference-secret".into()),
+            &["exec".into(), "build".into()],
+        )
+        .unwrap();
+
+        let arguments = command
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(arguments
+            .windows(2)
+            .any(|pair| pair == ["-c", "model_reasoning_effort=\"medium\""]));
+    }
+
+    #[test]
     fn opencode_adapter_uses_inline_provider_without_embedding_secret() {
         let root = tempfile::tempdir().unwrap();
         client_config(root.path());
@@ -1323,11 +1424,19 @@ mod tests {
 
     #[test]
     fn codex_catalog_matches_current_required_shape_without_secret() {
-        let catalog = codex_catalog(&model("m_one", "ornith"));
+        let catalog = codex_catalog(&model("m_one", "ornith"), 262_144);
+        assert_eq!(catalog["models"][0]["context_window"], 262_144);
+        assert_eq!(catalog["models"][0]["max_context_window"], 262_144);
+        assert_eq!(
+            catalog["models"][0]["effective_context_window_percent"],
+            100
+        );
         assert_eq!(catalog["models"][0]["supported_in_api"], true);
         assert_eq!(catalog["models"][0]["shell_type"], "default");
         assert_eq!(catalog["models"][0]["input_modalities"][0], "text");
-        assert_eq!(catalog["models"][0]["supports_reasoning_summaries"], true);
+        assert_eq!(catalog["models"][0]["truncation_policy"]["mode"], "bytes");
+        assert_eq!(catalog["models"][0]["supports_reasoning_summaries"], false);
+        assert_eq!(catalog["models"][0]["default_reasoning_summary"], "none");
         assert_eq!(
             catalog["models"][0]["supported_reasoning_levels"],
             serde_json::json!([])

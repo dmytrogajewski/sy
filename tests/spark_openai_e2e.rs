@@ -170,6 +170,114 @@ fn responses_custom_tool_output_unwraps_the_native_function_argument() {
 }
 
 #[test]
+fn responses_rejects_malformed_function_arguments_at_completion() {
+    let mut encoder = gateway::ResponsesEncoder::new("fixture".into(), BTreeSet::new());
+    encoder
+        .accept(upstream::GenerationEvent::ToolCallDelta {
+            index: 0,
+            call_id: Some("call_1".into()),
+            name: Some("lookup".into()),
+            arguments: "{".into(),
+        })
+        .unwrap();
+    assert!(encoder.accept(upstream::GenerationEvent::Done).is_err());
+}
+
+#[test]
+fn responses_stream_terminal_is_semantically_equal_to_non_streaming() {
+    let mut encoder = gateway::ResponsesEncoder::new("fixture".into(), BTreeSet::new());
+    for event in [
+        upstream::GenerationEvent::ReasoningDelta {
+            text: "inspect".into(),
+        },
+        upstream::GenerationEvent::TextDelta {
+            text: "answer".into(),
+        },
+        upstream::GenerationEvent::Usage {
+            prompt_tokens: 7,
+            completion_tokens: 3,
+        },
+        upstream::GenerationEvent::Finished {
+            finish_reason: Some("stop".into()),
+        },
+        upstream::GenerationEvent::Done,
+    ] {
+        encoder.accept(event).unwrap();
+    }
+    let terminal = std::iter::from_fn(|| encoder.pop()).last().unwrap().data;
+    assert_eq!(
+        terminal["response"]["output"],
+        encoder.final_document()["output"]
+    );
+    assert_eq!(
+        terminal["response"]["usage"],
+        encoder.final_document()["usage"]
+    );
+}
+
+#[test]
+fn responses_preserves_two_parallel_function_calls() {
+    let mut encoder = gateway::ResponsesEncoder::new("fixture".into(), BTreeSet::new());
+    for (index, id, name) in [(0, "call_1", "lookup"), (1, "call_2", "patch")] {
+        encoder
+            .accept(upstream::GenerationEvent::ToolCallDelta {
+                index,
+                call_id: Some(id.into()),
+                name: Some(name.into()),
+                arguments: format!(r#"{{"index":{index}}}"#),
+            })
+            .unwrap();
+    }
+    encoder
+        .accept(upstream::GenerationEvent::Finished {
+            finish_reason: Some("tool_calls".into()),
+        })
+        .unwrap();
+    encoder.accept(upstream::GenerationEvent::Done).unwrap();
+    let output = encoder.final_document()["output"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        output
+            .iter()
+            .map(|item| &item["call_id"])
+            .collect::<Vec<_>>(),
+        ["call_1", "call_2"]
+    );
+}
+
+#[test]
+fn chat_stream_keeps_reasoning_text_finish_and_usage_separate() {
+    let events = [
+        upstream::GenerationEvent::ReasoningDelta {
+            text: "inspect".into(),
+        },
+        upstream::GenerationEvent::TextDelta {
+            text: "answer".into(),
+        },
+        upstream::GenerationEvent::Finished {
+            finish_reason: Some("stop".into()),
+        },
+        upstream::GenerationEvent::Usage {
+            prompt_tokens: 7,
+            completion_tokens: 3,
+        },
+    ];
+    let chunks = events
+        .into_iter()
+        .filter_map(|event| gateway::chat_stream_document(event, "chat_fixture", "fixture"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        chunks[0]["choices"][0]["delta"]["reasoning_content"],
+        "inspect"
+    );
+    assert_eq!(chunks[1]["choices"][0]["delta"]["content"], "answer");
+    assert_eq!(chunks[2]["choices"][0]["finish_reason"], "stop");
+    assert_eq!(chunks[3]["usage"]["total_tokens"], 10);
+}
+
+#[test]
 fn hosted_tools_unknown_fields_images_and_recipe_ceiling_fail_before_upstream() {
     for request in [
         br#"{"model":"ornith","input":"x","tools":[{"type":"web_search"}]}"#.as_slice(),

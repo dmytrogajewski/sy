@@ -18,7 +18,8 @@ const MAX_CONCURRENT_CONNECTIONS: usize = 8;
 const STREAM_CHANNEL_CAPACITY: usize = 8;
 const MAX_STREAM_EVENT_BYTES: usize = 64 * 1024;
 const MAX_SEMANTIC_TEXT_BYTES: usize = 4096;
-const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+pub const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+const PROTOCOL_TOOL_MAX_TOKENS: u32 = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpstreamError(&'static str);
@@ -185,11 +186,12 @@ pub struct CompletionStream {
     receiver: tokio::sync::mpsc::Receiver<Result<GenerationEvent, UpstreamError>>,
     task: tokio::task::JoinHandle<()>,
     connection_task: tokio::task::JoinHandle<()>,
+    idle_timeout: Duration,
 }
 
 impl CompletionStream {
     pub async fn next(&mut self) -> Option<Result<GenerationEvent, UpstreamError>> {
-        match tokio::time::timeout(STREAM_IDLE_TIMEOUT, self.receiver.recv()).await {
+        match tokio::time::timeout(self.idle_timeout, self.receiver.recv()).await {
             Ok(event) => event,
             Err(_) => Some(Err(UpstreamError("engine stream idle timeout"))),
         }
@@ -197,6 +199,28 @@ impl CompletionStream {
 }
 
 impl Drop for CompletionStream {
+    fn drop(&mut self) {
+        self.task.abort();
+        self.connection_task.abort();
+    }
+}
+
+pub struct RawResponseStream {
+    receiver: tokio::sync::mpsc::Receiver<Result<Bytes, UpstreamError>>,
+    task: tokio::task::JoinHandle<()>,
+    connection_task: tokio::task::JoinHandle<()>,
+}
+
+impl RawResponseStream {
+    pub async fn next(&mut self) -> Option<Result<Bytes, UpstreamError>> {
+        match tokio::time::timeout(DEFAULT_STREAM_IDLE_TIMEOUT, self.receiver.recv()).await {
+            Ok(chunk) => chunk,
+            Err(_) => Some(Err(UpstreamError("engine stream idle timeout"))),
+        }
+    }
+}
+
+impl Drop for RawResponseStream {
     fn drop(&mut self) {
         self.task.abort();
         self.connection_task.abort();
@@ -285,7 +309,7 @@ impl ObservedRoute {
         self.send_with_timeout(request, body, REQUEST_TIMEOUT).await
     }
 
-    async fn send_with_timeout(
+    pub async fn send_with_timeout(
         &self,
         request: &UpstreamRequest,
         body: &[u8],
@@ -415,8 +439,8 @@ impl ObservedRoute {
                     "data:{};base64,{}", image.media_type, BASE64.encode(&image.bytes)
                 )}}
             ]}],
-            "max_tokens":max_tokens,"temperature":0,"stream":false,
-            "chat_template_kwargs":{"enable_thinking":!disable_thinking}
+            "max_tokens":max_tokens,"thinking_budget_tokens":if disable_thinking { 0 } else { -1 },"temperature":0,"stream":false,
+            "chat_template_kwargs":{"enable_thinking":!disable_thinking,"reasoning_strength":if disable_thinking { "low" } else { "high" }}
         }))
         .map_err(|_| UpstreamError("vision probe cannot be encoded"))?;
         let request = self.request("POST", "/v1/chat/completions", body.len())?;
@@ -457,18 +481,133 @@ impl ObservedRoute {
         Ok(())
     }
 
+    pub async fn protocol_probe(
+        &self,
+        served_model: &str,
+        require_tools: bool,
+        timeout: Duration,
+    ) -> Result<(), UpstreamError> {
+        tokio::time::timeout(
+            timeout,
+            self.protocol_probe_inner(served_model, require_tools),
+        )
+        .await
+        .map_err(|_| UpstreamError("engine protocol probe timed out"))?
+    }
+
+    async fn protocol_probe_inner(
+        &self,
+        served_model: &str,
+        require_tools: bool,
+    ) -> Result<(), UpstreamError> {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "model":served_model,"messages":[{"role":"user","content":"Reply with OK."}],
+            "max_tokens":PROTOCOL_TOOL_MAX_TOKENS,"temperature":0,"stream":true,
+            "stream_options":{"include_usage":true},"chat_template_kwargs":{"enable_thinking":false,"reasoning_strength":"low"}
+        }))
+        .map_err(|_| UpstreamError("protocol probe cannot be encoded"))?;
+        validate_protocol_stream(self.chat_stream(&body).await?, false).await?;
+        if require_tools {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "model":served_model,
+                "messages":[{"role":"user","content":"Call capability_probe with value ok."}],
+                "tools":[{"type":"function","function":{"name":"capability_probe",
+                    "description":"Validate one tool call.","parameters":{"type":"object",
+                    "properties":{"value":{"type":"string"}},"required":["value"]}}}],
+                "tool_choice":"required",
+                "parallel_tool_calls":true,"max_tokens":PROTOCOL_TOOL_MAX_TOKENS,
+                "temperature":0,"stream":true,"stream_options":{"include_usage":true},"chat_template_kwargs":{"enable_thinking":false,"reasoning_strength":"low"}
+            }))
+            .map_err(|_| UpstreamError("tool protocol probe cannot be encoded"))?;
+            validate_protocol_stream(self.chat_stream(&body).await?, true).await?;
+        }
+        Ok(())
+    }
+
     pub async fn completion_stream(&self, body: &[u8]) -> Result<CompletionStream, UpstreamError> {
-        self.generation_stream("/v1/completions", body).await
+        self.generation_stream("/v1/completions", body, DEFAULT_STREAM_IDLE_TIMEOUT)
+            .await
     }
 
     pub async fn chat_stream(&self, body: &[u8]) -> Result<CompletionStream, UpstreamError> {
-        self.generation_stream("/v1/chat/completions", body).await
+        self.chat_stream_with_idle_timeout(body, DEFAULT_STREAM_IDLE_TIMEOUT)
+            .await
+    }
+
+    pub async fn chat_stream_with_idle_timeout(
+        &self,
+        body: &[u8],
+        idle_timeout: Duration,
+    ) -> Result<CompletionStream, UpstreamError> {
+        self.generation_stream("/v1/chat/completions", body, idle_timeout)
+            .await
+    }
+
+    pub async fn raw_stream(
+        &self,
+        path: &str,
+        body: &[u8],
+    ) -> Result<RawResponseStream, UpstreamError> {
+        let request = self.request("POST", path, body.len())?;
+        let permit = Arc::clone(&self.connections)
+            .acquire_owned()
+            .await
+            .map_err(|_| UpstreamError("engine connection pool is closed"))?;
+        let stream = tokio::net::TcpStream::connect((self.address, self.port))
+            .await
+            .map_err(|_| UpstreamError("engine endpoint is unreachable"))?;
+        let (mut sender, connection) = http1::handshake(TokioIo::new(stream))
+            .await
+            .map_err(|_| UpstreamError("engine HTTP handshake failed"))?;
+        let connection_task = tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let outbound = Request::builder()
+            .method(request.method.as_str())
+            .uri(request.path.as_str())
+            .header(header::HOST, "engine.internal")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::copy_from_slice(body)))
+            .map_err(|_| UpstreamError("engine request is malformed"))?;
+        let response = sender
+            .send_request(outbound)
+            .await
+            .map_err(|_| UpstreamError("engine response failed"))?;
+        if !(200..300).contains(&response.status().as_u16()) {
+            connection_task.abort();
+            return Err(UpstreamError("engine rejected response stream"));
+        }
+        let (send, receiver) = tokio::sync::mpsc::channel(STREAM_CHANNEL_CAPACITY);
+        let mut incoming = response.into_body();
+        let task = tokio::spawn(async move {
+            let _permit = permit;
+            while let Some(frame) = incoming.frame().await {
+                let Ok(frame) = frame else {
+                    let _ = send.send(Err(UpstreamError("engine stream failed"))).await;
+                    break;
+                };
+                let Ok(data) = frame.into_data() else {
+                    continue;
+                };
+                for chunk in data.chunks(MAX_STREAM_EVENT_BYTES) {
+                    if send.send(Ok(Bytes::copy_from_slice(chunk))).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        Ok(RawResponseStream {
+            receiver,
+            task,
+            connection_task,
+        })
     }
 
     async fn generation_stream(
         &self,
         path: &str,
         body: &[u8],
+        idle_timeout: Duration,
     ) -> Result<CompletionStream, UpstreamError> {
         let request = self.request("POST", path, body.len())?;
         let permit = Arc::clone(&self.connections)
@@ -517,7 +656,7 @@ impl ObservedRoute {
                 }
                 while let Some(end) = pending.windows(2).position(|bytes| bytes == b"\n\n") {
                     let event = pending.drain(..end + 2).collect::<Vec<_>>();
-                    if let Some(decoded) = decode_sse_event(&event) {
+                    for decoded in decode_sse_events(&event) {
                         let done = matches!(decoded, Ok(GenerationEvent::Done));
                         if send.send(decoded).await.is_err() || done {
                             return;
@@ -530,6 +669,7 @@ impl ObservedRoute {
             receiver,
             task,
             connection_task,
+            idle_timeout,
         })
     }
 
@@ -578,6 +718,82 @@ impl ObservedRoute {
     }
 }
 
+async fn validate_protocol_stream(
+    mut stream: CompletionStream,
+    require_tool: bool,
+) -> Result<(), UpstreamError> {
+    let mut output = false;
+    let mut tools = std::collections::BTreeMap::<u32, (String, String, String)>::new();
+    let mut finish_reason = None;
+    let mut usage = false;
+    while let Some(event) = stream.next().await {
+        match event? {
+            GenerationEvent::ReasoningDelta { text } | GenerationEvent::TextDelta { text } => {
+                if finish_reason.is_some() || text.is_empty() {
+                    return Err(UpstreamError("engine protocol event order is invalid"));
+                }
+                output = true;
+            }
+            GenerationEvent::ToolCallDelta {
+                index,
+                call_id,
+                name,
+                arguments,
+            } => {
+                if finish_reason.is_some() || !require_tool {
+                    return Err(UpstreamError("engine protocol tool event is invalid"));
+                }
+                let tool = tools.entry(index).or_default();
+                if let Some(call_id) = call_id {
+                    tool.0 = call_id;
+                }
+                if let Some(name) = name {
+                    tool.1 = name;
+                }
+                tool.2.push_str(&arguments);
+            }
+            GenerationEvent::Finished {
+                finish_reason: reason,
+            } => {
+                if finish_reason.is_some() || reason.is_none() {
+                    return Err(UpstreamError("engine protocol finish event is invalid"));
+                }
+                finish_reason = reason;
+            }
+            GenerationEvent::Usage {
+                prompt_tokens,
+                completion_tokens,
+            } => {
+                if finish_reason.is_none() || usage || prompt_tokens == 0 || completion_tokens == 0
+                {
+                    return Err(UpstreamError("engine protocol usage event is invalid"));
+                }
+                usage = true;
+            }
+            GenerationEvent::Done => {
+                let tools_valid = !tools.is_empty()
+                    && tools.values().all(|(call_id, name, arguments)| {
+                        !call_id.is_empty()
+                            && name == "capability_probe"
+                            && serde_json::from_str::<serde_json::Value>(arguments)
+                                .is_ok_and(|value| value["value"] == "ok")
+                    });
+                let finish_valid = if require_tool {
+                    finish_reason.as_deref() == Some("tool_calls")
+                } else {
+                    matches!(finish_reason.as_deref(), Some("stop" | "length"))
+                };
+                if finish_valid && usage && (require_tool && tools_valid || !require_tool && output)
+                {
+                    return Ok(());
+                }
+                return Err(UpstreamError("engine protocol stream is incomplete"));
+            }
+        }
+    }
+    Err(UpstreamError("engine protocol stream ended before done"))
+}
+
 fn valid_semantic_completion(
     completion: &serde_json::Value,
     served_model: &str,
@@ -597,8 +813,7 @@ fn valid_semantic_completion(
     };
     completion["object"].as_str() == Some("text_completion")
         && completion["model"].as_str() == Some(served_model)
-        && id.starts_with("cmpl-")
-        && id.len() > "cmpl-".len()
+        && !id.is_empty()
         && id.len() <= 128
         && id
             .bytes()
@@ -609,69 +824,94 @@ fn valid_semantic_completion(
         && completion["usage"]["prompt_tokens"]
             .as_u64()
             .is_some_and(|tokens| tokens > 0)
-        && completion["usage"]["completion_tokens"].as_u64() == Some(u64::from(max_tokens))
+        && completion["usage"]["completion_tokens"]
+            .as_u64()
+            .is_some_and(|tokens| tokens > 0 && tokens <= u64::from(max_tokens))
         && max_tokens > 0
 }
 
-fn decode_sse_event(bytes: &[u8]) -> Option<Result<GenerationEvent, UpstreamError>> {
+fn decode_sse_events(bytes: &[u8]) -> Vec<Result<GenerationEvent, UpstreamError>> {
     let data = std::str::from_utf8(bytes)
-        .ok()?
-        .lines()
-        .find_map(|line| line.strip_prefix("data: "))?;
+        .ok()
+        .into_iter()
+        .flat_map(str::lines)
+        .find_map(|line| line.strip_prefix("data: "));
+    let Some(data) = data else {
+        return Vec::new();
+    };
     if data == "[DONE]" {
-        return Some(Ok(GenerationEvent::Done));
+        return vec![Ok(GenerationEvent::Done)];
     }
     let value: serde_json::Value = match serde_json::from_str(data) {
         Ok(value) => value,
-        Err(_) => return Some(Err(UpstreamError("engine stream event is invalid"))),
+        Err(_) => return vec![Err(UpstreamError("engine stream event is invalid"))],
     };
-    if let Some(call) = value["choices"][0]["delta"]["tool_calls"]
+    if value.get("error").is_some() {
+        return vec![Err(UpstreamError("engine stream returned an error"))];
+    }
+    let mut events = Vec::new();
+    let choice = value["choices"]
         .as_array()
-        .and_then(|calls| calls.first())
-    {
-        return Some(Ok(GenerationEvent::ToolCallDelta {
-            index: call["index"]
-                .as_u64()
-                .and_then(|value| value.try_into().ok())
-                .unwrap_or(0),
-            call_id: call["id"].as_str().map(str::to_owned),
-            name: call["function"]["name"].as_str().map(str::to_owned),
-            arguments: call["function"]["arguments"]
-                .as_str()
-                .unwrap_or_default()
-                .into(),
+        .and_then(|choices| choices.first());
+    if let Some(choice) = choice {
+        let delta = &choice["delta"];
+        if let Some(text) = delta["reasoning_content"]
+            .as_str()
+            .or_else(|| delta["reasoning"].as_str())
+            .filter(|text| !text.is_empty())
+        {
+            events.push(Ok(GenerationEvent::ReasoningDelta { text: text.into() }));
+        }
+        if let Some(text) = choice["text"]
+            .as_str()
+            .or_else(|| delta["content"].as_str())
+            .filter(|text| !text.is_empty())
+        {
+            events.push(Ok(GenerationEvent::TextDelta { text: text.into() }));
+        }
+        if let Some(calls) = delta["tool_calls"].as_array() {
+            for call in calls {
+                let Some(index) = call["index"]
+                    .as_u64()
+                    .and_then(|value| value.try_into().ok())
+                else {
+                    return vec![Err(UpstreamError("engine tool call index is invalid"))];
+                };
+                events.push(Ok(GenerationEvent::ToolCallDelta {
+                    index,
+                    call_id: call["id"].as_str().map(str::to_owned),
+                    name: call["function"]["name"].as_str().map(str::to_owned),
+                    arguments: call["function"]["arguments"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .into(),
+                }));
+            }
+        }
+        if let Some(reason) = choice["finish_reason"].as_str() {
+            events.push(Ok(GenerationEvent::Finished {
+                finish_reason: Some(reason.into()),
+            }));
+        }
+    }
+    if let Some(usage) = value.get("usage").filter(|usage| !usage.is_null()) {
+        let Some(prompt_tokens) = usage["prompt_tokens"].as_u64() else {
+            return vec![Err(UpstreamError("engine stream usage is invalid"))];
+        };
+        let Some(completion_tokens) = usage["completion_tokens"].as_u64() else {
+            return vec![Err(UpstreamError("engine stream usage is invalid"))];
+        };
+        events.push(Ok(GenerationEvent::Usage {
+            prompt_tokens,
+            completion_tokens,
         }));
     }
-    if let Some(text) = value["choices"][0]["text"].as_str() {
-        if !text.is_empty() {
-            return Some(Ok(GenerationEvent::TextDelta { text: text.into() }));
-        }
-    }
-    if let Some(text) = value["choices"][0]["delta"]["content"].as_str() {
-        if !text.is_empty() {
-            return Some(Ok(GenerationEvent::TextDelta { text: text.into() }));
-        }
-    }
-    let delta = &value["choices"][0]["delta"];
-    if let Some(text) = delta["reasoning_content"]
-        .as_str()
-        .or_else(|| delta["reasoning"].as_str())
-    {
-        if !text.is_empty() {
-            return Some(Ok(GenerationEvent::ReasoningDelta { text: text.into() }));
-        }
-    }
-    if let Some(reason) = value["choices"][0]["finish_reason"].as_str() {
-        return Some(Ok(GenerationEvent::Finished {
-            finish_reason: Some(reason.into()),
-        }));
-    }
-    value.get("usage").map(|usage| {
-        Ok(GenerationEvent::Usage {
-            prompt_tokens: usage["prompt_tokens"].as_u64().unwrap_or(0),
-            completion_tokens: usage["completion_tokens"].as_u64().unwrap_or(0),
-        })
-    })
+    events
+}
+
+#[cfg(test)]
+fn decode_sse_event(bytes: &[u8]) -> Option<Result<GenerationEvent, UpstreamError>> {
+    decode_sse_events(bytes).into_iter().next()
 }
 
 fn valid_method(value: &str) -> bool {
@@ -725,6 +965,41 @@ mod tests {
         (address, task)
     }
 
+    async fn fake_llama_protocol() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            for tool_probe in [false, true] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = vec![0; 8192];
+                let count = socket.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..count]);
+                assert!(request.contains(r#""stream_options":{"include_usage":true}"#));
+                assert!(request.contains(r#""max_tokens":256"#));
+                assert!(request.contains(r#""reasoning_strength":"low""#));
+                assert_eq!(request.contains("capability_probe"), tool_probe);
+                assert_eq!(request.contains(r#""tool_choice":"required""#), tool_probe);
+                let deltas = if tool_probe {
+                    [
+                        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"capability_probe","arguments":"{\"value\":\""}}]},"finish_reason":null}]}"#,
+                        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ok\"}"}}]},"finish_reason":null}]}"#,
+                        r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+                    ]
+                } else {
+                    [
+                        r#"{"choices":[{"delta":{"reasoning_content":"inspect"},"finish_reason":null}]}"#,
+                        r#"{"choices":[{"delta":{"content":"ready"},"finish_reason":null}]}"#,
+                        r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+                    ]
+                };
+                let body = deltas.into_iter().map(|delta| format!("data: {delta}\n\n")).collect::<String>()
+                    + "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\ndata: [DONE]\n\n";
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        (address, task)
+    }
+
     #[test]
     fn connector_cannot_target_caller_url_or_forbidden_route() {
         let route = ObservedRoute::new(
@@ -773,6 +1048,35 @@ mod tests {
     }
 
     #[test]
+    fn llama_cpp_completion_final_chunk_preserves_finish_and_usage() {
+        let events = decode_sse_events(
+            b"data: {\"choices\":[{\"index\":0,\"text\":\"\",\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2}}\n\n",
+        );
+        assert_eq!(
+            events,
+            vec![
+                Ok(GenerationEvent::Finished {
+                    finish_reason: Some("stop".into())
+                }),
+                Ok(GenerationEvent::Usage {
+                    prompt_tokens: 4,
+                    completion_tokens: 2
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn null_stream_usage_is_a_placeholder() {
+        assert_eq!(
+            decode_sse_events(
+                b"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}],\"usage\":null}\n\n"
+            ),
+            vec![Ok(GenerationEvent::TextDelta { text: "ok".into() })]
+        );
+    }
+
+    #[test]
     fn vllm_chat_tool_chunks_decode_to_protocol_neutral_events() {
         let event = decode_sse_event(b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"shell\",\"arguments\":\"{\\\"cmd\\\":\"}}]}}]}\n\n")
             .unwrap().unwrap();
@@ -804,6 +1108,56 @@ mod tests {
     }
 
     #[test]
+    fn llama_cpp_stream_maps_reasoning_text_tools_usage_and_done() {
+        let chunk = b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"inspect\",\"content\":\"ready\",\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{\"}},{\"index\":1,\"id\":\"call_2\",\"function\":{\"name\":\"patch\",\"arguments\":\"[\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n";
+        assert_eq!(
+            decode_sse_events(chunk),
+            vec![
+                Ok(GenerationEvent::ReasoningDelta {
+                    text: "inspect".into()
+                }),
+                Ok(GenerationEvent::TextDelta {
+                    text: "ready".into()
+                }),
+                Ok(GenerationEvent::ToolCallDelta {
+                    index: 0,
+                    call_id: Some("call_1".into()),
+                    name: Some("lookup".into()),
+                    arguments: "{".into()
+                }),
+                Ok(GenerationEvent::ToolCallDelta {
+                    index: 1,
+                    call_id: Some("call_2".into()),
+                    name: Some("patch".into()),
+                    arguments: "[".into()
+                }),
+                Ok(GenerationEvent::Finished {
+                    finish_reason: Some("tool_calls".into())
+                }),
+                Ok(GenerationEvent::Usage {
+                    prompt_tokens: 7,
+                    completion_tokens: 3
+                }),
+            ]
+        );
+        assert_eq!(
+            decode_sse_events(b"data: [DONE]\n\n"),
+            vec![Ok(GenerationEvent::Done)]
+        );
+    }
+
+    #[test]
+    fn llama_cpp_stream_error_is_not_mistaken_for_clean_eof() {
+        let event = decode_sse_events(
+            b"data: {\"error\":{\"type\":\"server_error\",\"message\":\"private\"}}\n\n",
+        );
+        assert_eq!(
+            event[0].as_ref().unwrap_err().diagnostic(),
+            "engine stream returned an error"
+        );
+    }
+
+    #[test]
     fn computed_token_allows_empty_or_special_rendered_text() {
         for text in ["", "\u{0}"] {
             let completion = serde_json::json!({
@@ -818,6 +1172,35 @@ mod tests {
     }
 
     #[test]
+    fn semantic_contract_treats_max_tokens_as_an_upper_bound() {
+        let completion = serde_json::json!({
+            "id": "cmpl-semantic",
+            "object": "text_completion",
+            "model": "served",
+            "choices": [{"index": 0, "text": "thinking", "finish_reason": "length"}],
+            "usage": {"prompt_tokens": 8, "completion_tokens": 7},
+        });
+
+        assert!(valid_semantic_completion(&completion, "served", 8));
+    }
+
+    #[test]
+    fn llama_cpp_completion_accepts_its_chatcmpl_identifier() {
+        let completion = serde_json::json!({"id":"chatcmpl-semantic","object":"text_completion",
+            "model":"served","choices":[{"index":0,"text":"ok","finish_reason":"length"}],
+            "usage":{"prompt_tokens":5,"completion_tokens":1}});
+        assert!(valid_semantic_completion(&completion, "served", 1));
+    }
+
+    #[test]
+    fn semantic_contract_accepts_safe_opaque_identifier() {
+        let completion = serde_json::json!({"id":"6be609c7b4064f3c8c3bdfb1d27d4521","object":"text_completion",
+            "model":"served","choices":[{"index":0,"text":"ok","finish_reason":"length"}],
+            "usage":{"prompt_tokens":5,"completion_tokens":1}});
+        assert!(valid_semantic_completion(&completion, "served", 1));
+    }
+
+    #[test]
     fn semantic_contract_rejects_zero_token_and_spoofed_completion_shapes() {
         let choice = serde_json::json!({"index": 0, "text": "OK", "finish_reason": "length"});
         let invalid = [
@@ -826,7 +1209,8 @@ mod tests {
             serde_json::json!({"id":"cmpl-semantic","object":"text_completion","model":"Ornith-1.5-9B","choices":[choice.clone(), choice.clone()],"usage":{"prompt_tokens":5,"completion_tokens":1}}),
             serde_json::json!({"id":"cmpl-semantic","object":"text_completion","model":"Ornith-1.5-9B","choices":[choice.clone()],"usage":{"prompt_tokens":0,"completion_tokens":1}}),
             serde_json::json!({"id":"cmpl-semantic","object":"text_completion","model":"Ornith-1.5-9B","choices":[choice.clone()],"usage":{"prompt_tokens":5,"completion_tokens":0}}),
-            serde_json::json!({"id":"cmpl-","object":"text_completion","model":"Ornith-1.5-9B","choices":[choice],"usage":{"prompt_tokens":5,"completion_tokens":1}}),
+            serde_json::json!({"id":"cmpl-semantic","object":"text_completion","model":"Ornith-1.5-9B","choices":[choice.clone()],"usage":{"prompt_tokens":5,"completion_tokens":2}}),
+            serde_json::json!({"id":"unsafe id","object":"text_completion","model":"Ornith-1.5-9B","choices":[choice],"usage":{"prompt_tokens":5,"completion_tokens":1}}),
         ];
 
         assert!(invalid.iter().all(|completion| !valid_semantic_completion(
@@ -867,12 +1251,33 @@ mod tests {
             receiver,
             task,
             connection_task,
+            idle_timeout: DEFAULT_STREAM_IDLE_TIMEOUT,
         };
         tokio::task::yield_now().await;
         drop(stream);
         assert!(tokio::time::timeout(Duration::from_secs(1), cancelled)
             .await
             .is_ok());
+    }
+
+    #[tokio::test]
+    async fn completion_stream_uses_its_configured_idle_timeout() {
+        let (send, receiver) = tokio::sync::mpsc::channel(1);
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = send.send(Ok(GenerationEvent::Done)).await;
+        });
+        let connection_task = tokio::spawn(std::future::pending());
+        let mut stream = CompletionStream {
+            receiver,
+            task,
+            connection_task,
+            idle_timeout: Duration::from_millis(10),
+        };
+        assert_eq!(
+            stream.next().await.unwrap().unwrap_err().diagnostic(),
+            "engine stream idle timeout"
+        );
     }
 
     #[tokio::test]
@@ -906,6 +1311,67 @@ mod tests {
             GenerationEvent::TextDelta { text: "OK".into() }
         );
         drop(stream);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn native_response_stream_preserves_engine_sse_bytes() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0; 8192];
+            let count = socket.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..count]);
+            assert!(request.starts_with("POST /v1/responses "));
+            let body = "data: {\"type\":\"response.completed\"}\n\n";
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        let route = ObservedRoute::new(
+            "i_11111111111111111111111111111111",
+            1,
+            address.ip(),
+            address.port(),
+            [("POST", "/v1/responses")],
+        )
+        .unwrap();
+        let mut stream = route
+            .raw_stream("/v1/responses", br#"{"model":"public","stream":true}"#)
+            .await
+            .unwrap();
+        let mut body = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            body.extend_from_slice(&chunk.unwrap());
+        }
+
+        assert_eq!(body, b"data: {\"type\":\"response.completed\"}\n\n");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn llama_cpp_protocol_probe_accepts_complete_streamed_chat_and_parallel_tools() {
+        let (address, server) = fake_llama_protocol().await;
+        let route = ObservedRoute::new(
+            "i_11111111111111111111111111111111",
+            1,
+            address.ip(),
+            address.port(),
+            [("POST", "/v1/chat/completions")],
+        )
+        .unwrap();
+        route
+            .protocol_probe("fixture-model", true, Duration::from_secs(1))
+            .await
+            .unwrap();
         server.await.unwrap();
     }
 

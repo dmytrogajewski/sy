@@ -2,6 +2,7 @@
 
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fmt,
     fs::File,
     io::{Read, Write},
@@ -14,6 +15,10 @@ use super::wire::{
     InstallExecution, InstallManifest, MigrationPlan, PlannedAsset, ProbeEvidence,
     ProtectedFingerprint, RejectedUpdateClass, RollbackPlan, ServiceTransition, MANIFEST_SCHEMA,
 };
+
+#[cfg(feature = "spark-agent")]
+const MODELS_BUNDLE_PATH: &str = "configs/sy/spark/models.toml";
+const ENGINES_BUNDLE_PREFIX: &str = "configs/sy/spark/engines/";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProbeTransfer {
@@ -37,6 +42,9 @@ pub struct ActivateRequest {
     pub public_key: PathBuf,
     pub manifest: PathBuf,
     pub manifest_sha256: String,
+    pub release_manifest: PathBuf,
+    pub models: PathBuf,
+    pub engines: Vec<StagedEngineAsset>,
     pub version: String,
     pub listen_address: String,
     pub hostname: String,
@@ -190,6 +198,52 @@ pub struct PlanOptions {
     pub probe_remote_path: String,
     pub probe_sha256: String,
     pub probe_removed: bool,
+    pub catalogs: CatalogDigests,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogDigests {
+    pub models: String,
+    pub engines: BTreeMap<String, String>,
+}
+
+impl CatalogDigests {
+    fn release_identity(&self, executable: &str) -> String {
+        let mut hash = Sha256::new();
+        for value in [executable, &self.models] {
+            hash.update(value.as_bytes());
+            hash.update([0]);
+        }
+        for (path, digest) in &self.engines {
+            hash.update(path.as_bytes());
+            hash.update([0]);
+            hash.update(digest.as_bytes());
+            hash.update([0]);
+        }
+        format!("{:x}", hash.finalize())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseEngineAsset {
+    pub relative_path: String,
+    pub path: PathBuf,
+    pub sha256: String,
+}
+
+#[cfg(feature = "spark-agent")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagedEngineAsset {
+    pub relative_path: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleasePayload {
+    pub manifest: PathBuf,
+    pub models: PathBuf,
+    pub engines: Vec<ReleaseEngineAsset>,
+    pub catalogs: CatalogDigests,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,6 +252,7 @@ pub struct InstallRequest {
     pub probe_path: PathBuf,
     pub listen_address: Option<String>,
     pub listen_port: u16,
+    pub catalogs: CatalogDigests,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,6 +324,7 @@ pub fn inspect_and_plan(
             probe_remote_path: remote_path,
             probe_sha256,
             probe_removed: true,
+            catalogs: request.catalogs,
         },
     )
     .map_err(configuration_error)
@@ -323,6 +379,132 @@ fn configuration_error(message: impl Into<String>) -> InstallError {
     }
 }
 
+fn release_asset(
+    manifest: &str,
+    root: &Path,
+    relative: &str,
+) -> Result<(PathBuf, String), InstallError> {
+    let path = root.join(relative);
+    let bytes = std::fs::read(&path).map_err(|error| {
+        configuration_error(format!("read release payload {}: {error}", path.display()))
+    })?;
+    verify_signed_entry(manifest, relative, &bytes)?;
+    Ok((path, format!("{:x}", Sha256::digest(bytes))))
+}
+
+fn signed_engine_paths(manifest: &str) -> Result<Vec<String>, InstallError> {
+    let mut paths = BTreeMap::new();
+    for line in manifest.lines() {
+        let Some((digest, path)) = line.split_once("  ") else {
+            continue;
+        };
+        let Some(name) = path.strip_prefix(ENGINES_BUNDLE_PREFIX) else {
+            continue;
+        };
+        if !is_sha256_text(digest)
+            || name.is_empty()
+            || name.starts_with('.')
+            || name.contains(['/', '\\'])
+            || !name.ends_with(".toml")
+        {
+            return Err(configuration_error(
+                "signed engine inventory contains an unsafe path",
+            ));
+        }
+        if paths.insert(path.to_owned(), ()).is_some() {
+            return Err(configuration_error(
+                "signed engine inventory contains a duplicate path",
+            ));
+        }
+    }
+    if paths.is_empty() {
+        return Err(configuration_error("signed engine inventory is empty"));
+    }
+    Ok(paths.into_keys().collect())
+}
+
+fn installed_engine_path(relative: &str) -> Result<PathBuf, InstallError> {
+    let name = relative
+        .strip_prefix(ENGINES_BUNDLE_PREFIX)
+        .ok_or_else(|| configuration_error("engine path is outside the signed inventory"))?;
+    if name.is_empty()
+        || name.starts_with('.')
+        || name.contains('/')
+        || name.contains('\\')
+        || !name.ends_with(".toml")
+    {
+        return Err(configuration_error("engine path is unsafe"));
+    }
+    Ok(PathBuf::from("etc/sy/spark/engines").join(name))
+}
+
+#[cfg(feature = "spark-agent")]
+pub fn parse_staged_engine_asset(value: &str) -> Result<StagedEngineAsset, InstallError> {
+    let (relative_path, path) = value
+        .split_once('=')
+        .ok_or_else(|| configuration_error("staged engine must use INVENTORY_PATH=STAGED_PATH"))?;
+    installed_engine_path(relative_path)?;
+    let path = PathBuf::from(path);
+    if !path.is_absolute() {
+        return Err(configuration_error("staged engine path must be absolute"));
+    }
+    Ok(StagedEngineAsset {
+        relative_path: relative_path.to_owned(),
+        path,
+    })
+}
+
+fn read_release_manifest(
+    path: &Path,
+    executable: &Path,
+) -> Result<(String, PathBuf), InstallError> {
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        configuration_error(format!(
+            "read signed release manifest {}: {error}",
+            path.display()
+        ))
+    })?;
+    let executable = std::fs::read(executable)
+        .map_err(|error| configuration_error(format!("read ARM64 release: {error}")))?;
+    verify_signed_entry(&text, "sy-aarch64", &executable)?;
+    let root = path
+        .parent()
+        .ok_or_else(|| configuration_error("release manifest has no payload directory"))?;
+    Ok((text, root.to_path_buf()))
+}
+
+pub fn load_release_payload(
+    path: &Path,
+    executable: &Path,
+) -> Result<ReleasePayload, InstallError> {
+    let (manifest, root) = read_release_manifest(path, executable)?;
+    let (models, models_sha) = release_asset(&manifest, &root, "configs/sy/spark/models.toml")?;
+    let engines = signed_engine_paths(&manifest)?
+        .into_iter()
+        .map(|relative_path| {
+            let (path, sha256) = release_asset(&manifest, &root, &relative_path)?;
+            Ok(ReleaseEngineAsset {
+                relative_path,
+                path,
+                sha256,
+            })
+        })
+        .collect::<Result<Vec<_>, InstallError>>()?;
+    let engine_digests = engines
+        .iter()
+        .map(|asset| (asset.relative_path.clone(), asset.sha256.clone()))
+        .collect();
+    Ok(ReleasePayload {
+        manifest: path.into(),
+        models,
+        engines,
+        catalogs: CatalogDigests {
+            models: models_sha,
+            engines: engine_digests,
+        },
+    })
+}
+
 pub fn build_manifest(
     inventory: HostInventory,
     options: PlanOptions,
@@ -341,7 +523,7 @@ pub fn build_manifest(
         ));
     }
     let protected_before = ProtectedFingerprint::from_inventory(&inventory)?;
-    let assets = planned_assets(&inventory, &options.probe_sha256)?;
+    let assets = planned_assets(&inventory, &options.probe_sha256, &options.catalogs)?;
     let mut manifest = InstallManifest {
         schema: MANIFEST_SCHEMA.into(),
         operation: "install".into(),
@@ -396,6 +578,7 @@ pub fn manifest_approval_sha256(manifest: &InstallManifest) -> Result<String, St
 fn planned_assets(
     inventory: &HostInventory,
     executable_sha: &str,
+    catalogs: &CatalogDigests,
 ) -> Result<Vec<PlannedAsset>, String> {
     let mut assets = Vec::new();
     let fallback_digest = format!(
@@ -404,9 +587,10 @@ fn planned_assets(
             "../../configs/sy/spark/hf-http-fallback.lock"
         ))
     );
+    let release_identity = catalogs.release_identity(executable_sha);
     let release_path = format!(
         "/opt/sy-spark/releases/{}",
-        release_component(env!("CARGO_PKG_VERSION"), executable_sha)
+        release_component(env!("CARGO_PKG_VERSION"), &release_identity)
     );
     for (path, owner, mode, applicability) in [
         ("/opt/sy-spark", "root:root", "0755", apply_remote()),
@@ -425,6 +609,12 @@ fn planned_assets(
         ),
         ("/etc/sy", "root:sy-spark", "0750", apply_remote()),
         ("/etc/sy/spark", "root:sy-spark", "0750", apply_remote()),
+        (
+            "/etc/sy/spark/engines",
+            "root:sy-spark",
+            "0750",
+            apply_remote(),
+        ),
         (
             "/var/lib/sy-spark",
             "sy-spark:sy-spark",
@@ -534,13 +724,10 @@ fn planned_assets(
         ),
         asset(
             AssetKind::File,
-            "/etc/sy/spark/engine.toml",
+            "/etc/sy/spark/models.toml",
             "root:sy-spark",
             "0640",
-            ContentIdentity::Sha256(format!(
-                "{:x}",
-                Sha256::digest(include_bytes!("../../configs/sy/spark/engine.toml"))
-            )),
+            ContentIdentity::Sha256(catalogs.models.clone()),
             apply_remote(),
         ),
         asset(
@@ -610,6 +797,19 @@ fn planned_assets(
             },
         ),
     ]);
+    for (relative, digest) in &catalogs.engines {
+        let name = relative
+            .strip_prefix(ENGINES_BUNDLE_PREFIX)
+            .ok_or_else(|| "engine catalog digest path is outside the inventory".to_owned())?;
+        assets.push(asset(
+            AssetKind::File,
+            &format!("/etc/sy/spark/engines/{name}"),
+            "root:sy-spark",
+            "0640",
+            ContentIdentity::Sha256(digest.clone()),
+            apply_remote(),
+        ));
+    }
     if inventory.existing_installation.present {
         assets.push(asset(
             AssetKind::Symlink,
@@ -765,8 +965,6 @@ impl InstallAction {
                     "systemdunit"
                 } else if path.starts_with("etc/apparmor.d") {
                     "lsmpolicy"
-                } else if path.starts_with("etc/sy/spark-recipes.d") {
-                    "recipe"
                 } else {
                     "file"
                 };
@@ -833,15 +1031,57 @@ pub fn validate_install_actions(
 }
 
 #[cfg(feature = "spark-agent")]
+pub struct ReleaseEngine<'a> {
+    pub relative_path: &'a str,
+    pub bytes: &'a [u8],
+}
+
+#[cfg(feature = "spark-agent")]
 pub struct ReleaseBundle<'a> {
     pub version: &'a str,
     pub executable: &'a [u8],
     pub executable_sha256: &'a str,
+    pub release_manifest: &'a [u8],
+    pub models: &'a [u8],
+    pub engines: &'a [ReleaseEngine<'a>],
     pub public_key_base64: &'a str,
     pub signature: &'a str,
     pub listen_address: &'a str,
     pub hostname: &'a str,
     pub active_lsm: &'a str,
+}
+
+#[cfg(feature = "spark-agent")]
+fn release_payload_files<'a>(bundle: &'a ReleaseBundle<'_>) -> Vec<(&'a str, &'a [u8])> {
+    let mut files = vec![
+        ("sy", bundle.executable),
+        ("SHA256SUMS", bundle.release_manifest),
+        ("SHA256SUMS.minisig", bundle.signature.as_bytes()),
+        ("minisign.pub", bundle.public_key_base64.as_bytes()),
+        (MODELS_BUNDLE_PATH, bundle.models),
+    ];
+    files.extend(
+        bundle
+            .engines
+            .iter()
+            .map(|engine| (engine.relative_path, engine.bytes)),
+    );
+    files
+}
+
+#[cfg(feature = "spark-agent")]
+fn write_release_payload(
+    stage: &Path,
+    bundle: &ReleaseBundle<'_>,
+    trace: &mut Vec<PathBuf>,
+) -> Result<(), InstallError> {
+    std::fs::create_dir_all(stage.join("configs/sy/spark/engines"))
+        .map_err(|error| configuration_error(format!("create release payload: {error}")))?;
+    for (relative, bytes) in release_payload_files(bundle) {
+        let mode = if relative == "sy" { 0o555 } else { 0o444 };
+        write_synced(&stage.join(relative), bytes, mode, trace)?;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "spark-agent")]
@@ -987,11 +1227,16 @@ pub fn rollback_release(
     if dry_run {
         return Ok(report);
     }
+    if let Err(error) = materialize_release_catalogs(root, &target) {
+        let _ = materialize_release_catalogs(root, &current);
+        return Err(error);
+    }
     replace_symlink(&current_path, &target)?;
     replace_symlink(&previous_path, &current)?;
     if let Err(error) = integrate() {
         let _ = replace_symlink(&current_path, &current);
         let _ = replace_symlink(&previous_path, &target);
+        let _ = materialize_release_catalogs(root, &current);
         return Err(error);
     }
     report.applied = true;
@@ -1030,12 +1275,89 @@ fn checked_release_link(root: &Path, path: &Path) -> Result<PathBuf, InstallErro
         .map(|(_, digest)| digest)
         .filter(|digest| is_sha256_text(digest))
         .ok_or_else(|| configuration_error("release name has no exact SHA-256"))?;
-    if format!("{:x}", Sha256::digest(bytes)) != expected {
+    let release_root = root.join("opt/sy-spark").join(&target);
+    let release_manifest = std::fs::read_to_string(release_root.join("SHA256SUMS"))
+        .map_err(|error| configuration_error(format!("read rollback inventory: {error}")))?;
+    let engines = signed_engine_paths(&release_manifest)?
+        .into_iter()
+        .map(|path| {
+            let digest = hash_release_file(root, &target, &path)?;
+            Ok((path, digest))
+        })
+        .collect::<Result<BTreeMap<_, _>, InstallError>>()?;
+    let catalogs = CatalogDigests {
+        models: hash_release_file(root, &target, MODELS_BUNDLE_PATH)?,
+        engines,
+    };
+    let executable = format!("{:x}", Sha256::digest(bytes));
+    if catalogs.release_identity(&executable) != expected {
         return Err(configuration_error(
             "rollback release artifact hash mismatch",
         ));
     }
     Ok(target)
+}
+
+#[cfg(feature = "spark-agent")]
+fn hash_release_file(root: &Path, release: &Path, relative: &str) -> Result<String, InstallError> {
+    let path = root.join("opt/sy-spark").join(release).join(relative);
+    let bytes = std::fs::read(&path).map_err(|error| {
+        configuration_error(format!("read release payload {}: {error}", path.display()))
+    })?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+#[cfg(feature = "spark-agent")]
+fn materialize_release_catalogs(root: &Path, release: &Path) -> Result<(), InstallError> {
+    let base = root.join("opt/sy-spark").join(release);
+    let mut trace = Vec::new();
+    let manifest = std::fs::read_to_string(base.join("SHA256SUMS"))
+        .map_err(|error| configuration_error(format!("read rollback inventory: {error}")))?;
+    let engine_catalogs = signed_engine_paths(&manifest)?
+        .into_iter()
+        .map(|source| {
+            let destination = installed_engine_path(&source)?;
+            Ok((source, destination))
+        })
+        .collect::<Result<Vec<_>, InstallError>>()?;
+    let desired = engine_catalogs
+        .iter()
+        .map(|(_, destination)| (destination.clone(), ()))
+        .collect::<BTreeMap<_, _>>();
+    let installed = root.join("etc/sy/spark/engines");
+    for entry in std::fs::read_dir(&installed)
+        .map_err(|error| configuration_error(format!("read rollback engine inventory: {error}")))?
+    {
+        let entry = entry
+            .map_err(|error| configuration_error(format!("read rollback engine entry: {error}")))?;
+        let relative = PathBuf::from("etc/sy/spark/engines").join(entry.file_name());
+        if !desired.contains_key(&relative) {
+            if !entry
+                .file_type()
+                .map_err(|error| configuration_error(format!("stat rollback engine: {error}")))?
+                .is_file()
+            {
+                return Err(configuration_error(
+                    "rollback engine inventory contains an unmanaged entry",
+                ));
+            }
+            std::fs::remove_file(entry.path()).map_err(|error| {
+                configuration_error(format!("remove stale rollback engine: {error}"))
+            })?;
+        }
+    }
+    let mut catalogs = vec![(
+        MODELS_BUNDLE_PATH.to_owned(),
+        PathBuf::from("etc/sy/spark/models.toml"),
+    )];
+    catalogs.extend(engine_catalogs);
+    for (source, destination) in catalogs {
+        let bytes = std::fs::read(base.join(&source)).map_err(|error| {
+            configuration_error(format!("read rollback catalog {source}: {error}"))
+        })?;
+        write_synced(&root.join(destination), &bytes, 0o640, &mut trace)?;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "spark-agent")]
@@ -1058,25 +1380,20 @@ fn validate_rollback_state(
     let schema: u32 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(|error| configuration_error(format!("read state schema: {error}")))?;
-    if !(4..=5).contains(&schema) {
+    if schema != super::state::STATE_SCHEMA_VERSION {
         return Err(configuration_error(format!(
-            "state schema {schema} is outside the N/N-1 rollback window"
+            "state schema {schema} is not the current release schema"
         )));
     }
-    let catalog =
-        crate::spark::recipe::RecipeCatalog::load_legacy(&root.join("etc/sy/spark-recipes.d"))
-            .map_err(configuration_error)?;
-    let engine_path = root.join("etc/sy/spark/engine.toml");
-    let engine_id = engine_path
+    let engine_path = root.join("etc/sy/spark/engines");
+    let engine_ids = engine_path
         .exists()
-        .then(|| crate::spark::engine::EnginePolicy::load(&engine_path))
-        .transpose()
-        .map_err(configuration_error)?
-        .map(|engine| engine.config().id.clone());
+        .then(|| installed_engine_ids(&engine_path))
+        .transpose()?;
     let mut statement = connection
         .prepare("SELECT metadata_json FROM instances WHERE desired_state='running' ORDER BY name")
         .map_err(|error| configuration_error(format!("read active instances: {error}")))?;
-    let mut active_recipes = Vec::new();
+    let mut active_engines = Vec::new();
     let rows = statement
         .query_map([], |row| row.get::<_, String>(0))
         .map_err(|error| configuration_error(format!("read active instance rows: {error}")))?;
@@ -1085,20 +1402,277 @@ fn validate_rollback_state(
             row.map_err(|error| configuration_error(format!("read active instance: {error}")))?;
         let instance: super::wire::InstanceDocument = serde_json::from_str(&metadata)
             .map_err(|error| configuration_error(format!("decode active instance: {error}")))?;
-        if catalog.recipe(&instance.recipe_id).is_none()
-            && engine_id.as_deref() != Some(instance.recipe_id.as_str())
+        if engine_ids
+            .as_ref()
+            .is_none_or(|catalog| !catalog.contains(&instance.engine_id))
         {
             return Err(configuration_error(format!(
-                "active instance {} requires unavailable recipe {}",
-                instance.name, instance.recipe_id
+                "active instance {} requires unavailable engine {}",
+                instance.name, instance.engine_id
             )));
         }
-        active_recipes.push(instance.recipe_id);
+        active_engines.push(instance.engine_id);
     }
-    active_recipes.sort();
-    active_recipes.dedup();
+    active_engines.sort();
+    active_engines.dedup();
     let verified_backup = newest_verified_backup(root)?;
-    Ok((schema, integrity, verified_backup, active_recipes))
+    Ok((schema, integrity, verified_backup, active_engines))
+}
+
+#[cfg(feature = "spark-agent")]
+fn installed_engine_ids(
+    directory: &Path,
+) -> Result<std::collections::BTreeSet<String>, InstallError> {
+    let mut ids = std::collections::BTreeSet::new();
+    for entry in std::fs::read_dir(directory)
+        .map_err(|error| configuration_error(format!("read engine directory: {error}")))?
+    {
+        let path = entry
+            .map_err(|error| configuration_error(format!("read engine entry: {error}")))?
+            .path();
+        if path.extension().and_then(|value| value.to_str()) != Some("toml") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).map_err(|error| {
+            configuration_error(format!("read installed engine {}: {error}", path.display()))
+        })?;
+        let document = text.parse::<toml::Value>().map_err(|error| {
+            configuration_error(format!(
+                "parse installed engine {}: {error}",
+                path.display()
+            ))
+        })?;
+        let id = document
+            .get("id")
+            .and_then(toml::Value::as_str)
+            .ok_or_else(|| {
+                configuration_error(format!("installed engine {} has no id", path.display()))
+            })?;
+        ids.insert(id.to_owned());
+    }
+    Ok(ids)
+}
+
+#[cfg(feature = "spark-agent")]
+#[derive(serde::Serialize)]
+struct StateQuarantineEvidence {
+    schema: &'static str,
+    backup: String,
+    quarantined_instances: Vec<String>,
+    quarantined_models: Vec<String>,
+}
+
+#[cfg(feature = "spark-agent")]
+fn quarantine_incompatible_state(root: &Path) -> Result<StateQuarantineEvidence, InstallError> {
+    use rusqlite::Connection;
+    use std::collections::BTreeSet;
+
+    let database = root.join("var/lib/sy-spark/state.sqlite3");
+    if !database.exists() {
+        return Ok(StateQuarantineEvidence {
+            schema: "sy.spark.state-quarantine/v1",
+            backup: "absent".into(),
+            quarantined_instances: Vec::new(),
+            quarantined_models: Vec::new(),
+        });
+    }
+    let mut connection = Connection::open(&database)
+        .map_err(|error| configuration_error(format!("open state for quarantine: {error}")))?;
+    let schema: u32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(|error| configuration_error(format!("read quarantine state schema: {error}")))?;
+    if schema != super::state::STATE_SCHEMA_VERSION {
+        return Err(configuration_error(format!(
+            "state schema {schema} is not the current release schema"
+        )));
+    }
+    connection
+        .pragma_update(None, "foreign_keys", true)
+        .map_err(|error| configuration_error(format!("enable quarantine foreign keys: {error}")))?;
+    let instances = incompatible_instance_ids(&connection)?;
+    let instance_ids = instances.iter().cloned().collect::<BTreeSet<_>>();
+    let models = incompatible_model_ids(&connection, &instance_ids)?;
+    if instances.is_empty() && models.is_empty() {
+        return Ok(StateQuarantineEvidence {
+            schema: "sy.spark.state-quarantine/v1",
+            backup: "not_required".into(),
+            quarantined_instances: instances,
+            quarantined_models: models,
+        });
+    }
+    let backup = backup_incompatible_state(root, &connection)?;
+    let evidence = StateQuarantineEvidence {
+        schema: "sy.spark.state-quarantine/v1",
+        backup,
+        quarantined_instances: instances,
+        quarantined_models: models,
+    };
+    apply_state_quarantine(&mut connection, &evidence)?;
+    Ok(evidence)
+}
+
+#[cfg(feature = "spark-agent")]
+fn incompatible_instance_ids(
+    connection: &rusqlite::Connection,
+) -> Result<Vec<String>, InstallError> {
+    let mut statement = connection
+        .prepare("SELECT id,desired_state,metadata_json FROM instances ORDER BY id")
+        .map_err(|error| {
+            configuration_error(format!("read instance quarantine candidates: {error}"))
+        })?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| {
+            configuration_error(format!("query instance quarantine candidates: {error}"))
+        })?;
+    let mut incompatible = Vec::new();
+    for row in rows {
+        let (id, desired, metadata) = row.map_err(|error| {
+            configuration_error(format!("read instance quarantine candidate: {error}"))
+        })?;
+        if serde_json::from_str::<super::wire::InstanceDocument>(&metadata).is_err() {
+            if desired == "running" {
+                return Err(configuration_error(format!("incompatible running instance {id} must be stopped before authoritative replacement")));
+            }
+            incompatible.push(id);
+        }
+    }
+    Ok(incompatible)
+}
+
+#[cfg(feature = "spark-agent")]
+fn incompatible_model_ids(
+    connection: &rusqlite::Connection,
+    quarantined_instances: &std::collections::BTreeSet<String>,
+) -> Result<Vec<String>, InstallError> {
+    let mut statement = connection
+        .prepare("SELECT id,metadata_json FROM models ORDER BY id")
+        .map_err(|error| {
+            configuration_error(format!("read model quarantine candidates: {error}"))
+        })?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| {
+            configuration_error(format!("query model quarantine candidates: {error}"))
+        })?;
+    let mut incompatible = Vec::new();
+    for row in rows {
+        let (id, metadata) = row.map_err(|error| {
+            configuration_error(format!("read model quarantine candidate: {error}"))
+        })?;
+        if serde_json::from_str::<super::wire::ModelDocument>(&metadata).is_ok() {
+            continue;
+        }
+        let mut references = connection
+            .prepare("SELECT id FROM instances WHERE model_id=?1")
+            .map_err(|error| configuration_error(format!("read model references: {error}")))?;
+        let retained = references
+            .query_map([&id], |row| row.get::<_, String>(0))
+            .map_err(|error| configuration_error(format!("query model references: {error}")))?
+            .filter_map(Result::ok)
+            .any(|instance| !quarantined_instances.contains(&instance));
+        if retained {
+            return Err(configuration_error(format!(
+                "incompatible model {id} is referenced by current state"
+            )));
+        }
+        incompatible.push(id);
+    }
+    Ok(incompatible)
+}
+
+#[cfg(feature = "spark-agent")]
+fn backup_incompatible_state(
+    root: &Path,
+    source: &rusqlite::Connection,
+) -> Result<String, InstallError> {
+    use rusqlite::{backup::Backup, Connection};
+    use std::{os::unix::fs::OpenOptionsExt, time::Duration};
+
+    let directory = root.join("var/lib/sy-spark/backups");
+    std::fs::create_dir_all(&directory).map_err(|error| {
+        configuration_error(format!("create quarantine backup directory: {error}"))
+    })?;
+    let name = format!("state-quarantine-{}.sqlite3", uuid::Uuid::new_v4());
+    let path = directory.join(&name);
+    std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|error| configuration_error(format!("create quarantine backup: {error}")))?;
+    let mut destination = Connection::open(&path)
+        .map_err(|error| configuration_error(format!("open quarantine backup: {error}")))?;
+    let backup = Backup::new(source, &mut destination)
+        .map_err(|error| configuration_error(format!("start quarantine backup: {error}")))?;
+    backup
+        .run_to_completion(32, Duration::from_millis(10), None)
+        .map_err(|error| configuration_error(format!("write quarantine backup: {error}")))?;
+    drop(backup);
+    let integrity: String = destination
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .map_err(|error| configuration_error(format!("verify quarantine backup: {error}")))?;
+    if integrity != "ok" {
+        return Err(configuration_error(
+            "quarantine backup integrity check failed",
+        ));
+    }
+    Ok(name)
+}
+
+#[cfg(feature = "spark-agent")]
+fn apply_state_quarantine(
+    connection: &mut rusqlite::Connection,
+    evidence: &StateQuarantineEvidence,
+) -> Result<(), InstallError> {
+    let transaction = connection.transaction().map_err(|error| {
+        configuration_error(format!("begin incompatible state quarantine: {error}"))
+    })?;
+    for id in &evidence.quarantined_instances {
+        transaction
+            .execute("DELETE FROM instance_resources WHERE instance_id=?1", [id])
+            .map_err(|error| {
+                configuration_error(format!("quarantine resources for {id}: {error}"))
+            })?;
+        transaction
+            .execute("DELETE FROM restart_failures WHERE instance_id=?1", [id])
+            .map_err(|error| {
+                configuration_error(format!("quarantine restart history for {id}: {error}"))
+            })?;
+        transaction
+            .execute("DELETE FROM instances WHERE id=?1", [id])
+            .map_err(|error| configuration_error(format!("quarantine instance {id}: {error}")))?;
+    }
+    for id in &evidence.quarantined_models {
+        transaction
+            .execute("DELETE FROM aliases WHERE model_id=?1", [id])
+            .map_err(|error| {
+                configuration_error(format!("quarantine aliases for {id}: {error}"))
+            })?;
+        transaction
+            .execute("DELETE FROM benchmarks WHERE model_id=?1", [id])
+            .map_err(|error| {
+                configuration_error(format!("quarantine benchmarks for {id}: {error}"))
+            })?;
+        transaction
+            .execute("DELETE FROM models WHERE id=?1", [id])
+            .map_err(|error| configuration_error(format!("quarantine model {id}: {error}")))?;
+    }
+    let metadata = serde_json::to_string(evidence)
+        .map_err(|error| configuration_error(format!("encode quarantine evidence: {error}")))?;
+    transaction.execute("INSERT INTO audit(occurred_at,actor_token_id,action,target,outcome,metadata_json) VALUES(?1,'signed-release-upgrade','state.quarantine',NULL,'success',?2)", [chrono::Utc::now().to_rfc3339(), metadata])
+        .map_err(|error| configuration_error(format!("record quarantine audit: {error}")))?;
+    transaction.commit().map_err(|error| {
+        configuration_error(format!("commit incompatible state quarantine: {error}"))
+    })
 }
 
 #[cfg(feature = "spark-agent")]
@@ -1325,7 +1899,8 @@ fn install_release_with_integration(
             bundle.active_lsm
         )));
     }
-    let release_name = release_component(bundle.version, bundle.executable_sha256);
+    let identity = bundle_catalog_digests(bundle).release_identity(bundle.executable_sha256);
+    let release_name = release_component(bundle.version, &identity);
     let release_rel = PathBuf::from("opt/sy-spark/releases").join(&release_name);
     let release = root.join(&release_rel);
     let current = root.join("opt/sy-spark/current");
@@ -1353,7 +1928,7 @@ fn install_release_with_integration(
             ));
         }
     }
-    let rollback = TransactionSnapshot::capture(root, &release_rel)?;
+    let rollback = TransactionSnapshot::capture(root, &release_rel, bundle.engines)?;
 
     let mut report = InstallReport {
         changed: true,
@@ -1389,12 +1964,15 @@ fn install_release_with_integration(
         ));
         std::fs::create_dir(&stage)
             .map_err(|error| configuration_error(format!("create release stage: {error}")))?;
-        write_synced(
-            &stage.join("sy"),
-            bundle.executable,
-            0o555,
-            &mut report.fsync_trace,
-        )?;
+        write_release_payload(&stage, bundle, &mut report.fsync_trace)?;
+        for relative in [
+            "configs/sy/spark/engines",
+            "configs/sy/spark",
+            "configs/sy",
+            "configs",
+        ] {
+            sync_dir(&stage.join(relative), &mut report.fsync_trace)?;
+        }
         sync_dir(&stage, &mut report.fsync_trace)?;
         std::fs::rename(&stage, &release).map_err(|error| {
             configuration_error(format!("activate staged release directory: {error}"))
@@ -1409,7 +1987,7 @@ fn install_release_with_integration(
         .push(InstallAction::VerifyReleaseArtifact(release_rel.join("sy")));
 
     let service_uid = installed_service_uid(root)?;
-    write_policy_assets(root, bundle.listen_address, service_uid, &mut report)?;
+    write_policy_assets(root, bundle, service_uid, &mut report)?;
     let material =
         ensure_local_identity(root, bundle.listen_address, bundle.hostname, &mut report)?;
     if let Some(preceding) = preceding_release.as_ref() {
@@ -1465,27 +2043,56 @@ struct TransactionSnapshot {
 
 #[cfg(feature = "spark-agent")]
 impl TransactionSnapshot {
-    fn capture(root: &Path, release_relative: &Path) -> Result<Self, InstallError> {
+    fn capture(
+        root: &Path,
+        release_relative: &Path,
+        engines: &[ReleaseEngine<'_>],
+    ) -> Result<Self, InstallError> {
         use std::os::unix::fs::PermissionsExt;
-        let file_paths = [
-            "etc/sy/spark-agent.toml",
-            "etc/sy/spark-executor.toml",
-            "etc/sy/spark/engine.toml",
-            "etc/systemd/system/sy-spark-agent.service",
-            "etc/systemd/system/sy-spark-executor.service",
-            "etc/systemd/system/sy-spark.target",
-            "etc/apparmor.d/sy-spark-agent",
-            "etc/apparmor.d/sy-spark-executor",
-            "var/lib/sy-spark/ca/ca-key.pem",
-            "var/lib/sy-spark/ca/ca-cert.pem",
-            "var/lib/sy-spark/tls/server-key.pem",
-            "var/lib/sy-spark/tls/server-chain.pem",
-            "etc/sy/spark-bootstrap-admin.credential",
-            "etc/sy/spark-hf-read.credential",
+        let mut file_paths = vec![
+            "etc/sy/spark-agent.toml".into(),
+            "etc/sy/spark-executor.toml".into(),
+            "etc/sy/spark/models.toml".into(),
+            "etc/systemd/system/sy-spark-agent.service".into(),
+            "etc/systemd/system/sy-spark-executor.service".into(),
+            "etc/systemd/system/sy-spark.target".into(),
+            "etc/apparmor.d/sy-spark-agent".into(),
+            "etc/apparmor.d/sy-spark-executor".into(),
+            "var/lib/sy-spark/ca/ca-key.pem".into(),
+            "var/lib/sy-spark/ca/ca-cert.pem".into(),
+            "var/lib/sy-spark/tls/server-key.pem".into(),
+            "var/lib/sy-spark/tls/server-chain.pem".into(),
+            "etc/sy/spark-bootstrap-admin.credential".into(),
+            "etc/sy/spark-hf-read.credential".into(),
         ];
+        file_paths.extend(
+            engines
+                .iter()
+                .map(|engine| installed_engine_path(engine.relative_path))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        let installed = root.join("etc/sy/spark/engines");
+        if installed.is_dir() {
+            for entry in std::fs::read_dir(&installed).map_err(|error| {
+                configuration_error(format!("read installed engine inventory: {error}"))
+            })? {
+                let entry = entry.map_err(|error| {
+                    configuration_error(format!("read installed engine entry: {error}"))
+                })?;
+                let name = entry.file_name();
+                let name = name
+                    .to_str()
+                    .ok_or_else(|| configuration_error("installed engine name is not UTF-8"))?;
+                file_paths.push(installed_engine_path(&format!(
+                    "{ENGINES_BUNDLE_PREFIX}{name}"
+                ))?);
+            }
+        }
+        file_paths.sort();
+        file_paths.dedup();
         let mut files = Vec::new();
         for relative in file_paths {
-            let path = root.join(relative);
+            let path = root.join(&relative);
             let prior = match std::fs::read(&path) {
                 Ok(bytes) => Some((
                     bytes,
@@ -1505,7 +2112,7 @@ impl TransactionSnapshot {
                     )))
                 }
             };
-            files.push((PathBuf::from(relative), prior));
+            files.push((relative, prior));
         }
         let current_path = root.join("opt/sy-spark/current");
         let current = std::fs::read_link(&current_path).ok();
@@ -1652,7 +2259,8 @@ const EXECUTOR_BOUNDARY_CHOWN_ARGS: &[&str] = &[
     "root:sy-spark",
     "/etc/sy",
     "/etc/sy/spark",
-    "/etc/sy/spark/engine.toml",
+    "/etc/sy/spark/engines",
+    "/etc/sy/spark/models.toml",
     "/etc/sy/spark-agent.toml",
     "/etc/sy/spark-executor.toml",
     "/etc/sy/spark-hf-read.credential",
@@ -1683,6 +2291,11 @@ fn apply_host_integration() -> Result<(), InstallError> {
         "set executor boundary ownership",
         "chown",
         EXECUTOR_BOUNDARY_CHOWN_ARGS,
+    )?;
+    require_fixed_success(
+        "set engine inventory ownership",
+        "chown",
+        &["-R", "root:sy-spark", "/etc/sy/spark/engines"],
     )?;
     require_fixed_success(
         "reload agent AppArmor profile",
@@ -1864,6 +2477,30 @@ pub fn activate_from_files(
         .map_err(|error| configuration_error(format!("read pinned release public key: {error}")))?;
     let manifest_bytes = std::fs::read(&request.manifest)
         .map_err(|error| configuration_error(format!("read approved install manifest: {error}")))?;
+    let release_manifest = std::fs::read(&request.release_manifest)
+        .map_err(|error| configuration_error(format!("read signed release manifest: {error}")))?;
+    let models = std::fs::read(&request.models)
+        .map_err(|error| configuration_error(format!("read staged model catalog: {error}")))?;
+    let engine_bytes = request
+        .engines
+        .iter()
+        .map(|asset| {
+            let bytes = std::fs::read(&asset.path).map_err(|error| {
+                configuration_error(format!(
+                    "read staged engine policy {}: {error}",
+                    asset.path.display()
+                ))
+            })?;
+            Ok((asset.relative_path.as_str(), bytes))
+        })
+        .collect::<Result<Vec<_>, InstallError>>()?;
+    let engines = engine_bytes
+        .iter()
+        .map(|(relative_path, bytes)| ReleaseEngine {
+            relative_path,
+            bytes,
+        })
+        .collect::<Vec<_>>();
     if format!("{:x}", Sha256::digest(&manifest_bytes)) != request.manifest_sha256 {
         return Err(configuration_error(
             "approved install manifest SHA-256 mismatch",
@@ -1885,6 +2522,9 @@ pub fn activate_from_files(
         version: &request.version,
         executable: &executable,
         executable_sha256: &executable_sha256,
+        release_manifest: &release_manifest,
+        models: &models,
+        engines: &engines,
         public_key_base64: public_key.trim(),
         signature: &signature,
         listen_address: &request.listen_address,
@@ -1903,7 +2543,15 @@ pub fn activate_from_files(
             "activation request differs from the approved manifest",
         ));
     }
+    let digests = bundle_catalog_digests(&bundle);
+    validate_catalog_approval(&manifest, "/etc/sy/spark/models.toml", &digests.models)?;
+    for (relative, digest) in &digests.engines {
+        let installed = installed_engine_path(relative)?;
+        validate_catalog_approval(&manifest, &format!("/{}", installed.display()), digest)?;
+    }
     if request.root == Path::new("/") && manifest.inventory.existing_installation.present {
+        validate_release(&bundle)?;
+        quarantine_incompatible_state(&request.root)?;
         validate_rollback_state(&request.root)?;
     }
     let installed = install_release(&request.root, &bundle)?;
@@ -1996,6 +2644,9 @@ pub struct RemoteActivation<'a> {
     pub hostname: &'a str,
     pub active_lsm: &'a str,
     pub manifest: &'a InstallManifest,
+    pub release_manifest: &'a Path,
+    pub models: &'a Path,
+    pub engines: &'a [ReleaseEngineAsset],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2022,6 +2673,9 @@ struct ActivationLaunchInput<'a> {
     public_key: &'a str,
     manifest: &'a str,
     manifest_sha256: &'a str,
+    release_manifest: &'a str,
+    models: &'a str,
+    engines: &'a [(String, String)],
     version: &'a str,
     listen_address: &'a str,
     hostname: &'a str,
@@ -2029,30 +2683,41 @@ struct ActivationLaunchInput<'a> {
 }
 
 fn activation_launch_spec(input: ActivationLaunchInput<'_>) -> ActivationLaunchSpec {
-    ActivationLaunchSpec {
-        program: "ssh",
-        args: [
-            "-tt",
-            "--",
-            input.host,
-            "sudo",
-            "-p",
-            SUDO_PROMPT,
-            "--",
-            input.prefix,
-            "spark",
-            "bootstrap",
-            "activate",
-            "--executable",
-            input.prefix,
-            "--signature",
-            input.signature,
-            "--public-key",
-            input.public_key,
-            "--manifest",
-            input.manifest,
-            "--manifest-sha256",
-            input.manifest_sha256,
+    let mut args = [
+        "-tt",
+        "--",
+        input.host,
+        "sudo",
+        "-p",
+        SUDO_PROMPT,
+        "--",
+        input.prefix,
+        "spark",
+        "bootstrap",
+        "activate",
+        "--executable",
+        input.prefix,
+        "--signature",
+        input.signature,
+        "--public-key",
+        input.public_key,
+        "--manifest",
+        input.manifest,
+        "--manifest-sha256",
+        input.manifest_sha256,
+        "--release-manifest",
+        input.release_manifest,
+        "--models",
+        input.models,
+    ]
+    .map(str::to_owned)
+    .into_iter()
+    .collect::<Vec<_>>();
+    for (relative, remote) in input.engines {
+        args.extend(["--engine".into(), format!("{relative}={remote}")]);
+    }
+    args.extend(
+        [
             "--version",
             input.version,
             "--listen-address",
@@ -2062,8 +2727,11 @@ fn activation_launch_spec(input: ActivationLaunchInput<'_>) -> ActivationLaunchS
             "--active-lsm",
             input.active_lsm,
         ]
-        .map(str::to_owned)
-        .into(),
+        .map(str::to_owned),
+    );
+    ActivationLaunchSpec {
+        program: "ssh",
+        args,
         stdin: LaunchStream::Inherit,
         stdout: LaunchStream::Capture,
         stderr: LaunchStream::Capture,
@@ -2150,6 +2818,20 @@ pub fn activate_over_ssh(request: &RemoteActivation<'_>) -> Result<ActivationRes
     let signature_remote = format!("{prefix}.minisig");
     let public_key_remote = format!("{prefix}.pub");
     let manifest_remote = format!("{prefix}.manifest.json");
+    let release_manifest_remote = format!("{prefix}.SHA256SUMS");
+    let models_remote = format!("{prefix}.models.toml");
+    let engine_remotes = request
+        .engines
+        .iter()
+        .enumerate()
+        .map(|(index, asset)| {
+            installed_engine_path(&asset.relative_path)?;
+            Ok((
+                asset.relative_path.clone(),
+                format!("{prefix}.engine-{index}.toml"),
+            ))
+        })
+        .collect::<Result<Vec<_>, InstallError>>()?;
     let mut approved_manifest = request.manifest.clone();
     approved_manifest.execution = super::wire::InstallExecution::Planned;
     let manifest_bytes = serde_json::to_vec(&approved_manifest).map_err(|error| {
@@ -2161,13 +2843,25 @@ pub fn activate_over_ssh(request: &RemoteActivation<'_>) -> Result<ActivationRes
         uuid::Uuid::new_v4()
     ));
     let local_manifest = write_local_manifest(local_manifest, &manifest_bytes)?;
-    let batch = format!(
-        "put \"{}\" {prefix}\nput \"{}\" {signature_remote}\nput \"{}\" {public_key_remote}\nput \"{}\" {manifest_remote}\nchmod 0700 {prefix}\n",
-        quote_sftp_path(request.executable)?, quote_sftp_path(request.signature)?, quote_sftp_path(request.public_key)?, quote_sftp_path(local_manifest.path())?,
+    let mut batch = format!(
+        "put \"{}\" {prefix}\nput \"{}\" {signature_remote}\nput \"{}\" {public_key_remote}\nput \"{}\" {manifest_remote}\nput \"{}\" {release_manifest_remote}\nput \"{}\" {models_remote}\n",
+        quote_sftp_path(request.executable)?, quote_sftp_path(request.signature)?,
+        quote_sftp_path(request.public_key)?, quote_sftp_path(local_manifest.path())?,
+        quote_sftp_path(request.release_manifest)?, quote_sftp_path(request.models)?,
     );
-    let cleanup = format!(
-        "-rm {prefix}\n-rm {signature_remote}\n-rm {public_key_remote}\n-rm {manifest_remote}\n"
+    for (asset, (_, remote)) in request.engines.iter().zip(&engine_remotes) {
+        batch.push_str(&format!(
+            "put \"{}\" {remote}\n",
+            quote_sftp_path(&asset.path)?
+        ));
+    }
+    batch.push_str(&format!("chmod 0700 {prefix}\n"));
+    let mut cleanup = format!(
+        "-rm {prefix}\n-rm {signature_remote}\n-rm {public_key_remote}\n-rm {manifest_remote}\n-rm {release_manifest_remote}\n-rm {models_remote}\n"
     );
+    for (_, remote) in &engine_remotes {
+        cleanup.push_str(&format!("-rm {remote}\n"));
+    }
     if let Err(error) = run_release_sftp(request.host_alias, &batch) {
         let _ = run_release_sftp(request.host_alias, &cleanup);
         return Err(error);
@@ -2179,6 +2873,9 @@ pub fn activate_over_ssh(request: &RemoteActivation<'_>) -> Result<ActivationRes
         public_key: &public_key_remote,
         manifest: &manifest_remote,
         manifest_sha256: &manifest_sha256,
+        release_manifest: &release_manifest_remote,
+        models: &models_remote,
+        engines: &engine_remotes,
         version: request.version,
         listen_address: request.listen_address,
         hostname: request.hostname,
@@ -2437,6 +3134,63 @@ fn is_sha256_text(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+fn signed_entry<'a>(manifest: &'a str, path: &str) -> Result<&'a str, InstallError> {
+    let suffix = format!("  {path}");
+    let matches = manifest
+        .lines()
+        .filter_map(|line| line.strip_suffix(&suffix))
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [digest] if is_sha256_text(digest) => Ok(digest),
+        _ => Err(configuration_error(format!(
+            "signed release manifest needs exactly one SHA-256 for {path}"
+        ))),
+    }
+}
+
+fn verify_signed_entry(manifest: &str, path: &str, bytes: &[u8]) -> Result<(), InstallError> {
+    if signed_entry(manifest, path)? != format!("{:x}", Sha256::digest(bytes)) {
+        return Err(configuration_error(format!(
+            "signed release hash differs for {path}"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "spark-agent")]
+fn bundle_catalog_digests(bundle: &ReleaseBundle<'_>) -> CatalogDigests {
+    CatalogDigests {
+        models: format!("{:x}", Sha256::digest(bundle.models)),
+        engines: bundle
+            .engines
+            .iter()
+            .map(|engine| {
+                (
+                    engine.relative_path.to_owned(),
+                    format!("{:x}", Sha256::digest(engine.bytes)),
+                )
+            })
+            .collect(),
+    }
+}
+
+#[cfg(feature = "spark-agent")]
+fn validate_catalog_approval(
+    manifest: &InstallManifest,
+    path: &str,
+    digest: &str,
+) -> Result<(), InstallError> {
+    let approved = manifest.assets.iter().any(|asset| {
+        asset.path_or_name == path && asset.content == ContentIdentity::Sha256(digest.to_owned())
+    });
+    if !approved {
+        return Err(configuration_error(format!(
+            "signed catalog {path} differs from approved install manifest"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(feature = "spark-agent")]
 fn validate_release(bundle: &ReleaseBundle<'_>) -> Result<(), InstallError> {
     use minisign_verify::Signature;
@@ -2456,8 +3210,85 @@ fn validate_release(bundle: &ReleaseBundle<'_>) -> Result<(), InstallError> {
     let key = decode_release_public_key(bundle.public_key_base64)?;
     let signature = Signature::decode(bundle.signature)
         .map_err(|error| configuration_error(format!("decode release signature: {error}")))?;
-    key.verify(bundle.executable, &signature, false)
-        .map_err(|error| configuration_error(format!("verify signed ARM64 release: {error}")))
+    key.verify(bundle.release_manifest, &signature, false)
+        .map_err(|error| configuration_error(format!("verify signed release manifest: {error}")))?;
+    let manifest = std::str::from_utf8(bundle.release_manifest)
+        .map_err(|_| configuration_error("signed release manifest is not UTF-8"))?;
+    verify_signed_entry(manifest, "sy-aarch64", bundle.executable)?;
+    verify_signed_entry(manifest, "configs/sy/spark/models.toml", bundle.models)?;
+    let signed_paths = signed_engine_paths(manifest)?;
+    let bundle_paths = bundle
+        .engines
+        .iter()
+        .map(|engine| engine.relative_path.to_owned())
+        .collect::<Vec<_>>();
+    if signed_paths != bundle_paths {
+        return Err(configuration_error(
+            "staged engine inventory differs from the signed release",
+        ));
+    }
+    for engine in bundle.engines {
+        verify_signed_entry(manifest, engine.relative_path, engine.bytes)?;
+    }
+    validate_shipped_policy_assets(bundle)
+}
+
+#[cfg(feature = "spark-agent")]
+fn validate_shipped_policy_assets(bundle: &ReleaseBundle<'_>) -> Result<(), InstallError> {
+    let agent: super::agent::AgentConfig =
+        toml::from_str(include_str!("../../configs/sy/spark/agent.toml")).map_err(|error| {
+            configuration_error(format!("validate shipped agent policy: {error}"))
+        })?;
+    let executor: super::executor::ExecutorConfig =
+        toml::from_str(include_str!("../../configs/sy/spark/executor.toml")).map_err(|error| {
+            configuration_error(format!("validate shipped executor policy: {error}"))
+        })?;
+    if agent.schema != "sy.spark.agent/v1"
+        || agent.model_catalog != Path::new("/etc/sy/spark/models.toml")
+        || agent.engine_catalog != Path::new("/etc/sy/spark/engines")
+        || executor.schema != "sy.spark.executor/v1"
+        || executor.engine_catalog != agent.engine_catalog
+        || executor.resources_policy != Path::new("/etc/sy/spark-agent.toml")
+        || executor.host.architecture != "aarch64"
+    {
+        return Err(configuration_error(
+            "shipped Spark policy paths or target architecture are invalid",
+        ));
+    }
+    let text = |bytes| {
+        std::str::from_utf8(bytes)
+            .map_err(|_| configuration_error("signed policy document is not UTF-8"))
+    };
+    let engines = bundle
+        .engines
+        .iter()
+        .map(|engine| Ok((engine.relative_path, text(engine.bytes)?)))
+        .collect::<Result<Vec<_>, InstallError>>()?;
+    validate_policy_documents(text(bundle.models)?, &engines)
+}
+
+#[cfg(feature = "spark-agent")]
+fn validate_policy_documents(models: &str, engines: &[(&str, &str)]) -> Result<(), InstallError> {
+    super::model_catalog::ModelCatalog::parse(models).map_err(configuration_error)?;
+    super::engine::EngineCatalog::parse_files(engines.iter().copied())
+        .map_err(configuration_error)?;
+    for (_, text) in engines {
+        let policy = super::engine::EnginePolicy::parse(text).map_err(configuration_error)?;
+        let config = policy.config();
+        let invalid_identity = match config.image_transport {
+            super::engine::EngineImageTransport::Registry => !policy.image().contains("@sha256:"),
+            super::engine::EngineImageTransport::Local => policy.image() != config.image_digest,
+        };
+        if config.image_architecture != "arm64"
+            || config.image_repository.contains('@')
+            || invalid_identity
+        {
+            return Err(configuration_error(
+                "engine image must pin one immutable ARM64 identity",
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "spark-agent")]
@@ -2490,13 +3321,14 @@ fn valid_minisign_public_key_comment(comment: &str) -> bool {
 }
 
 #[cfg(feature = "spark-agent")]
-fn directory_layout() -> [(&'static str, u32, bool); 14] {
+fn directory_layout() -> [(&'static str, u32, bool); 15] {
     [
         ("opt/sy-spark", 0o755, true),
         ("opt/sy-spark/releases", 0o755, true),
         ("opt/sy-spark/hf-http-fallback", 0o755, true),
         ("etc/sy", 0o750, true),
         ("etc/sy/spark", 0o750, true),
+        ("etc/sy/spark/engines", 0o750, true),
         ("etc/apparmor.d", 0o755, false),
         ("etc/systemd/system", 0o755, false),
         ("var/lib/sy-spark", 0o750, true),
@@ -2512,24 +3344,19 @@ fn directory_layout() -> [(&'static str, u32, bool); 14] {
 #[cfg(feature = "spark-agent")]
 fn write_policy_assets(
     root: &Path,
-    listen_address: &str,
+    bundle: &ReleaseBundle<'_>,
     service_uid: u32,
     report: &mut InstallReport,
 ) -> Result<(), InstallError> {
-    std::fs::create_dir_all(root.join("etc/sy/spark")).map_err(|error| {
-        configuration_error(format!("create Spark engine policy directory: {error}"))
-    })?;
-    let config = include_str!("../../configs/sy/spark/agent.toml")
-        .replace("10.1.30.143:9843", &format!("{listen_address}:9843"));
+    let config = include_str!("../../configs/sy/spark/agent.toml").replace(
+        "10.1.30.143:9843",
+        &format!("{}:9843", bundle.listen_address),
+    );
     let executor_config = include_str!("../../configs/sy/spark/executor.toml")
         .replace("agent_uid = 996", &format!("agent_uid = {service_uid}"));
     for (relative, bytes, mode) in [
         ("etc/sy/spark-agent.toml", config.as_bytes(), 0o640),
-        (
-            "etc/sy/spark/engine.toml",
-            include_bytes!("../../configs/sy/spark/engine.toml").as_slice(),
-            0o640,
-        ),
+        ("etc/sy/spark/models.toml", bundle.models, 0o640),
         (
             "etc/sy/spark-executor.toml",
             executor_config.as_bytes(),
@@ -2561,14 +3388,43 @@ fn write_policy_assets(
             0o644,
         ),
     ] {
-        let path = root.join(relative);
-        let differs = !std::fs::read(&path).is_ok_and(|existing| existing == bytes);
-        if differs {
-            write_synced(&path, bytes, mode, &mut report.fsync_trace)?;
+        write_policy_asset(root, relative, bytes, mode, report)?;
+    }
+    let desired = bundle
+        .engines
+        .iter()
+        .map(|engine| Ok((installed_engine_path(engine.relative_path)?, engine.bytes)))
+        .collect::<Result<BTreeMap<_, _>, InstallError>>()?;
+    let engine_dir = root.join("etc/sy/spark/engines");
+    let mut removed = false;
+    for entry in std::fs::read_dir(&engine_dir)
+        .map_err(|error| configuration_error(format!("read engine inventory: {error}")))?
+    {
+        let entry = entry.map_err(|error| {
+            configuration_error(format!("read engine inventory entry: {error}"))
+        })?;
+        let relative = PathBuf::from("etc/sy/spark/engines").join(entry.file_name());
+        if !desired.contains_key(&relative) {
+            if !entry
+                .file_type()
+                .map_err(|error| configuration_error(format!("stat engine entry: {error}")))?
+                .is_file()
+            {
+                return Err(configuration_error(
+                    "engine inventory contains an unmanaged entry",
+                ));
+            }
+            std::fs::remove_file(entry.path()).map_err(|error| {
+                configuration_error(format!("remove stale engine policy: {error}"))
+            })?;
+            removed = true;
         }
-        report
-            .actions
-            .push(InstallAction::EnsurePolicyAsset(relative.into()));
+    }
+    if removed {
+        sync_dir(&engine_dir, &mut report.fsync_trace)?;
+    }
+    for (relative, bytes) in desired {
+        write_policy_asset(root, &relative, bytes, 0o640, report)?;
     }
     let fallback_lock = include_bytes!("../../configs/sy/spark/hf-http-fallback.lock");
     let fallback_digest = format!("{:x}", Sha256::digest(fallback_lock));
@@ -2595,6 +3451,40 @@ fn write_policy_assets(
             .unwrap_or(&fallback_path)
             .to_path_buf(),
     ));
+    Ok(())
+}
+
+#[cfg(feature = "spark-agent")]
+fn write_policy_asset(
+    root: &Path,
+    relative: impl AsRef<Path>,
+    bytes: &[u8],
+    mode: u32,
+    report: &mut InstallReport,
+) -> Result<(), InstallError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let relative = relative.as_ref();
+    let path = root.join(relative);
+    if !std::fs::read(&path).is_ok_and(|existing| existing == bytes) {
+        write_synced(&path, bytes, mode, &mut report.fsync_trace)?;
+    }
+    let installed_mode = std::fs::metadata(&path)
+        .map_err(|error| configuration_error(format!("stat {}: {error}", path.display())))?
+        .permissions()
+        .mode()
+        & 0o777;
+    if installed_mode != mode {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+            .map_err(|error| configuration_error(format!("chmod {}: {error}", path.display())))?;
+        File::open(&path)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| configuration_error(format!("fsync {}: {error}", path.display())))?;
+        report.fsync_trace.push(path);
+    }
+    report
+        .actions
+        .push(InstallAction::EnsurePolicyAsset(relative.into()));
     Ok(())
 }
 
@@ -3080,7 +3970,180 @@ mod tests {
         ProbeTransfer, RunnerError,
     };
     use crate::spark::wire::{decode_inventory, AssetKind, ContentIdentity};
+    use sha2::Digest;
     use std::path::PathBuf;
+
+    fn shipped_engine_paths() -> Vec<PathBuf> {
+        let mut paths = std::fs::read_dir("configs/sy/spark/engines")
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|value| value == "toml"))
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths
+    }
+
+    fn shipped_engine_documents() -> Vec<(PathBuf, Vec<u8>)> {
+        shipped_engine_paths()
+            .into_iter()
+            .map(|path| {
+                let bytes = std::fs::read(&path).unwrap();
+                (path, bytes)
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "spark-agent")]
+    fn test_engine_priority(bytes: &[u8]) -> i64 {
+        let document: toml::Value = toml::from_str(std::str::from_utf8(bytes).unwrap()).unwrap();
+        document["priority"].as_integer().unwrap()
+    }
+
+    #[cfg(feature = "spark-agent")]
+    fn test_engines() -> &'static [super::ReleaseEngine<'static>] {
+        static ENGINES: std::sync::LazyLock<Vec<super::ReleaseEngine<'static>>> =
+            std::sync::LazyLock::new(|| {
+                shipped_engine_documents()
+                    .into_iter()
+                    .map(|(path, bytes)| super::ReleaseEngine {
+                        relative_path: Box::leak(
+                            path.to_string_lossy().into_owned().into_boxed_str(),
+                        ),
+                        bytes: Box::leak(bytes.into_boxed_slice()),
+                    })
+                    .collect()
+            });
+        &ENGINES
+    }
+
+    #[cfg(feature = "spark-agent")]
+    fn test_release_manifest(executable: &[u8]) -> String {
+        test_release_manifest_for(executable, test_engines())
+    }
+
+    #[cfg(feature = "spark-agent")]
+    fn test_release_manifest_for(
+        executable: &[u8],
+        engines: &[super::ReleaseEngine<'_>],
+    ) -> String {
+        let digest = |bytes: &[u8]| format!("{:x}", sha2::Sha256::digest(bytes));
+        let mut manifest = format!(
+            "{}  sy-aarch64\n{}  configs/sy/spark/models.toml\n",
+            digest(executable),
+            digest(include_bytes!("../../configs/sy/spark/models.toml")),
+        );
+        for engine in engines {
+            manifest.push_str(&format!(
+                "{}  {}\n",
+                digest(engine.bytes),
+                engine.relative_path
+            ));
+        }
+        manifest
+    }
+
+    fn test_catalog_digests() -> super::CatalogDigests {
+        super::CatalogDigests {
+            models: format!(
+                "{:x}",
+                sha2::Sha256::digest(include_bytes!("../../configs/sy/spark/models.toml"))
+            ),
+            engines: shipped_engine_documents()
+                .into_iter()
+                .map(|(path, bytes)| {
+                    (
+                        path.to_string_lossy().into_owned(),
+                        format!("{:x}", sha2::Sha256::digest(bytes)),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn test_release_name(executable_sha: &str) -> String {
+        format!(
+            "0.1.0-{}",
+            test_catalog_digests().release_identity(executable_sha)
+        )
+    }
+
+    #[test]
+    #[cfg(feature = "spark-agent")]
+    fn config_only_change_creates_a_new_release_identity() {
+        let first = test_catalog_digests();
+        let mut second = first.clone();
+        second.models = "b".repeat(64);
+        assert_ne!(
+            first.release_identity(&"a".repeat(64)),
+            second.release_identity(&"a".repeat(64))
+        );
+    }
+
+    #[test]
+    fn release_payload_discovers_every_signed_engine_file() {
+        let root = tempfile::tempdir().unwrap();
+        let engines = root.path().join("configs/sy/spark/engines");
+        std::fs::create_dir_all(&engines).unwrap();
+        let executable = b"arm64";
+        let models = b"models";
+        std::fs::write(root.path().join("sy-aarch64"), executable).unwrap();
+        std::fs::create_dir_all(root.path().join("configs/sy/spark")).unwrap();
+        std::fs::write(root.path().join("configs/sy/spark/models.toml"), models).unwrap();
+        let mut entries = vec![
+            ("first.toml", b"first".as_slice()),
+            ("second.toml", b"second".as_slice()),
+            ("third.toml", b"third".as_slice()),
+        ];
+        let digest = |bytes: &[u8]| format!("{:x}", sha2::Sha256::digest(bytes));
+        let mut manifest = format!(
+            "{}  sy-aarch64\n{}  configs/sy/spark/models.toml\n",
+            digest(executable),
+            digest(models)
+        );
+        entries.reverse();
+        for (name, bytes) in entries {
+            std::fs::write(engines.join(name), bytes).unwrap();
+            manifest.push_str(&format!(
+                "{}  configs/sy/spark/engines/{name}\n",
+                digest(bytes)
+            ));
+        }
+        let manifest_path = root.path().join("SHA256SUMS");
+        std::fs::write(&manifest_path, manifest).unwrap();
+
+        let payload =
+            super::load_release_payload(&manifest_path, &root.path().join("sy-aarch64")).unwrap();
+
+        assert_eq!(
+            payload
+                .engines
+                .iter()
+                .map(|asset| asset.relative_path.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "configs/sy/spark/engines/first.toml",
+                "configs/sy/spark/engines/second.toml",
+                "configs/sy/spark/engines/third.toml",
+            ]
+        );
+    }
+
+    #[cfg(feature = "spark-agent")]
+    #[test]
+    fn staged_engine_arguments_reject_paths_outside_the_signed_inventory() {
+        assert!(super::parse_staged_engine_asset(
+            "configs/sy/spark/engines/third.toml=/tmp/third.toml"
+        )
+        .is_ok());
+        for value in [
+            "configs/sy/spark/engines/nested/third.toml=/tmp/third.toml",
+            "configs/sy/spark/engines/../third.toml=/tmp/third.toml",
+            "configs/sy/spark/engines/third.toml=relative.toml",
+        ] {
+            assert!(super::parse_staged_engine_asset(value).is_err());
+        }
+    }
 
     #[cfg(feature = "spark-agent")]
     fn signed_bundle<'a>(
@@ -3089,10 +4152,14 @@ mod tests {
         signature: &'a str,
         sha256: &'a str,
     ) -> super::ReleaseBundle<'a> {
+        let manifest = Box::leak(test_release_manifest(executable).into_boxed_str());
         super::ReleaseBundle {
             version: "0.1.0",
             executable,
             executable_sha256: sha256,
+            release_manifest: manifest.as_bytes(),
+            models: include_bytes!("../../configs/sy/spark/models.toml"),
+            engines: test_engines(),
             public_key_base64: public_key,
             signature,
             listen_address: "127.0.0.1",
@@ -3140,6 +4207,16 @@ mod tests {
         let signature = format!("{PREFIX}.minisig");
         let public_key = format!("{PREFIX}.pub");
         let manifest = format!("{PREFIX}.manifest.json");
+        let engines = vec![
+            (
+                "configs/sy/spark/engines/first.toml".into(),
+                "/tmp/first.toml".into(),
+            ),
+            (
+                "configs/sy/spark/engines/second.toml".into(),
+                "/tmp/second.toml".into(),
+            ),
+        ];
         let spec = super::activation_launch_spec(super::ActivationLaunchInput {
             host: "dgx-spark",
             prefix: PREFIX,
@@ -3147,6 +4224,9 @@ mod tests {
             public_key: &public_key,
             manifest: &manifest,
             manifest_sha256: "manifest-sha256",
+            release_manifest: "/tmp/release.SHA256SUMS",
+            models: "/tmp/models.toml",
+            engines: &engines,
             version: "0.1.0",
             listen_address: "10.1.30.143",
             hostname: "dgx-spark",
@@ -3181,6 +4261,14 @@ mod tests {
                 &manifest,
                 "--manifest-sha256",
                 "manifest-sha256",
+                "--release-manifest",
+                "/tmp/release.SHA256SUMS",
+                "--models",
+                "/tmp/models.toml",
+                "--engine",
+                "configs/sy/spark/engines/first.toml=/tmp/first.toml",
+                "--engine",
+                "configs/sy/spark/engines/second.toml=/tmp/second.toml",
                 "--version",
                 "0.1.0",
                 "--listen-address",
@@ -3344,7 +4432,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_is_complete_stable_and_read_only() {
+    fn manifest_installs_both_catalogs_with_expected_hashes() {
         let inventory = decode_inventory(super::tests_fixture::INVENTORY.as_bytes()).unwrap();
         let opts = PlanOptions {
             host_alias: "dgx-spark".into(),
@@ -3353,6 +4441,7 @@ mod tests {
             probe_remote_path: format!("/tmp/sy-spark-bootstrap-{}", "a".repeat(64)),
             probe_sha256: "a".repeat(64),
             probe_removed: true,
+            catalogs: test_catalog_digests(),
         };
         let manifest = build_manifest(inventory, opts).unwrap();
         let paths: Vec<_> = manifest
@@ -3361,9 +4450,8 @@ mod tests {
             .map(|asset| asset.path_or_name.as_str())
             .collect();
         let release_path = format!(
-            "/opt/sy-spark/releases/{}-{}",
-            env!("CARGO_PKG_VERSION"),
-            "a".repeat(64)
+            "/opt/sy-spark/releases/{}",
+            test_release_name(&"a".repeat(64))
         );
         assert!(paths.contains(&release_path.as_str()));
         assert!(paths.contains(&format!("{release_path}/sy").as_str()));
@@ -3388,7 +4476,40 @@ mod tests {
             .assets
             .iter()
             .all(|asset| asset.kind != AssetKind::Recipe));
-        assert!(paths.contains(&"/etc/sy/spark/engine.toml"));
+        assert!(paths.contains(&"/etc/sy/spark/models.toml"));
+        let models = manifest
+            .assets
+            .iter()
+            .find(|asset| asset.path_or_name == "/etc/sy/spark/models.toml")
+            .unwrap();
+        assert_eq!(
+            models.content,
+            ContentIdentity::Sha256(format!(
+                "{:x}",
+                sha2::Sha256::digest(include_bytes!("../../configs/sy/spark/models.toml"))
+            ))
+        );
+        assert_eq!(
+            (models.owner.as_str(), models.mode.as_str()),
+            ("root:sy-spark", "0640")
+        );
+        for (source, bytes) in shipped_engine_documents() {
+            let installed = super::installed_engine_path(source.to_str().unwrap()).unwrap();
+            let installed = format!("/{}", installed.display());
+            let asset = manifest
+                .assets
+                .iter()
+                .find(|asset| asset.path_or_name == installed)
+                .unwrap();
+            assert_eq!(
+                asset.content,
+                ContentIdentity::Sha256(format!("{:x}", sha2::Sha256::digest(bytes)))
+            );
+            assert_eq!(
+                (asset.owner.as_str(), asset.mode.as_str()),
+                ("root:sy-spark", "0640")
+            );
+        }
         assert!(manifest
             .assets
             .iter()
@@ -3404,6 +4525,70 @@ mod tests {
 
     #[cfg(feature = "spark-agent")]
     #[test]
+    fn catalog_validation_rejects_mutable_images_and_malformed_models() {
+        const MODELS: &str = include_str!("../../configs/sy/spark/models.toml");
+        let policies = test_engines()
+            .iter()
+            .map(|engine| {
+                (
+                    engine.relative_path,
+                    std::str::from_utf8(engine.bytes).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(super::validate_policy_documents(MODELS, &policies).is_ok());
+        let mutable =
+            policies[0]
+                .1
+                .replacen("image_digest = \"sha256:", "image_digest = \"latest:", 1);
+        let mut changed = policies.clone();
+        changed[0].1 = &mutable;
+        let malformed = MODELS.replace("schema = \"sy.spark.models/v2\"", "schema = \"old\"");
+        assert!(super::validate_policy_documents(MODELS, &changed).is_err());
+        assert!(super::validate_policy_documents(&malformed, &policies).is_err());
+    }
+
+    #[cfg(feature = "spark-agent")]
+    #[test]
+    fn signed_release_approves_digest_pinned_arm64_engine_inventory() {
+        use minisign::KeyPair;
+        use std::io::Cursor;
+
+        let executable = b"signed-release-with-embedded-engine-catalog";
+        let keys = KeyPair::generate_unencrypted_keypair().unwrap();
+        let signature = minisign::sign(
+            None,
+            &keys.sk,
+            Cursor::new(test_release_manifest(executable)),
+            None,
+            None,
+        )
+        .unwrap()
+        .into_string();
+        let sha256 = format!("{:x}", sha2::Sha256::digest(executable));
+        let public_key = keys.pk.to_base64();
+        let mut bundle = signed_bundle(executable, &public_key, &signature, &sha256);
+        super::validate_release(&bundle).unwrap();
+        bundle.models = b"unsigned catalog replacement";
+        assert!(super::validate_release(&bundle).is_err());
+
+        for engine in test_engines() {
+            let text = std::str::from_utf8(engine.bytes).unwrap();
+            let policy = crate::spark::engine::EnginePolicy::parse(text).unwrap();
+            assert_eq!(policy.config().image_architecture, "arm64");
+            match policy.config().image_transport {
+                crate::spark::engine::EngineImageTransport::Registry => {
+                    assert!(policy.image().contains("@sha256:"));
+                }
+                crate::spark::engine::EngineImageTransport::Local => {
+                    assert_eq!(policy.image(), policy.config().image_digest);
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "spark-agent")]
+    #[test]
     fn first_install_then_reapply_is_atomic_and_idempotent() {
         use minisign::KeyPair;
         use sha2::{Digest, Sha256};
@@ -3413,12 +4598,18 @@ mod tests {
         let executable = b"signed-aarch64-sy-release";
         let keys = KeyPair::generate_unencrypted_keypair().unwrap();
         let public_key = keys.pk.to_base64();
-        let signature = minisign::sign(None, &keys.sk, Cursor::new(executable), None, None)
-            .unwrap()
-            .into_string();
+        let signature = minisign::sign(
+            None,
+            &keys.sk,
+            Cursor::new(test_release_manifest(executable)),
+            None,
+            None,
+        )
+        .unwrap()
+        .into_string();
         let sha256 = format!("{:x}", Sha256::digest(executable));
         let bundle = signed_bundle(executable, &public_key, &signature, &sha256);
-        let release_name = format!("0.1.0-{sha256}");
+        let release_name = test_release_name(&sha256);
         let (first, first_material) = super::install_release(root.path(), &bundle).unwrap();
         assert!(first.changed);
         assert_eq!(
@@ -3433,6 +4624,11 @@ mod tests {
         );
         assert_eq!(
             std::fs::read_link(root.path().join("opt/sy-spark/current")).unwrap(),
+            PathBuf::from("releases").join(&release_name)
+        );
+        assert_eq!(
+            super::checked_release_link(root.path(), &root.path().join("opt/sy-spark/current"))
+                .unwrap(),
             PathBuf::from("releases").join(&release_name)
         );
         assert_eq!(
@@ -3484,6 +4680,50 @@ mod tests {
 
     #[cfg(feature = "spark-agent")]
     #[test]
+    fn clean_install_materializes_authoritative_catalogs_with_read_only_modes() {
+        use minisign::KeyPair;
+        use std::{io::Cursor, os::unix::fs::PermissionsExt};
+
+        let root = tempfile::tempdir().unwrap();
+        let executable = b"signed-aarch64-sy-release";
+        let keys = KeyPair::generate_unencrypted_keypair().unwrap();
+        let signature = minisign::sign(
+            None,
+            &keys.sk,
+            Cursor::new(test_release_manifest(executable)),
+            None,
+            None,
+        )
+        .unwrap()
+        .into_string();
+        let sha256 = format!("{:x}", sha2::Sha256::digest(executable));
+        let public_key = keys.pk.to_base64();
+        let bundle = signed_bundle(executable, &public_key, &signature, &sha256);
+
+        super::install_release(root.path(), &bundle).unwrap();
+
+        let mut catalogs = vec![(
+            PathBuf::from("etc/sy/spark/models.toml"),
+            include_bytes!("../../configs/sy/spark/models.toml").to_vec(),
+        )];
+        catalogs.extend(shipped_engine_documents().into_iter().map(|(path, bytes)| {
+            (
+                super::installed_engine_path(path.to_str().unwrap()).unwrap(),
+                bytes,
+            )
+        }));
+        for (relative, expected) in catalogs {
+            let path = root.path().join(relative);
+            assert_eq!(std::fs::read(&path).unwrap(), expected);
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o640
+            );
+        }
+    }
+
+    #[cfg(feature = "spark-agent")]
+    #[test]
     fn same_version_different_signed_artifacts_coexist_without_overwrite() {
         use minisign::KeyPair;
         use sha2::{Digest, Sha256};
@@ -3493,24 +4733,35 @@ mod tests {
         let keys = KeyPair::generate_unencrypted_keypair().unwrap();
         let first_bytes = b"first-signed-aarch64-release";
         let first_hash = format!("{:x}", Sha256::digest(first_bytes));
-        let first_signature = minisign::sign(None, &keys.sk, Cursor::new(first_bytes), None, None)
-            .unwrap()
-            .into_string();
+        let first_signature = minisign::sign(
+            None,
+            &keys.sk,
+            Cursor::new(test_release_manifest(first_bytes)),
+            None,
+            None,
+        )
+        .unwrap()
+        .into_string();
         let public_key = keys.pk.to_base64();
         let first = signed_bundle(first_bytes, &public_key, &first_signature, &first_hash);
         super::install_release(root.path(), &first).unwrap();
 
         let second_bytes = b"second-signed-aarch64-release";
         let second_hash = format!("{:x}", Sha256::digest(second_bytes));
-        let second_signature =
-            minisign::sign(None, &keys.sk, Cursor::new(second_bytes), None, None)
-                .unwrap()
-                .into_string();
+        let second_signature = minisign::sign(
+            None,
+            &keys.sk,
+            Cursor::new(test_release_manifest(second_bytes)),
+            None,
+            None,
+        )
+        .unwrap()
+        .into_string();
         let second = signed_bundle(second_bytes, &public_key, &second_signature, &second_hash);
         let (installed, _) = super::install_release(root.path(), &second).unwrap();
 
-        let first_name = format!("0.1.0-{first_hash}");
-        let second_name = format!("0.1.0-{second_hash}");
+        let first_name = test_release_name(&first_hash);
+        let second_name = test_release_name(&second_hash);
         assert_eq!(
             std::fs::read(
                 root.path()
@@ -3550,6 +4801,237 @@ mod tests {
 
     #[cfg(feature = "spark-agent")]
     #[test]
+    fn upgrade_replaces_shipped_catalogs_without_legacy_merge() {
+        use minisign::KeyPair;
+        use std::{io::Cursor, os::unix::fs::PermissionsExt};
+
+        let root = tempfile::tempdir().unwrap();
+        let keys = KeyPair::generate_unencrypted_keypair().unwrap();
+        let public_key = keys.pk.to_base64();
+        let documents = shipped_engine_documents();
+        let first = &documents[0];
+        let last = documents.last().unwrap();
+        let first_installed = super::installed_engine_path(first.0.to_str().unwrap()).unwrap();
+        let last_installed = super::installed_engine_path(last.0.to_str().unwrap()).unwrap();
+        for (version, executable) in [
+            ("0.1.0", b"first-signed-release".as_slice()),
+            ("0.2.0", b"second-signed-release".as_slice()),
+        ] {
+            let sha256 = format!("{:x}", sha2::Sha256::digest(executable));
+            let signature = minisign::sign(
+                None,
+                &keys.sk,
+                Cursor::new(test_release_manifest(executable)),
+                None,
+                None,
+            )
+            .unwrap()
+            .into_string();
+            let mut bundle = signed_bundle(executable, &public_key, &signature, &sha256);
+            bundle.version = version;
+            super::install_release(root.path(), &bundle).unwrap();
+            if version == "0.1.0" {
+                std::fs::write(root.path().join("etc/sy/spark/models.toml"), "stale").unwrap();
+                std::fs::write(root.path().join(&first_installed), "stale").unwrap();
+                std::fs::set_permissions(
+                    root.path().join(&last_installed),
+                    std::fs::Permissions::from_mode(0o666),
+                )
+                .unwrap();
+            }
+        }
+        assert_eq!(
+            std::fs::read(root.path().join("etc/sy/spark/models.toml")).unwrap(),
+            include_bytes!("../../configs/sy/spark/models.toml")
+        );
+        assert_eq!(
+            std::fs::read(root.path().join(&first_installed)).unwrap(),
+            first.1
+        );
+        assert_eq!(
+            std::fs::metadata(root.path().join(&last_installed))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640
+        );
+        assert!(!root.path().join("etc/sy/spark-recipes.d").exists());
+    }
+
+    #[cfg(feature = "spark-agent")]
+    #[test]
+    fn upgrade_rejects_stale_schema_and_unavailable_engine_identity() {
+        use rusqlite::Connection;
+
+        let root = tempfile::tempdir().unwrap();
+        let state_dir = root.path().join("var/lib/sy-spark");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let database = state_dir.join("state.sqlite3");
+        let connection = Connection::open(&database).unwrap();
+        connection.pragma_update(None, "user_version", 5).unwrap();
+        let stale = super::validate_rollback_state(root.path()).unwrap_err();
+        assert!(stale.message.contains("not the current release schema"));
+
+        connection.pragma_update(None, "user_version", 6).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE instances(name TEXT NOT NULL, metadata_json TEXT NOT NULL, desired_state TEXT NOT NULL);",
+            )
+            .unwrap();
+        let instance = serde_json::json!({
+            "schema":"sy.spark.instance/v2","id":format!("i_{}", "1".repeat(32)),
+            "name":"stale","model_id":"m_stale","model":"owner/model","model_commit":"a".repeat(40),
+            "engine_id":"removed-engine","engine_fingerprint":format!("sha256:{}", "b".repeat(64)),
+            "artifacts":{"schema":"sy.spark.model-artifacts/v2","format":"gguf","primary":{"path":"model.gguf","bytes":1,"sha256":null},"auxiliary":[],"quantization":"Q4_K_M","capabilities":["text_generation"],"configured_alias":null},
+            "artifact_fingerprint":format!("sha256:{}", "c".repeat(64)),"objective":"agent",
+            "resources":{"image_bytes":1,"startup_peak_bytes":1,"steady_peak_bytes":1,"compile_cache_bytes":1},
+            "generation":1,"desired":"running","observed":"failed","endpoint":null,"healthy":false,
+            "started_at":null,"startup_milliseconds":null,"last_failure":null,"restart_failures":0,
+            "restart_suppressed":false,"quarantine":null
+        });
+        connection
+            .execute(
+                "INSERT INTO instances(name,metadata_json,desired_state) VALUES('stale',?1,'running')",
+                [instance.to_string()],
+            )
+            .unwrap();
+        let engines = root.path().join("etc/sy/spark/engines");
+        std::fs::create_dir_all(&engines).unwrap();
+        let documents = shipped_engine_documents();
+        let (engine_path, engine_bytes) = &documents[0];
+        let policy =
+            crate::spark::engine::EnginePolicy::parse(std::str::from_utf8(engine_bytes).unwrap())
+                .unwrap();
+        let engine_id = policy.config().id.clone();
+        let installed = super::installed_engine_path(engine_path.to_str().unwrap()).unwrap();
+        std::fs::write(root.path().join(&installed), engine_bytes).unwrap();
+        let unavailable = super::validate_rollback_state(root.path()).unwrap_err();
+        assert!(
+            unavailable
+                .message
+                .contains("requires unavailable engine removed-engine"),
+            "{}",
+            unavailable.message
+        );
+
+        let mut compatible = instance;
+        compatible["engine_id"] = serde_json::json!(engine_id);
+        connection
+            .execute(
+                "UPDATE instances SET metadata_json=?1 WHERE name='stale'",
+                [compatible.to_string()],
+            )
+            .unwrap();
+        let missing_backup = super::validate_rollback_state(root.path()).unwrap_err();
+        assert!(missing_backup.message.contains("verified rollback backup"));
+    }
+
+    #[cfg(feature = "spark-agent")]
+    #[test]
+    fn upgrade_quarantines_only_stopped_incompatible_state() {
+        use rusqlite::Connection;
+
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("var/lib/sy-spark");
+        std::fs::create_dir_all(state.join("backups")).unwrap();
+        let connection = Connection::open(state.join("state.sqlite3")).unwrap();
+        connection.execute_batch("PRAGMA user_version=6; CREATE TABLE models(id TEXT PRIMARY KEY,repository TEXT,commit_sha TEXT,metadata_json TEXT); CREATE TABLE aliases(name TEXT PRIMARY KEY,model_id TEXT); CREATE TABLE instances(id TEXT PRIMARY KEY,name TEXT,model_id TEXT,generation INTEGER,desired_state TEXT,observed_state TEXT,metadata_json TEXT); CREATE TABLE instance_resources(instance_id TEXT); CREATE TABLE restart_failures(instance_id TEXT); CREATE TABLE benchmarks(id TEXT PRIMARY KEY,model_id TEXT,metadata_json TEXT); CREATE TABLE audit(sequence INTEGER PRIMARY KEY AUTOINCREMENT,occurred_at TEXT,actor_token_id TEXT,action TEXT,target TEXT,outcome TEXT,metadata_json TEXT); INSERT INTO models VALUES('m_old','owner/model','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','{\"schema\":\"sy.spark.model/v1\"}'); INSERT INTO aliases VALUES('old','m_old'); INSERT INTO instances VALUES('i_old','old','m_old',1,'stopped','absent','{\"schema\":\"sy.spark.instance/v1\"}'); INSERT INTO audit(occurred_at,actor_token_id,action,target,outcome,metadata_json) VALUES('before','operator','keep','unrelated','success','{}');").unwrap();
+        let evidence = super::quarantine_incompatible_state(root.path()).unwrap();
+        assert_eq!(evidence.quarantined_instances, vec!["i_old"]);
+        assert_eq!(evidence.quarantined_models, vec!["m_old"]);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM audit WHERE action='keep'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[cfg(feature = "spark-agent")]
+    #[test]
+    fn multi_engine_inventory_activates_and_rolls_back_atomically() {
+        use minisign::KeyPair;
+        use std::io::Cursor;
+
+        const MINIMUM_ENGINE_COUNT: usize = 2;
+        let engines = test_engines();
+        assert!(engines.len() >= MINIMUM_ENGINE_COUNT);
+        let root = tempfile::tempdir().unwrap();
+        let executable = b"catalog-only-release";
+        let keys = KeyPair::generate_unencrypted_keypair().unwrap();
+        let prior_engines = &engines[..engines.len() - 1];
+        let prior_manifest = test_release_manifest_for(executable, prior_engines);
+        let prior_signature =
+            minisign::sign(None, &keys.sk, Cursor::new(&prior_manifest), None, None)
+                .unwrap()
+                .into_string();
+        let public_key = keys.pk.to_base64();
+        let sha256 = format!("{:x}", sha2::Sha256::digest(executable));
+        let mut prior = signed_bundle(executable, &public_key, &prior_signature, &sha256);
+        prior.release_manifest = prior_manifest.as_bytes();
+        prior.engines = prior_engines;
+        let (prior_report, _) = super::install_release(root.path(), &prior).unwrap();
+        let prior_release = prior_report.active_release;
+        let configured = test_engine_priority(engines.last().unwrap().bytes);
+        let qualification_priority = engines
+            .iter()
+            .map(|engine| test_engine_priority(engine.bytes))
+            .max()
+            .unwrap()
+            + 1;
+        let changed = std::str::from_utf8(engines.last().unwrap().bytes)
+            .unwrap()
+            .replacen(
+                &format!("priority = {configured}"),
+                &format!("priority = {qualification_priority}"),
+                1,
+            );
+        let mut qualification = engines
+            .iter()
+            .map(|engine| super::ReleaseEngine {
+                relative_path: engine.relative_path,
+                bytes: engine.bytes,
+            })
+            .collect::<Vec<_>>();
+        qualification.last_mut().unwrap().bytes =
+            Box::leak(changed.into_bytes().into_boxed_slice());
+        let current_manifest = test_release_manifest_for(executable, &qualification);
+        let current_signature =
+            minisign::sign(None, &keys.sk, Cursor::new(&current_manifest), None, None)
+                .unwrap()
+                .into_string();
+        let mut current = signed_bundle(executable, &public_key, &current_signature, &sha256);
+        current.release_manifest = current_manifest.as_bytes();
+        current.engines = &qualification;
+        let (current_report, _) = super::install_release(root.path(), &current).unwrap();
+        assert_ne!(current_report.active_release, prior_release);
+        let added = super::installed_engine_path(engines.last().unwrap().relative_path).unwrap();
+        assert_eq!(
+            std::fs::read(root.path().join(&added)).unwrap(),
+            qualification.last().unwrap().bytes
+        );
+        assert_ne!(
+            qualification.last().unwrap().bytes,
+            engines.last().unwrap().bytes
+        );
+
+        let rollback = super::rollback_release(root.path(), false, || Ok(())).unwrap();
+
+        assert!(rollback.applied);
+        assert_eq!(
+            std::fs::read_link(root.path().join("opt/sy-spark/current")).unwrap(),
+            prior_release.strip_prefix("opt/sy-spark").unwrap()
+        );
+        assert!(!root.path().join(added).exists());
+    }
+
+    #[cfg(feature = "spark-agent")]
+    #[test]
     fn rollback_swaps_only_control_plane_release_links() {
         use sha2::Digest;
         use std::os::unix::fs::symlink;
@@ -3561,14 +5043,29 @@ mod tests {
         let second_bytes = b"second-control-plane";
         let first_hash = format!("{:x}", sha2::Sha256::digest(first_bytes));
         let second_hash = format!("{:x}", sha2::Sha256::digest(second_bytes));
-        let first = format!("0.1.0-{first_hash}");
-        let second = format!("0.1.0-{second_hash}");
+        let catalogs = test_catalog_digests();
+        let first = format!("0.1.0-{}", catalogs.release_identity(&first_hash));
+        let second = format!("0.1.0-{}", catalogs.release_identity(&second_hash));
         for (name, bytes) in [
             (&first, first_bytes.as_slice()),
             (&second, second_bytes.as_slice()),
         ] {
-            std::fs::create_dir(releases.join(name)).unwrap();
+            std::fs::create_dir_all(releases.join(name).join("configs/sy/spark/engines")).unwrap();
             std::fs::write(releases.join(name).join("sy"), bytes).unwrap();
+            std::fs::write(
+                releases.join(name).join(super::MODELS_BUNDLE_PATH),
+                include_bytes!("../../configs/sy/spark/models.toml"),
+            )
+            .unwrap();
+            for engine in test_engines() {
+                std::fs::write(releases.join(name).join(engine.relative_path), engine.bytes)
+                    .unwrap();
+            }
+            std::fs::write(
+                releases.join(name).join("SHA256SUMS"),
+                test_release_manifest(bytes),
+            )
+            .unwrap();
         }
         symlink(
             PathBuf::from("releases").join(&second),
@@ -3580,6 +5077,8 @@ mod tests {
             root.path().join("opt/sy-spark/previous"),
         )
         .unwrap();
+        std::fs::create_dir_all(root.path().join("etc/sy/spark/engines")).unwrap();
+        std::fs::write(root.path().join("etc/sy/spark/engines/stale.toml"), "stale").unwrap();
 
         let report = super::rollback_release(root.path(), false, || Ok(())).unwrap();
 
@@ -3590,6 +5089,7 @@ mod tests {
         );
         assert_eq!(report.docker_restart, "not_run");
         assert_eq!(report.host_reboot, "not_run");
+        assert!(!root.path().join("etc/sy/spark/engines/stale.toml").exists());
     }
 
     #[cfg(feature = "spark-agent")]
@@ -3617,9 +5117,15 @@ mod tests {
         let executable = b"signed-aarch64-sy-release";
         let keys = KeyPair::generate_unencrypted_keypair().unwrap();
         let public_key = keys.pk.to_base64();
-        let signature = minisign::sign(None, &keys.sk, Cursor::new(executable), None, None)
-            .unwrap()
-            .into_string();
+        let signature = minisign::sign(
+            None,
+            &keys.sk,
+            Cursor::new(test_release_manifest(executable)),
+            None,
+            None,
+        )
+        .unwrap()
+        .into_string();
         let sha256 = format!("{:x}", Sha256::digest(executable));
         let bundle = signed_bundle(executable, &public_key, &signature, &sha256);
         let root = tempfile::tempdir().unwrap();
@@ -3666,9 +5172,15 @@ mod tests {
         let executable = b"signed-aarch64-sy-release";
         let keys = KeyPair::generate_unencrypted_keypair().unwrap();
         let public_key = keys.pk.to_base64();
-        let signature = minisign::sign(None, &keys.sk, Cursor::new(executable), None, None)
-            .unwrap()
-            .into_string();
+        let signature = minisign::sign(
+            None,
+            &keys.sk,
+            Cursor::new(test_release_manifest(executable)),
+            None,
+            None,
+        )
+        .unwrap()
+        .into_string();
         let sha256 = format!("{:x}", Sha256::digest(executable));
         let bundle = signed_bundle(executable, &public_key, &signature, &sha256);
         let root = tempfile::tempdir().unwrap();
@@ -3714,9 +5226,15 @@ mod tests {
         let keys = KeyPair::generate_unencrypted_keypair().unwrap();
         let raw = keys.pk.to_base64();
         let public_key_file = keys.pk.to_box().unwrap().to_string();
-        let signature = minisign::sign(None, &keys.sk, Cursor::new(executable), None, None)
-            .unwrap()
-            .into_string();
+        let signature = minisign::sign(
+            None,
+            &keys.sk,
+            Cursor::new(test_release_manifest(executable)),
+            None,
+            None,
+        )
+        .unwrap()
+        .into_string();
         let sha256 = format!("{:x}", Sha256::digest(executable));
         for public_key in [&raw, &public_key_file] {
             let bundle = signed_bundle(executable, public_key, &signature, &sha256);
@@ -3745,6 +5263,19 @@ mod tests {
         assert!(is_application_owned(&super::InstallAction::EnsureIdentity(
             "user:sy-spark".into()
         )));
+        let source = include_str!("install.rs");
+        for forbidden in [
+            ["apt", "full-upgrade"].join(" "),
+            ["apt-get", "dist-upgrade"].join(" "),
+            ["dnf", "upgrade"].join(" "),
+            ["fwupdmgr", "update"].join(" "),
+            ["nvidia-ctk", "runtime", "configure"].join(" "),
+        ] {
+            assert!(
+                !source.contains(&forbidden),
+                "protected update path: {forbidden}"
+            );
+        }
     }
 
     #[cfg(feature = "spark-agent")]
@@ -3768,6 +5299,7 @@ mod tests {
                 probe_remote_path: format!("/tmp/sy-spark-bootstrap-{sha256}"),
                 probe_sha256: sha256.clone(),
                 probe_removed: true,
+                catalogs: test_catalog_digests(),
             },
         )
         .unwrap();
@@ -3788,9 +5320,15 @@ mod tests {
 
         let keys = KeyPair::generate_unencrypted_keypair().unwrap();
         let public_key = keys.pk.to_base64();
-        let signature = minisign::sign(None, &keys.sk, Cursor::new(executable), None, None)
-            .unwrap()
-            .into_string();
+        let signature = minisign::sign(
+            None,
+            &keys.sk,
+            Cursor::new(test_release_manifest(executable)),
+            None,
+            None,
+        )
+        .unwrap()
+        .into_string();
         let bundle = signed_bundle(executable, &public_key, &signature, &sha256);
         let root = tempfile::tempdir().unwrap();
         let (report, _) = super::install_release(root.path(), &bundle).unwrap();
@@ -3815,9 +5353,15 @@ mod tests {
         let executable = b"signed-aarch64-sy-release";
         let keys = KeyPair::generate_unencrypted_keypair().unwrap();
         let public_key = keys.pk.to_base64();
-        let signature = minisign::sign(None, &keys.sk, Cursor::new(executable), None, None)
-            .unwrap()
-            .into_string();
+        let signature = minisign::sign(
+            None,
+            &keys.sk,
+            Cursor::new(test_release_manifest(executable)),
+            None,
+            None,
+        )
+        .unwrap()
+        .into_string();
         let sha256 = format!("{:x}", Sha256::digest(executable));
         let bundle = signed_bundle(executable, &public_key, &signature, &sha256);
         let root = tempfile::tempdir().unwrap();
@@ -3889,12 +5433,18 @@ mod tests {
         let executable = b"signed-aarch64-sy-release";
         let keys = KeyPair::generate_unencrypted_keypair().unwrap();
         let public_key = keys.pk.to_base64();
-        let signature = minisign::sign(None, &keys.sk, Cursor::new(executable), None, None)
-            .unwrap()
-            .into_string();
+        let signature = minisign::sign(
+            None,
+            &keys.sk,
+            Cursor::new(test_release_manifest(executable)),
+            None,
+            None,
+        )
+        .unwrap()
+        .into_string();
         let sha256 = format!("{:x}", Sha256::digest(executable));
         let bundle = signed_bundle(executable, &public_key, &signature, &sha256);
-        let release_path = format!("opt/sy-spark/releases/0.1.0-{sha256}");
+        let release_path = format!("opt/sy-spark/releases/{}", test_release_name(&sha256));
         let root = tempfile::tempdir().unwrap();
         let result = super::install_release_with_integration(root.path(), &bundle, || {
             Err(super::configuration_error("injected integration failure"))
@@ -3927,12 +5477,18 @@ mod tests {
         let executable = b"signed-aarch64-sy-release";
         let keys = KeyPair::generate_unencrypted_keypair().unwrap();
         let public_key = keys.pk.to_base64();
-        let signature = minisign::sign(None, &keys.sk, Cursor::new(executable), None, None)
-            .unwrap()
-            .into_string();
+        let signature = minisign::sign(
+            None,
+            &keys.sk,
+            Cursor::new(test_release_manifest(executable)),
+            None,
+            None,
+        )
+        .unwrap()
+        .into_string();
         let sha256 = format!("{:x}", Sha256::digest(executable));
         let first = signed_bundle(executable, &public_key, &signature, &sha256);
-        let first_release = format!("0.1.0-{sha256}");
+        let first_release = test_release_name(&sha256);
         let root = tempfile::tempdir().unwrap();
         super::install_release(root.path(), &first).unwrap();
         for (relative, prior) in [
@@ -3970,7 +5526,10 @@ mod tests {
         assert!(!root
             .path()
             .join("opt/sy-spark/releases")
-            .join(format!("0.2.0-{sha256}"))
+            .join(format!(
+                "0.2.0-{}",
+                test_catalog_digests().release_identity(&sha256)
+            ))
             .exists());
         for (relative, prior) in [
             ("etc/sy/spark-agent.toml", b"prior-config".as_slice()),
@@ -4074,11 +5633,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn confinement_allows_catalog_reads_but_not_writes() {
+        let agent_unit = include_str!("../../configs/systemd/system/sy-spark-agent.service");
+        let executor_unit = include_str!("../../configs/systemd/system/sy-spark-executor.service");
+        let agent_profile = include_str!("../../configs/apparmor.d/sy-spark-agent");
+        let executor_profile = include_str!("../../configs/apparmor.d/sy-spark-executor");
+
+        assert!(agent_unit.contains(
+            "ReadOnlyPaths=/etc/sy/spark-agent.toml /etc/sy/spark/models.toml /etc/sy/spark/engines"
+        ));
+        assert!(executor_unit.contains("ReadOnlyPaths=/etc/sy/spark-executor.toml /etc/sy/spark-agent.toml /etc/sy/spark/engines /var/lib/sy-spark/huggingface"));
+        assert!(agent_profile.contains("/etc/sy/spark/models.toml r,"));
+        assert!(agent_profile.contains("/etc/sy/spark/engines/*.toml r,"));
+        assert!(executor_profile.contains("/etc/sy/spark/engines/*.toml r,"));
+        assert!(!executor_profile.contains("/etc/sy/spark/models.toml r,"));
+        for profile in [agent_profile, executor_profile] {
+            assert!(profile.contains("deny /etc/sy/spark/** wklx,"));
+            assert!(!profile.contains("/etc/sy/spark/** rw"));
+        }
+        for asset in [agent_unit, executor_unit, agent_profile, executor_profile] {
+            assert!(!asset.contains("spark-recipes"));
+        }
+        if let Ok(parser) = which::which("apparmor_parser") {
+            let status = std::process::Command::new(parser)
+                .args([
+                    "-Q",
+                    "configs/apparmor.d/sy-spark-agent",
+                    "configs/apparmor.d/sy-spark-executor",
+                ])
+                .status()
+                .unwrap();
+            assert!(status.success(), "AppArmor catalog policy does not parse");
+        }
+    }
+
     #[cfg(feature = "spark-agent")]
     #[test]
-    fn host_integration_grants_agent_access_to_engine_policy() {
+    fn host_integration_grants_agent_access_to_engine_catalog() {
         assert!(super::EXECUTOR_BOUNDARY_CHOWN_ARGS.contains(&"/etc/sy/spark"));
-        assert!(super::EXECUTOR_BOUNDARY_CHOWN_ARGS.contains(&"/etc/sy/spark/engine.toml"));
+        assert!(super::EXECUTOR_BOUNDARY_CHOWN_ARGS.contains(&"/etc/sy/spark/engines"));
+        assert!(super::EXECUTOR_BOUNDARY_CHOWN_ARGS.contains(&"/etc/sy/spark/models.toml"));
     }
 
     #[test]
@@ -4105,7 +5700,7 @@ mod tests {
             "ProtectSystem=strict",
             "ProcSubset=all",
             "RestrictAddressFamilies=AF_UNIX",
-            "ReadOnlyPaths=/etc/sy/spark-executor.toml /etc/sy/spark-agent.toml /etc/sy/spark/engine.toml /etc/sy/spark-recipes.d /var/lib/sy-spark/huggingface",
+            "ReadOnlyPaths=/etc/sy/spark-executor.toml /etc/sy/spark-agent.toml /etc/sy/spark/engines /var/lib/sy-spark/huggingface",
             "ReadWritePaths=/run/sy-spark /var/run/docker.sock /var/lib/sy-spark/executor /var/lib/sy-spark/compile-cache /sys/fs/cgroup/system.slice",
             "MemoryMax=64M",
             "WatchdogSec=30s",
@@ -4118,7 +5713,7 @@ mod tests {
         assert!(agent_unit.contains("Wants=network-online.target sy-spark-executor.service"));
         for permission in [
             "network unix stream,",
-            "/etc/sy/spark/engine.toml r,",
+            "/etc/sy/spark/engines/*.toml r,",
             "/var/lib/sy-spark/huggingface/** r,",
             "/run/sy-spark/executor.sock rwk,",
             "/var/run/docker.sock rw,",
@@ -4143,13 +5738,35 @@ mod tests {
         assert!(!profile.contains(&memory_rule.replace(" r,", " rw,")));
         let source = include_str!("executor.rs");
         assert!(source.contains("Permissions::from_mode(0o660)"));
+        if let Ok(systemd_analyze) = which::which("systemd-analyze") {
+            let output = std::process::Command::new(systemd_analyze)
+                .args(["verify", "configs/systemd/system/sy-spark-executor.service"])
+                .output()
+                .unwrap();
+            let hard_errors = String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .filter(|line| {
+                    !line.contains("/opt/sy-spark/current/sy") || !line.contains("executable")
+                })
+                .filter(|line| !line.trim().is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            assert!(
+                hard_errors.is_empty(),
+                "systemd-analyze verify: {hard_errors:?}"
+            );
+        }
     }
 
     #[cfg(feature = "spark-agent")]
     #[test]
     fn installer_materializes_the_actual_numeric_service_uid() {
         let root = tempfile::tempdir().unwrap();
-        for relative in ["etc/sy", "etc/systemd/system", "etc/apparmor.d"] {
+        for relative in [
+            "etc/sy/spark/engines",
+            "etc/systemd/system",
+            "etc/apparmor.d",
+        ] {
             std::fs::create_dir_all(root.path().join(relative)).unwrap();
         }
         let mut report = super::InstallReport {
@@ -4159,7 +5776,8 @@ mod tests {
             preceding_release: None,
             active_release: PathBuf::from("opt/sy-spark/releases/test"),
         };
-        super::write_policy_assets(root.path(), "10.1.30.143", 4242, &mut report).unwrap();
+        let bundle = signed_bundle(b"fixture", "key", "signature", "digest");
+        super::write_policy_assets(root.path(), &bundle, 4242, &mut report).unwrap();
         let config =
             std::fs::read_to_string(root.path().join("etc/sy/spark-executor.toml")).unwrap();
         assert!(config.contains("agent_uid = 4242"));
@@ -4170,7 +5788,11 @@ mod tests {
     #[test]
     fn installer_materializes_the_supervision_target() {
         let root = tempfile::tempdir().unwrap();
-        for relative in ["etc/sy", "etc/systemd/system", "etc/apparmor.d"] {
+        for relative in [
+            "etc/sy/spark/engines",
+            "etc/systemd/system",
+            "etc/apparmor.d",
+        ] {
             std::fs::create_dir_all(root.path().join(relative)).unwrap();
         }
         let mut report = super::InstallReport {
@@ -4180,7 +5802,8 @@ mod tests {
             preceding_release: None,
             active_release: PathBuf::from("opt/sy-spark/releases/test"),
         };
-        super::write_policy_assets(root.path(), "10.1.30.143", 4242, &mut report).unwrap();
+        let bundle = signed_bundle(b"fixture", "key", "signature", "digest");
+        super::write_policy_assets(root.path(), &bundle, 4242, &mut report).unwrap();
 
         let target =
             std::fs::read_to_string(root.path().join("etc/systemd/system/sy-spark.target"))

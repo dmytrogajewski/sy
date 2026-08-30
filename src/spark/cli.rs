@@ -8,10 +8,10 @@ use serde::Serialize;
 use super::{
     client::{self, SparkClient},
     wire::{
-        CertificateStatusDocument, DoctorDocument, DownloadRequest, ModelDocument,
-        ModelListDocument, OperationDocument, OperationListDocument, RemoveModelRequest,
-        ServeAdmissionRequest, ServeRequest, StatusDocument, StopRequest, TokenCreateRequest,
-        TokenCreatedDocument, TokenListDocument,
+        CertificateStatusDocument, DoctorDocument, DownloadRequest, ModelArtifactSelectorDocument,
+        ModelDocument, ModelListDocument, OperationDocument, OperationListDocument,
+        RemoveModelRequest, ServeAdmissionRequest, ServeRequest, StatusDocument, StopRequest,
+        TokenCreateRequest, TokenCreatedDocument, TokenListDocument,
     },
     EXIT_USAGE,
 };
@@ -20,8 +20,19 @@ use super::{
     EXIT_UNREACHABLE,
 };
 
-const DEFAULT_PROBE: &str = "/usr/libexec/sy/spark-bootstrap-aarch64";
 const DEFAULT_LISTEN_PORT: u16 = 9843;
+
+fn default_probe(env: &dyn EnvSource) -> PathBuf {
+    let data = env
+        .get("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            env.get("HOME")
+                .map(|home| PathBuf::from(home).join(".local/share"))
+        })
+        .unwrap_or_else(|| PathBuf::from("/usr/local/share"));
+    data.join("sy/spark-release/sy-aarch64")
+}
 
 #[derive(Debug, Args)]
 #[command(
@@ -39,12 +50,12 @@ pub struct SparkCli {
 pub enum SparkCommand {
     /// Inspect the appliance and print the exact non-mutating installation plan.
     #[command(
-        after_help = "Examples:\n  sy spark dgx-spark install --dry-run --json\n  sy spark dgx-spark install --yes --release-signature sy-aarch64.minisig --release-public-key sy-release.pub\n\nEnvironment:\n  SY_SPARK_DRY_RUN, SY_SPARK_YES, SY_SPARK_JSON, SY_SPARK_PROBE, SY_SPARK_LISTEN_ADDRESS, SY_SPARK_LISTEN_PORT, SY_SPARK_RELEASE_SIGNATURE, SY_SPARK_RELEASE_PUBLIC_KEY, SY_SPARK_CONFIG_DIR\n  Flags override environment values, which override declarative defaults.\n\nAuthentication:\n  OpenSSH owns known_hosts, agents, hardware tokens, keyboard-interactive and interactive password prompts. Credentials are never accepted as sy arguments or stored by sy.\n\nExit codes:\n  0 success; 2 usage/local configuration; 4 OpenSSH/SFTP/agent unreachable, TLS identity mismatch, or authentication failure.\n\nSecurity:\n  Dry-run uploads one content-addressed probe, invokes only `spark bootstrap inspect`, verifies its hash, and removes that exact path. Approved install uploads only signed content-addressed release inputs and invokes the fixed bootstrap activation entrypoint. No arbitrary remote command is accepted."
+        after_help = "Examples:\n  sy spark dgx-spark install --dry-run --json\n  sy spark dgx-spark install --yes --release-manifest SHA256SUMS --release-signature SHA256SUMS.minisig --release-public-key sy-release.pub\n\nEnvironment:\n  SY_SPARK_DRY_RUN, SY_SPARK_YES, SY_SPARK_JSON, SY_SPARK_PROBE, SY_SPARK_RELEASE_MANIFEST, SY_SPARK_LISTEN_ADDRESS, SY_SPARK_LISTEN_PORT, SY_SPARK_RELEASE_SIGNATURE, SY_SPARK_RELEASE_PUBLIC_KEY, SY_SPARK_CONFIG_DIR\n  Flags override environment values, which override declarative defaults.\n\nAuthentication:\n  OpenSSH owns known_hosts, agents, hardware tokens, keyboard-interactive and interactive password prompts. Credentials are never accepted as sy arguments or stored by sy.\n\nExit codes:\n  0 success; 2 usage/local configuration; 4 OpenSSH/SFTP/agent unreachable, TLS identity mismatch, or authentication failure.\n\nSecurity:\n  Dry-run uploads one content-addressed probe, invokes only `spark bootstrap inspect`, verifies its hash, and removes that exact path. Approved install uploads only signed content-addressed release inputs and invokes the fixed bootstrap activation entrypoint. No arbitrary remote command is accepted."
     )]
     Install(InstallArgs),
     /// Upgrade the signed control plane side by side without stopping engines.
     #[command(
-        after_help = "Examples:\n  sy spark dgx-spark upgrade --dry-run --json\n  sy spark dgx-spark upgrade --yes --release-signature sy-aarch64.minisig --release-public-key sy-release.pub --json\n\nEnvironment:\n  SY_SPARK_DRY_RUN, SY_SPARK_YES, SY_SPARK_JSON, SY_SPARK_PROBE, SY_SPARK_RELEASE_SIGNATURE, SY_SPARK_RELEASE_PUBLIC_KEY, SY_SPARK_CONFIG_DIR\n\nExit codes:\n  0 success; 2 usage/local configuration; 3 compatibility or safety rejection; 4 SSH, TLS, or agent unreachable."
+        after_help = "Examples:\n  sy spark dgx-spark upgrade --dry-run --json\n  sy spark dgx-spark upgrade --yes --release-manifest SHA256SUMS --release-signature SHA256SUMS.minisig --release-public-key sy-release.pub --json\n\nEnvironment:\n  SY_SPARK_DRY_RUN, SY_SPARK_YES, SY_SPARK_JSON, SY_SPARK_PROBE, SY_SPARK_RELEASE_MANIFEST, SY_SPARK_RELEASE_SIGNATURE, SY_SPARK_RELEASE_PUBLIC_KEY, SY_SPARK_CONFIG_DIR\n\nExit codes:\n  0 success; 2 usage/local configuration; 3 compatibility or safety rejection; 4 SSH, TLS, or agent unreachable."
     )]
     Upgrade(InstallArgs),
     /// Atomically return to the verified preceding control-plane release.
@@ -74,30 +85,48 @@ pub enum SparkCommand {
     Token(TokenArgs),
     /// Acquire and verify one immutable Hugging Face model snapshot.
     #[command(
-        after_help = "Example:\n  sy spark dgx-spark download ornith-ai/Ornith-1.5-9B --alias ornith-1.5:9b --detach --json\n\nEnvironment:\n  SY_SPARK_REVISION, SY_SPARK_ALIAS, SY_SPARK_UPDATE_ALIAS, SY_SPARK_DETACH, SY_SPARK_DRY_RUN, SY_SPARK_JSON, SY_SPARK_CONFIG_DIR"
+        after_help = "Examples:\n  sy spark dgx-spark download ornith-1.5:35b --dry-run --json\n  sy spark dgx-spark download ornith-1.5:35b\n  sy spark dgx-spark download owner/model --revision <commit> --artifact model.gguf --auxiliary projector=mmproj.gguf --alias model:q4\n\nAuxiliaries require ROLE=PATH. ROLE is a lowercase identifier that the selected engine configuration must bind or explicitly ignore.\n\nEnvironment:\n  SY_SPARK_REVISION, SY_SPARK_ALIAS, SY_SPARK_ARTIFACT, SY_SPARK_AUXILIARY, SY_SPARK_UPDATE_ALIAS, SY_SPARK_DETACH, SY_SPARK_DRY_RUN, SY_SPARK_JSON, SY_SPARK_CONFIG_DIR"
     )]
     Download(DownloadArgs),
     /// Start one managed model with the configured inference engine.
     #[command(
-        after_help = "Examples:\n  sy spark dgx-spark serve ornith-1.5:9b\n  sy spark dgx-spark serve ornith-1.5:9b --dry-run --json\n\nServe starts the root-configured digest-pinned engine for any verified compatible model. The dry-run performs admission without Docker or GPU side effects.\n\nExit codes:\n  0 success; 1 unexpected failure; 2 usage/local configuration; 3 remote policy/state rejection; 4 unreachable, TLS pin mismatch, or authentication failure."
+        after_help = "Examples:\n  sy spark dgx-spark serve ornith-1.5:35b\n  sy spark dgx-spark serve ornith-1.5:35b --dry-run --json\n\nServe starts the configured digest-pinned engine for any verified compatible model. The dry-run performs admission without Docker or GPU side effects.\n\nEnvironment:\n  SY_SPARK_INSTANCE_NAME, SY_SPARK_DETACH, SY_SPARK_DRY_RUN, SY_SPARK_JSON, SY_SPARK_IDEMPOTENCY_KEY, SY_SPARK_CONFIG_DIR\n\nExit codes:\n  0 success; 1 unexpected failure; 2 usage/local configuration; 3 remote policy/state rejection; 4 unreachable, TLS pin mismatch, or authentication failure."
     )]
     Serve(ServeArgs),
     /// Configure and launch a local coding agent against a managed Spark model.
     #[command(
-        after_help = "Examples:\n  sy spark dgx-spark launch codex --model ornith-1.5:9b\n  sy spark dgx-spark launch claude --model ornith-1.5:9b -- --permission-mode plan\n  sy spark dgx-spark launch opencode --config --model ornith-1.5:9b\n  sy spark dgx-spark launch codex --restore\n\nArguments after `--` are passed directly to the selected local agent without a shell. The Spark administrator credential is never given to the child process.\n\nEnvironment:\n  SY_SPARK_LAUNCH_MODEL, SY_SPARK_LAUNCH_CONFIG, SY_SPARK_LAUNCH_RESTORE, SY_SPARK_YES, SY_SPARK_DRY_RUN, SY_SPARK_JSON, SY_SPARK_CONFIG_DIR"
+        after_help = "Examples:\n  sy spark dgx-spark launch codex --model ornith-1.5:35b\n  sy spark dgx-spark launch claude --model ornith-1.5:35b -- --permission-mode plan\n  sy spark dgx-spark launch opencode --config --model ornith-1.5:35b\n  sy spark dgx-spark launch codex --model ornith-1.5:35b --dry-run --json\n\nArguments after `--` are passed directly to the selected local agent without a shell. The Spark administrator credential is never given to the child process.\n\nEnvironment:\n  SY_SPARK_LAUNCH_MODEL, SY_SPARK_LAUNCH_CONFIG, SY_SPARK_LAUNCH_RESTORE, SY_SPARK_YES, SY_SPARK_DRY_RUN, SY_SPARK_JSON, SY_SPARK_CONFIG_DIR"
     )]
     Launch(LaunchArgs),
-    /// List desired and observed managed model instances.
+    /// List currently active managed model processes.
+    #[command(
+        after_help = "Examples:\n  sy spark dgx-spark ps\n  sy spark dgx-spark ps --json\n\nThe default output is a compact table. Absent and failed historical instances are omitted.\n\nEnvironment:\n  SY_SPARK_JSON, SY_SPARK_CONFIG_DIR"
+    )]
     Ps(ReadArgs),
     /// Read bounded redacted logs for one managed instance.
+    #[command(
+        after_help = "Examples:\n  sy spark dgx-spark logs ornith --limit 100\n  sy spark dgx-spark logs ornith --json\n\nEnvironment:\n  SY_SPARK_LOG_CURSOR, SY_SPARK_LOG_LIMIT, SY_SPARK_FOLLOW, SY_SPARK_JSON, SY_SPARK_CONFIG_DIR"
+    )]
     Logs(LogsArgs),
     /// Persist stopped intent, drain, and remove one managed instance.
+    #[command(
+        after_help = "Examples:\n  sy spark dgx-spark stop ornith --dry-run --json\n  sy spark dgx-spark stop ornith\n\nEnvironment:\n  SY_SPARK_STOP_TIMEOUT_SECONDS, SY_SPARK_DRY_RUN, SY_SPARK_JSON, SY_SPARK_IDEMPOTENCY_KEY, SY_SPARK_CONFIG_DIR"
+    )]
     Stop(StopArgs),
-    /// List complete verified local model snapshots.
+    /// List verified local models available to run.
+    #[command(
+        after_help = "Examples:\n  sy spark dgx-spark ls\n  sy spark dgx-spark ls --json\n\nThe default output is a compact table. Use `show` or `--json` for complete identity and provenance.\n\nEnvironment:\n  SY_SPARK_JSON, SY_SPARK_CONFIG_DIR"
+    )]
     Ls(ReadArgs),
     /// Show immutable identity, provenance, aliases, and references for one model.
+    #[command(
+        after_help = "Examples:\n  sy spark dgx-spark show ornith-1.5:35b\n  sy spark dgx-spark show ornith-1.5:35b --json\n\nEnvironment:\n  SY_SPARK_JSON, SY_SPARK_CONFIG_DIR"
+    )]
     Show(ModelReadArgs),
     /// Preview or remove only unreferenced native-cache model data.
+    #[command(
+        after_help = "Examples:\n  sy spark dgx-spark rm ornith-1.5:35b --dry-run --json\n  sy spark dgx-spark rm ornith-1.5:35b --yes\n\nEnvironment:\n  SY_SPARK_YES, SY_SPARK_DRY_RUN, SY_SPARK_JSON, SY_SPARK_IDEMPOTENCY_KEY, SY_SPARK_CONFIG_DIR"
+    )]
     Rm(RemoveArgs),
     /// Render a user-level client configuration without reading or writing its token.
     #[command(
@@ -290,6 +319,12 @@ pub struct DownloadArgs {
     pub revision: String,
     #[arg(long, env = "SY_SPARK_ALIAS")]
     pub alias: Option<String>,
+    /// Override automatic artifact selection with an exact primary path.
+    #[arg(long, env = "SY_SPARK_ARTIFACT")]
+    pub artifact: Option<String>,
+    /// Exact ROLE=PATH auxiliary; repeat for every engine-bound artifact.
+    #[arg(long, env = "SY_SPARK_AUXILIARY", value_delimiter = ',')]
+    pub auxiliary: Vec<ModelArtifactSelectorDocument>,
     #[arg(long, env = "SY_SPARK_UPDATE_ALIAS")]
     pub update_alias: bool,
     #[arg(long, env = "SY_SPARK_DETACH")]
@@ -456,6 +491,12 @@ pub struct ActivateArgs {
     #[arg(long)]
     pub manifest_sha256: String,
     #[arg(long)]
+    pub release_manifest: PathBuf,
+    #[arg(long)]
+    pub models: PathBuf,
+    #[arg(long = "engine", required = true)]
+    pub engines: Vec<String>,
+    #[arg(long)]
     pub version: String,
     #[arg(long)]
     pub listen_address: String,
@@ -479,16 +520,19 @@ pub struct InstallArgs {
     /// ARM64 feature-minimal sy probe artifact.
     #[arg(long, value_name = "PATH", env = "SY_SPARK_PROBE")]
     pub probe: Option<PathBuf>,
+    /// Signed SHA256SUMS inventory beside the separate release payload files.
+    #[arg(long, value_name = "PATH", env = "SY_SPARK_RELEASE_MANIFEST")]
+    pub release_manifest: Option<PathBuf>,
     /// Explicit LAN address for the HTTPS listener.
     #[arg(long, value_name = "IP", env = "SY_SPARK_LISTEN_ADDRESS")]
     pub listen_address: Option<String>,
     /// HTTPS listener port (default 9843).
     #[arg(long, value_name = "PORT", env = "SY_SPARK_LISTEN_PORT")]
     pub listen_port: Option<u16>,
-    /// Minisign signature for the ARM64 release (required with --yes).
+    /// Minisign signature for the release SHA256SUMS inventory (required with --yes).
     #[arg(long, value_name = "PATH", env = "SY_SPARK_RELEASE_SIGNATURE")]
     pub release_signature: Option<PathBuf>,
-    /// Pinned minisign public key for the ARM64 release (required with --yes).
+    /// Pinned minisign public key for the signed inventory (required with --yes).
     #[arg(long, value_name = "PATH", env = "SY_SPARK_RELEASE_PUBLIC_KEY")]
     pub release_public_key: Option<PathBuf>,
     /// Protected local Spark configuration root.
@@ -504,6 +548,7 @@ impl InstallArgs {
             yes: false,
             json: true,
             probe: None,
+            release_manifest: None,
             listen_address: None,
             listen_port: None,
             release_signature: None,
@@ -542,6 +587,7 @@ struct ResolvedInstall {
     yes: bool,
     json: bool,
     probe: PathBuf,
+    release_manifest: PathBuf,
     listen_address: Option<String>,
     listen_port: u16,
     release_signature: Option<PathBuf>,
@@ -567,7 +613,12 @@ fn resolve_install(args: &InstallArgs, env: &dyn EnvSource) -> Result<ResolvedIn
         .probe
         .clone()
         .or_else(|| env.get("SY_SPARK_PROBE").map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_PROBE));
+        .unwrap_or_else(|| default_probe(env));
+    let release_manifest = args
+        .release_manifest
+        .clone()
+        .or_else(|| env.get("SY_SPARK_RELEASE_MANIFEST").map(PathBuf::from))
+        .unwrap_or_else(|| probe.with_file_name("SHA256SUMS"));
     let listen_address = args
         .listen_address
         .clone()
@@ -587,6 +638,7 @@ fn resolve_install(args: &InstallArgs, env: &dyn EnvSource) -> Result<ResolvedIn
         yes,
         json,
         probe,
+        release_manifest,
         listen_address,
         listen_port,
         release_signature: args.release_signature.clone(),
@@ -674,6 +726,8 @@ fn dispatch_download(host: &str, args: DownloadArgs) -> Result<(), SparkError> {
         repository: args.repository,
         revision: args.revision,
         alias: args.alias,
+        artifact: args.artifact,
+        auxiliary: args.auxiliary,
         update_alias: args.update_alias,
         dry_run: args.dry_run,
     };
@@ -683,7 +737,12 @@ fn dispatch_download(host: &str, args: DownloadArgs) -> Result<(), SparkError> {
         let plan = client
             .download_plan(&key, &request)
             .map_err(SparkError::from_client)?;
-        return render_or_print(args.json, &plan);
+        if args.json {
+            print!("{}", render_json(&plan)?);
+        } else {
+            print!("{}", render_download_plan_human(&plan)?);
+        }
+        return Ok(());
     }
     let operation = client
         .download(&key, &request)
@@ -744,22 +803,164 @@ fn dispatch_serve(host: &str, args: ServeArgs) -> Result<(), SparkError> {
 
 fn dispatch_instances(host: &str, args: ReadArgs) -> Result<(), SparkError> {
     let client = load_client(host, args.config_dir)?;
-    let document = client.instances().map_err(SparkError::from_client)?;
+    let document = active_instances(client.instances().map_err(SparkError::from_client)?);
     if args.json {
         print!("{}", render_json(&document)?);
     } else {
-        for instance in &document.instances {
-            println!(
-                "{}  {}  desired={:?} observed={:?} healthy={}",
-                instance.name,
-                instance.model,
-                instance.desired,
-                instance.observed,
-                instance.healthy
-            );
-        }
+        print!("{}", render_instance_list_human(&document));
     }
     Ok(())
+}
+
+fn active_instances(
+    mut document: super::wire::InstanceListDocument,
+) -> super::wire::InstanceListDocument {
+    use super::wire::InstanceObservedState::{Absent, Failed};
+    document
+        .instances
+        .retain(|instance| !matches!(instance.observed, Absent | Failed));
+    document
+}
+
+fn render_table<const COLUMNS: usize>(
+    headers: [&str; COLUMNS],
+    rows: &[[String; COLUMNS]],
+) -> String {
+    let widths = std::array::from_fn(|column| {
+        rows.iter()
+            .map(|row| row[column].chars().count())
+            .max()
+            .unwrap_or(0)
+            .max(headers[column].chars().count())
+    });
+    let mut output = String::new();
+    append_table_row(&mut output, &headers, &widths);
+    for row in rows {
+        let cells = std::array::from_fn(|column| row[column].as_str());
+        append_table_row(&mut output, &cells, &widths);
+    }
+    output
+}
+
+fn append_table_row<const COLUMNS: usize>(
+    output: &mut String,
+    cells: &[&str; COLUMNS],
+    widths: &[usize; COLUMNS],
+) {
+    for (column, cell) in cells.iter().enumerate() {
+        if column > 0 {
+            output.push_str("  ");
+        }
+        output.push_str(cell);
+        if column + 1 < COLUMNS {
+            output.extend(std::iter::repeat_n(
+                ' ',
+                widths[column].saturating_sub(cell.chars().count()),
+            ));
+        }
+    }
+    output.push('\n');
+}
+
+fn render_instance_list_human(document: &super::wire::InstanceListDocument) -> String {
+    let rows = document
+        .instances
+        .iter()
+        .map(|instance| {
+            let model = instance
+                .artifacts
+                .configured_alias
+                .as_deref()
+                .unwrap_or_else(|| {
+                    instance
+                        .model
+                        .strip_prefix("huggingface:")
+                        .unwrap_or(&instance.model)
+                        .split_once('@')
+                        .map_or(instance.model.as_str(), |(repository, _)| repository)
+                });
+            [
+                instance.name.clone(),
+                model.to_owned(),
+                instance.engine_id.clone(),
+                match instance.context_window {
+                    0 => "-".into(),
+                    tokens if tokens % 1024 == 0 => format!("{}K", tokens / 1024),
+                    tokens => tokens.to_string(),
+                },
+                format!("{:?}", instance.observed).to_ascii_lowercase(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    render_table(["NAME", "MODEL", "ENGINE", "CONTEXT", "STATE"], &rows)
+}
+
+fn render_instance_human(instance: &super::wire::InstanceDocument) -> String {
+    format!(
+        "{}  {}  desired={:?} observed={:?} healthy={}\n  engine: {}\n  engine fingerprint: {}\n  artifact: {} ({:?}, {})\n  artifact fingerprint: {}\n",
+        instance.name, instance.model, instance.desired, instance.observed, instance.healthy,
+        instance.engine_id, instance.engine_fingerprint, instance.artifacts.primary.path,
+        instance.artifacts.format, instance.artifacts.quantization.as_deref().unwrap_or("unknown"),
+        instance.artifact_fingerprint,
+    )
+}
+
+#[derive(Serialize)]
+struct OperatorLogDocument<'a> {
+    schema: &'static str,
+    instance_id: &'a str,
+    generation: u64,
+    engine_id: &'a str,
+    engine_fingerprint: &'a str,
+    artifacts: &'a super::wire::ModelArtifactsDocument,
+    artifact_fingerprint: &'a str,
+    cursor: u64,
+    next_cursor: u64,
+    truncated: bool,
+    lines: &'a [String],
+}
+
+fn operator_logs<'a>(
+    logs: &'a super::wire::EngineLogDocument,
+    instance: &'a super::wire::InstanceDocument,
+) -> OperatorLogDocument<'a> {
+    OperatorLogDocument {
+        schema: "sy.spark.engine-logs/v2",
+        instance_id: &logs.instance_id,
+        generation: logs.generation,
+        engine_id: &instance.engine_id,
+        engine_fingerprint: &instance.engine_fingerprint,
+        artifacts: &instance.artifacts,
+        artifact_fingerprint: &instance.artifact_fingerprint,
+        cursor: logs.cursor,
+        next_cursor: logs.next_cursor,
+        truncated: logs.truncated,
+        lines: &logs.lines,
+    }
+}
+
+fn render_logs_json(
+    logs: &super::wire::EngineLogDocument,
+    instance: &super::wire::InstanceDocument,
+) -> Result<String, SparkError> {
+    render_json(&operator_logs(logs, instance))
+}
+
+fn render_logs_human(
+    logs: &super::wire::EngineLogDocument,
+    instance: &super::wire::InstanceDocument,
+    include_identity: bool,
+) -> String {
+    let mut output = if include_identity {
+        render_instance_human(instance)
+    } else {
+        String::new()
+    };
+    for line in &logs.lines {
+        output.push_str(line);
+        output.push('\n');
+    }
+    output
 }
 
 fn dispatch_stop(host: &str, args: StopArgs) -> Result<(), SparkError> {
@@ -786,18 +987,27 @@ fn dispatch_stop(host: &str, args: StopArgs) -> Result<(), SparkError> {
 
 fn dispatch_logs(host: &str, args: LogsArgs) -> Result<(), SparkError> {
     let client = load_client(host, args.config_dir)?;
+    let instances = client.instances().map_err(SparkError::from_client)?;
+    let instance = instances
+        .instances
+        .iter()
+        .find(|instance| instance.id == args.instance || instance.name == args.instance)
+        .ok_or_else(|| SparkError::usage("Spark instance was not found"))?;
     let mut cursor = args.cursor;
+    let mut include_identity = true;
     loop {
         let document = client
             .instance_logs(&args.instance, cursor, args.limit)
             .map_err(SparkError::from_client)?;
         if !args.follow || !document.lines.is_empty() {
             if args.json {
-                print!("{}", render_json(&document)?);
+                print!("{}", render_logs_json(&document, instance)?);
             } else {
-                for line in &document.lines {
-                    println!("{line}");
-                }
+                print!(
+                    "{}",
+                    render_logs_human(&document, instance, include_identity)
+                );
+                include_identity = false;
             }
         }
         if !args.follow {
@@ -812,9 +1022,9 @@ fn dispatch_models(host: &str, args: ReadArgs) -> Result<(), SparkError> {
     let client = load_client(host, args.config_dir)?;
     let models = client.list_models().map_err(SparkError::from_client)?;
     if args.json {
-        print!("{}", render_json(&models)?);
+        print!("{}", render_model_list_json(&models)?);
     } else {
-        render_model_list(&models);
+        print!("{}", render_model_list_human(&models)?);
     }
     Ok(())
 }
@@ -825,9 +1035,9 @@ fn dispatch_show(host: &str, args: ModelReadArgs) -> Result<(), SparkError> {
     let model = resolve_model(&models, &args.model)?;
     let model = client.model(&model.id).map_err(SparkError::from_client)?;
     if args.json {
-        print!("{}", render_json(&model)?);
+        print!("{}", render_model_json(&model)?);
     } else {
-        render_model(&model);
+        print!("{}", render_model_human(&model)?);
     }
     Ok(())
 }
@@ -883,27 +1093,124 @@ fn resolve_model<'a>(
     }
 }
 
-fn render_model_list(document: &ModelListDocument) {
-    for model in &document.models {
-        println!(
-            "{}  {}  {}  {} bytes",
-            model.id, model.repository, model.commit, model.logical_bytes
-        );
-    }
+fn render_model_list_human(document: &ModelListDocument) -> Result<String, SparkError> {
+    let rows = document
+        .models
+        .iter()
+        .map(|model| {
+            let id = model.id.strip_prefix("m_").unwrap_or(&model.id);
+            [
+                model.aliases.first().unwrap_or(&model.repository).clone(),
+                id[..id.len().min(12)].to_owned(),
+                crate::disk::human_bytes(model.logical_bytes),
+                model.verified_at.get(..10).unwrap_or("-").to_owned(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    Ok(render_table(["NAME", "ID", "SIZE", "MODIFIED"], &rows))
 }
 
-fn render_model(model: &ModelDocument) {
-    println!("{}", model.canonical);
-    println!("snapshot: {}", model.snapshot);
-    println!("logical bytes: {}", model.logical_bytes);
-    println!("unique bytes: {}", model.unique_bytes);
-    println!("transport: {}", model.transport);
+#[derive(Serialize)]
+struct OperatorModelDocument<'a> {
+    schema: &'static str,
+    id: &'a str,
+    canonical: &'a str,
+    repository: &'a str,
+    commit: &'a str,
+    artifacts: &'a super::wire::ModelArtifactsDocument,
+    artifact_fingerprint: String,
+    logical_bytes: u64,
+    unique_bytes: u64,
+    aliases: &'a [String],
+    active_instances: &'a [String],
+    transport: &'a str,
+    verified_at: &'a str,
+    gated: bool,
+    license: &'a Option<String>,
+}
+
+fn operator_model(model: &ModelDocument) -> Result<OperatorModelDocument<'_>, SparkError> {
+    let artifacts = model
+        .artifacts
+        .as_ref()
+        .ok_or_else(|| SparkError::usage("model artifact identity is missing"))?;
+    Ok(OperatorModelDocument {
+        schema: "sy.spark.model/v2",
+        id: &model.id,
+        canonical: &model.canonical,
+        repository: &model.repository,
+        commit: &model.commit,
+        artifacts,
+        artifact_fingerprint: super::wire::artifact_fingerprint(artifacts)
+            .map_err(SparkError::usage)?,
+        logical_bytes: model.logical_bytes,
+        unique_bytes: model.unique_bytes,
+        aliases: &model.aliases,
+        active_instances: &model.active_instances,
+        transport: &model.transport,
+        verified_at: &model.verified_at,
+        gated: model.gated,
+        license: &model.license,
+    })
+}
+
+fn render_model_json(model: &ModelDocument) -> Result<String, SparkError> {
+    render_json(&operator_model(model)?)
+}
+
+#[derive(Serialize)]
+struct OperatorModelListDocument<'a> {
+    schema: &'static str,
+    models: Vec<OperatorModelDocument<'a>>,
+}
+
+fn render_model_list_json(document: &ModelListDocument) -> Result<String, SparkError> {
+    let models = document
+        .models
+        .iter()
+        .map(operator_model)
+        .collect::<Result<Vec<_>, _>>()?;
+    render_json(&OperatorModelListDocument {
+        schema: "sy.spark.model-list/v2",
+        models,
+    })
+}
+
+fn render_download_plan_human(
+    plan: &super::wire::DownloadPlanDocument,
+) -> Result<String, SparkError> {
+    let artifacts = plan
+        .artifacts
+        .as_ref()
+        .ok_or_else(|| SparkError::usage("download plan artifact identity is missing"))?;
+    let fingerprint = super::wire::artifact_fingerprint(artifacts).map_err(SparkError::usage)?;
+    Ok(format!(
+        "{}@{}\nartifact: {} ({:?}, {})\nartifact fingerprint: {}\nlogical bytes: {}\nunique bytes: {}\ntemporary bytes: {}\ndisk reserve bytes: {}\n",
+        plan.repository, plan.commit, artifacts.primary.path, artifacts.format,
+        artifacts.quantization.as_deref().unwrap_or("unknown"), fingerprint,
+        plan.logical_bytes, plan.unique_bytes, plan.temporary_bytes, plan.disk_reserve_bytes,
+    ))
+}
+
+fn render_model_human(model: &ModelDocument) -> Result<String, SparkError> {
+    let artifacts = model
+        .artifacts
+        .as_ref()
+        .ok_or_else(|| SparkError::usage("model artifact identity is missing"))?;
+    let fingerprint = super::wire::artifact_fingerprint(artifacts).map_err(SparkError::usage)?;
+    let mut output = format!(
+        "{}\nartifact: {} ({:?}, {})\nartifact fingerprint: {}\nlogical bytes: {}\nunique bytes: {}\ntransport: {}\n",
+        model.canonical, artifacts.primary.path, artifacts.format,
+        artifacts.quantization.as_deref().unwrap_or("unknown"), fingerprint,
+        model.logical_bytes, model.unique_bytes, model.transport,
+    );
     if !model.aliases.is_empty() {
-        println!("aliases: {}", model.aliases.join(","));
+        output.push_str(&format!("aliases: {}\n", model.aliases.join(",")));
     }
     if !model.active_instances.is_empty() {
-        println!("active: {}", model.active_instances.join(","));
+        output.push_str(&format!("active: {}\n", model.active_instances.join(",")));
     }
+    Ok(output)
 }
 
 fn render_admission_human(report: &super::resources::AdmissionReport) -> String {
@@ -919,12 +1226,15 @@ fn render_admission_human(report: &super::resources::AdmissionReport) -> String 
     );
     if let Some(selection) = &report.selection {
         output.push_str(&format!(
-            "  policy: {}\n  engine id: {}\n  engine: {}\n  image: {}\n  fingerprint: {}\n",
+            "  policy: {}\n  engine id: {}\n  engine: {}\n  image: {}\n  fingerprint: {}\n  artifact: {} ({:?})\n  artifact fingerprint: {}\n",
             selection.selection_kind,
-            selection.recipe_id,
+            selection.engine_id,
             selection.engine,
             selection.image,
-            selection.fingerprint
+            selection.fingerprint,
+            selection.artifacts.primary.path,
+            selection.artifacts.format,
+            selection.artifact_fingerprint,
         ));
     }
     for code in &report.problem_codes {
@@ -1259,6 +1569,12 @@ fn dispatch_activate(host: String, args: ActivateArgs) -> Result<(), SparkError>
             "the activation entrypoint is fixed to `spark bootstrap activate`",
         ));
     }
+    let engines = args
+        .engines
+        .iter()
+        .map(|value| install::parse_staged_engine_asset(value))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(SparkError::from_install)?;
     let (report, material) = install::activate_from_files(&install::ActivateRequest {
         root: PathBuf::from("/"),
         executable: args.executable,
@@ -1266,6 +1582,9 @@ fn dispatch_activate(host: String, args: ActivateArgs) -> Result<(), SparkError>
         public_key: args.public_key,
         manifest: args.manifest,
         manifest_sha256: args.manifest_sha256,
+        release_manifest: args.release_manifest,
+        models: args.models,
+        engines,
         version: args.version,
         listen_address: args.listen_address,
         hostname: args.hostname,
@@ -1289,6 +1608,8 @@ fn dispatch_install(host: String, args: InstallArgs, operation: &str) -> Result<
     let resolved = resolve_install(&args, &ProcessEnv)?;
     let json = resolved.json;
     let probe_path = resolved.probe.clone();
+    let payload = install::load_release_payload(&resolved.release_manifest, &resolved.probe)
+        .map_err(SparkError::from_install)?;
     let mut manifest = install::inspect_and_plan(
         &OpenSshRunner,
         InstallRequest {
@@ -1296,6 +1617,7 @@ fn dispatch_install(host: String, args: InstallArgs, operation: &str) -> Result<
             probe_path: resolved.probe,
             listen_address: resolved.listen_address,
             listen_port: resolved.listen_port,
+            catalogs: payload.catalogs.clone(),
         },
     )
     .map_err(SparkError::from_install)?;
@@ -1331,6 +1653,9 @@ fn dispatch_install(host: String, args: InstallArgs, operation: &str) -> Result<
                 manifest.inventory.lsm.kind, manifest.inventory.lsm.mode
             ),
             manifest: &manifest,
+            release_manifest: &payload.manifest,
+            models: &payload.models,
+            engines: &payload.engines,
         })
         .map_err(SparkError::from_install)?;
         let address: std::net::IpAddr = manifest
@@ -1557,6 +1882,264 @@ mod tests {
     use clap::Parser;
     use std::{collections::BTreeMap, path::PathBuf};
 
+    fn test_artifacts() -> crate::spark::wire::ModelArtifactsDocument {
+        serde_json::from_str(concat!(
+            r#"{"schema":"sy.spark.model-artifacts/v2","format":"gguf","primary":{"path":"model.gguf","bytes":8,"sha256":"#,
+            r#""aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"auxiliary":[],"quantization":"Q4_K_XL","capabilities":["text_generation"],"configured_alias":"model:q4"}"#,
+        ))
+        .unwrap()
+    }
+
+    fn test_model(
+        artifacts: crate::spark::wire::ModelArtifactsDocument,
+    ) -> crate::spark::wire::ModelDocument {
+        crate::spark::wire::ModelDocument {
+            schema: "sy.spark.model/v1".into(),
+            id: "model-id".into(),
+            canonical: "owner/model@commit".into(),
+            repository: "owner/model".into(),
+            commit: "c".repeat(40),
+            snapshot: "redacted".into(),
+            artifacts: Some(artifacts),
+            logical_bytes: 8,
+            unique_bytes: 8,
+            aliases: vec!["model:q4".into()],
+            active_instances: vec!["model".into()],
+            transport: "hf-hub".into(),
+            verified_at: "2026-08-27T00:00:00Z".into(),
+            gated: false,
+            license: None,
+        }
+    }
+
+    fn test_instance(
+        artifacts: crate::spark::wire::ModelArtifactsDocument,
+        artifact_fingerprint: String,
+    ) -> crate::spark::wire::InstanceDocument {
+        use crate::spark::wire::{
+            InstanceDesiredState, InstanceObservedState, RecipeResourceEnvelopeDocument,
+        };
+        crate::spark::wire::InstanceDocument {
+            schema: "sy.spark.instance/v2".into(),
+            id: "instance-id".into(),
+            name: "model".into(),
+            model_id: "model-id".into(),
+            model: "owner/model@commit".into(),
+            model_commit: "c".repeat(40),
+            engine_id: "llama-cpp-cuda13-arm64".into(),
+            engine_fingerprint: format!("sha256:{}", "b".repeat(64)),
+            artifacts,
+            artifact_fingerprint,
+            objective: "chat".into(),
+            resources: RecipeResourceEnvelopeDocument {
+                image_bytes: 1,
+                startup_peak_bytes: 2,
+                steady_peak_bytes: 3,
+                compile_cache_bytes: 4,
+            },
+            context_window: 65_536,
+            default_reasoning_effort: None,
+            generation: 1,
+            desired: InstanceDesiredState::Running,
+            observed: InstanceObservedState::Healthy,
+            endpoint: Some("https://spark/openai/model/v1".into()),
+            healthy: true,
+            started_at: None,
+            startup_milliseconds: Some(1),
+            last_failure: None,
+            restart_failures: 0,
+            restart_suppressed: false,
+            quarantine: None,
+        }
+    }
+
+    #[test]
+    fn model_and_process_render_engine_artifact_identity() {
+        let artifacts = test_artifacts();
+        let artifact_fingerprint = crate::spark::wire::artifact_fingerprint(&artifacts).unwrap();
+        let model = test_model(artifacts.clone());
+        let instance = test_instance(artifacts, artifact_fingerprint.clone());
+        let output = format!(
+            "{}{}",
+            super::render_model_human(&model).unwrap(),
+            super::render_instance_human(&instance)
+        );
+        assert!(output.contains(&format!("artifact fingerprint: {artifact_fingerprint}")));
+        assert!(output.contains("engine fingerprint: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+    }
+
+    #[test]
+    fn model_list_is_one_compact_ollama_style_table() {
+        let model = test_model(test_artifacts());
+        let document = crate::spark::wire::ModelListDocument {
+            schema: "sy.spark.model-list/v1".into(),
+            models: vec![model],
+        };
+
+        assert_eq!(
+            super::render_model_list_human(&document).unwrap(),
+            "NAME      ID        SIZE  MODIFIED\nmodel:q4  model-id  8B    2026-08-27\n"
+        );
+    }
+
+    #[test]
+    fn model_list_uses_repository_when_alias_is_absent() {
+        let mut model = test_model(test_artifacts());
+        model.aliases.clear();
+        let document = crate::spark::wire::ModelListDocument {
+            schema: "sy.spark.model-list/v1".into(),
+            models: vec![model],
+        };
+
+        assert!(super::render_model_list_human(&document)
+            .unwrap()
+            .contains("owner/model  model-id"));
+    }
+
+    #[test]
+    fn process_list_contains_only_active_lifecycle_instances() {
+        use crate::spark::wire::InstanceObservedState;
+        let artifacts = test_artifacts();
+        let fingerprint = crate::spark::wire::artifact_fingerprint(&artifacts).unwrap();
+        let healthy = test_instance(artifacts.clone(), fingerprint.clone());
+        let mut warming = test_instance(artifacts.clone(), fingerprint.clone());
+        warming.name = "warming".into();
+        warming.observed = InstanceObservedState::Warming;
+        let mut stopping = test_instance(artifacts.clone(), fingerprint.clone());
+        stopping.name = "stopping".into();
+        stopping.observed = InstanceObservedState::Stopping;
+        let mut absent = test_instance(artifacts.clone(), fingerprint.clone());
+        absent.name = "absent".into();
+        absent.observed = InstanceObservedState::Absent;
+        let mut failed = test_instance(artifacts, fingerprint);
+        failed.name = "failed".into();
+        failed.observed = InstanceObservedState::Failed;
+
+        let filtered = super::active_instances(crate::spark::wire::InstanceListDocument {
+            schema: "sy.spark.instance-list/v1".into(),
+            instances: vec![healthy, warming, stopping, absent, failed],
+        });
+
+        assert_eq!(
+            filtered
+                .instances
+                .iter()
+                .map(|instance| instance.name.as_str())
+                .collect::<Vec<_>>(),
+            ["model", "warming", "stopping"]
+        );
+        assert_eq!(
+            serde_json::to_value(filtered).unwrap()["instances"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn process_list_is_one_compact_ollama_style_table() {
+        let artifacts = test_artifacts();
+        let fingerprint = crate::spark::wire::artifact_fingerprint(&artifacts).unwrap();
+        let document = crate::spark::wire::InstanceListDocument {
+            schema: "sy.spark.instance-list/v1".into(),
+            instances: vec![test_instance(artifacts, fingerprint)],
+        };
+
+        let output = super::render_instance_list_human(&document);
+
+        assert!(output.starts_with("NAME   MODEL     ENGINE"));
+        assert!(output.contains("model  model:q4  llama-cpp-cuda13-arm64  64K      healthy"));
+        assert_eq!(output.lines().count(), 2);
+        assert!(!output.contains("fingerprint"));
+    }
+
+    #[test]
+    fn empty_model_and_process_lists_render_headers_only() {
+        let models = crate::spark::wire::ModelListDocument {
+            schema: "sy.spark.model-list/v1".into(),
+            models: Vec::new(),
+        };
+        let instances = crate::spark::wire::InstanceListDocument {
+            schema: "sy.spark.instance-list/v1".into(),
+            instances: Vec::new(),
+        };
+
+        assert_eq!(
+            super::render_model_list_human(&models).unwrap(),
+            "NAME  ID  SIZE  MODIFIED\n"
+        );
+        assert_eq!(
+            super::render_instance_list_human(&instances),
+            "NAME  MODEL  ENGINE  CONTEXT  STATE\n"
+        );
+    }
+
+    #[test]
+    fn download_dry_run_renders_exact_artifact_identity() {
+        let plan = crate::spark::wire::DownloadPlanDocument {
+            schema: "sy.spark.download-plan/v1".into(),
+            repository: "owner/model".into(),
+            commit: "c".repeat(40),
+            artifacts: Some(test_artifacts()),
+            logical_bytes: 8,
+            unique_bytes: 8,
+            temporary_bytes: 8,
+            disk_reserve_bytes: 8,
+        };
+        let output = super::render_download_plan_human(&plan).unwrap();
+        assert!(output.contains("artifact fingerprint: sha256:"));
+    }
+
+    #[test]
+    fn json_documents_remain_machine_readable() {
+        let artifacts = test_artifacts();
+        let fingerprint = crate::spark::wire::artifact_fingerprint(&artifacts).unwrap();
+        let model = test_model(artifacts.clone());
+        let model_json: serde_json::Value =
+            serde_json::from_str(&super::render_model_json(&model).unwrap()).unwrap();
+        assert_eq!(model_json["artifact_fingerprint"], fingerprint);
+        assert!(model_json.get("snapshot").is_none());
+        let instance = test_instance(artifacts, fingerprint.clone());
+        let logs = crate::spark::wire::EngineLogDocument {
+            schema: "sy.spark.engine-logs/v1".into(),
+            instance_id: instance.id.clone(),
+            generation: 1,
+            cursor: 0,
+            next_cursor: 1,
+            truncated: false,
+            lines: vec!["ready".into()],
+        };
+        let parsed: serde_json::Value =
+            serde_json::from_str(&super::render_logs_json(&logs, &instance).unwrap()).unwrap();
+        assert_eq!(parsed["artifact_fingerprint"], fingerprint);
+    }
+
+    #[test]
+    fn model_command_help_documents_examples_and_environment() {
+        #[derive(Debug, clap::Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            spark: super::SparkCli,
+        }
+        for command in [
+            "download", "serve", "launch", "ps", "logs", "stop", "ls", "show", "rm",
+        ] {
+            let error =
+                TestCli::try_parse_from(["sy", "dgx-spark", command, "--help"]).unwrap_err();
+            let help = error.to_string();
+            assert!(help.contains("Example"), "{command} help lacks examples");
+            assert!(
+                help.contains("SY_SPARK_"),
+                "{command} help lacks environment equivalents"
+            );
+            assert!(help.contains("--json"), "{command} help lacks --json");
+            if ["download", "serve", "launch", "stop", "rm"].contains(&command) {
+                assert!(help.contains("--dry-run"), "{command} help lacks --dry-run");
+            }
+        }
+    }
+
     #[test]
     fn bootstrap_inspector_has_one_fixed_entrypoint() {
         #[derive(clap::Parser)]
@@ -1667,6 +2250,7 @@ mod tests {
             yes: false,
             json: true,
             probe: Some(PathBuf::from("/flag/probe")),
+            release_manifest: Some(PathBuf::from("/flag/SHA256SUMS")),
             listen_address: Some("10.1.30.143".into()),
             listen_port: None,
             release_signature: None,
@@ -1681,6 +2265,7 @@ mod tests {
             render_json(&resolved).unwrap(),
             concat!(
                 "{\n  \"dry_run\": true,\n  \"yes\": false,\n  \"json\": true,\n  \"probe\": \"/flag/probe\",\n  ",
+                "\"release_manifest\": \"/flag/SHA256SUMS\",\n  ",
                 "\"listen_address\": \"10.1.30.143\",\n  \"listen_port\": 9443,\n  \"release_signature\": null,\n  \"release_public_key\": null,\n  \"config_dir\": ",
                 "\"/flag/config\"\n}\n"
             )
@@ -1690,7 +2275,7 @@ mod tests {
             resolve_install(&InstallArgs::dry_run_for_test(), &MapEnv::default()).unwrap();
         assert_eq!(
             defaults.probe,
-            PathBuf::from("/usr/libexec/sy/spark-bootstrap-aarch64")
+            PathBuf::from("/usr/local/share/sy/spark-release/sy-aarch64")
         );
         assert_eq!(defaults.listen_port, 9843);
     }
@@ -1712,6 +2297,13 @@ mod tests {
                 probe_remote_path: format!("/tmp/sy-spark-bootstrap-{}", "a".repeat(64)),
                 probe_sha256: "a".repeat(64),
                 probe_removed: true,
+                catalogs: crate::spark::install::CatalogDigests {
+                    models: "m".into(),
+                    engines: std::collections::BTreeMap::from([
+                        ("configs/sy/spark/engines/first.toml".into(), "l".into()),
+                        ("configs/sy/spark/engines/second.toml".into(), "v".into()),
+                    ]),
+                },
             },
         )
         .unwrap();
@@ -1828,18 +2420,22 @@ mod tests {
                 disk_available_bytes: Some(4),
             },
             selection: Some(AdmissionSelection {
-                recipe_id: "vllm-arm64".into(),
+                engine_id: "vllm-arm64".into(),
                 selection_kind: "configured_engine".into(),
                 engine: "vllm".into(),
                 image: IMAGE.into(),
                 fingerprint: FINGERPRINT.into(),
+                artifacts: serde_json::from_str(r#"{"schema":"sy.spark.model-artifacts/v2","format":"safetensors","primary":{"path":"model.safetensors","bytes":8,"sha256":null},"auxiliary":[],"quantization":"FP8","capabilities":["text_generation"],"configured_alias":null}"#).unwrap(),
+                artifact_fingerprint: format!("sha256:{}", "c".repeat(64)),
+                compile_cache_namespace: "opaque-cache-namespace".into(),
             }),
         };
 
         assert_eq!(
             super::render_admission_human(&report),
             format!(
-                "Spark admission: admitted (aggregate 42 bytes; reserve 8 bytes)\n  policy: configured_engine\n  engine id: vllm-arm64\n  engine: vllm\n  image: {IMAGE}\n  fingerprint: {FINGERPRINT}\n"
+                "Spark admission: admitted (aggregate 42 bytes; reserve 8 bytes)\n  policy: configured_engine\n  engine id: vllm-arm64\n  engine: vllm\n  image: {IMAGE}\n  fingerprint: {FINGERPRINT}\n  artifact: model.safetensors (Safetensors)\n  artifact fingerprint: sha256:{}\n",
+                "c".repeat(64)
             )
         );
     }
@@ -1900,6 +2496,54 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn download_artifact_flags_are_agent_friendly() {
+        #[derive(clap::Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            spark: super::SparkCli,
+        }
+        let parsed = TestCli::try_parse_from([
+            "sy",
+            "dgx-spark",
+            "download",
+            "owner/model",
+            "--artifact",
+            "weights/model.gguf",
+            "--auxiliary",
+            "projector=vision/mmproj.gguf",
+            "--auxiliary",
+            "weight_shard=model-00002.gguf",
+        ])
+        .unwrap();
+        let super::SparkCommand::Download(args) = parsed.spark.command else {
+            panic!("download command expected")
+        };
+        assert_eq!(args.artifact.as_deref(), Some("weights/model.gguf"));
+        assert_eq!(args.auxiliary[0].path, "vision/mmproj.gguf");
+        assert_eq!(args.auxiliary[1].path, "model-00002.gguf");
+    }
+
+    #[test]
+    fn download_rejects_unlabelled_auxiliary_artifacts() {
+        #[derive(clap::Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            spark: super::SparkCli,
+        }
+        assert!(TestCli::try_parse_from([
+            "sy",
+            "dgx-spark",
+            "download",
+            "owner/model",
+            "--artifact",
+            "model.gguf",
+            "--auxiliary",
+            "mmproj.gguf",
+        ])
+        .is_err());
     }
 
     #[test]

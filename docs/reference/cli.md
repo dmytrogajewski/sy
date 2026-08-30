@@ -1143,10 +1143,10 @@ sy spark <HOST> <COMMAND>
 | `download` | Acquire and verify one immutable Hugging Face model snapshot. |
 | `serve` | Start a verified model with the root-configured engine after fail-closed admission. |
 | `launch` | Run Codex, Claude Code, or OpenCode locally against an exact managed Spark model. |
-| `ps` | Desired versus observed managed instances. Does not print the internal bridge address. |
+| `ps` | Compact active model-process table. Absent and failed historical instances are omitted from human and JSON output. |
 | `logs` | Bounded, redacted logs for one instance. |
 | `stop` | Persist stopped intent, drain, and remove one instance. An already-absent instance is an idempotent success. |
-| `ls` | List complete verified local model snapshots. |
+| `ls` | Compact table of verified local models available to run; `--json` returns the complete inventory document. |
 | `show` | Immutable identity, provenance, aliases, and references for one model. |
 | `rm` | Preview or remove only unreferenced native-cache model data. |
 | `client-config` | Render a user-level Codex or Claude Code projection. Names the token env var; does not read or write it. |
@@ -1160,10 +1160,11 @@ sy spark <HOST> <COMMAND>
 | `--dry-run` | bool | `false` | `SY_SPARK_DRY_RUN` | Upload a content-addressed probe, run `spark bootstrap inspect`, verify the hash, remove the probe. No install. |
 | `--yes` | bool | `false` | `SY_SPARK_YES` | Apply the reviewed manifest. Requires `--release-signature` and `--release-public-key`. |
 | `--json` | bool | `false` | `SY_SPARK_JSON` | Emit `sy.spark.install-manifest/v1`. |
-| `--probe` | path | `/usr/libexec/sy/spark-bootstrap-aarch64` | `SY_SPARK_PROBE` | ARM64 feature-minimal probe artefact. |
+| `--probe` | path | `$XDG_DATA_HOME/sy/spark-release/sy-aarch64` | `SY_SPARK_PROBE` | ARM64 feature-minimal probe artefact. |
+| `--release-manifest` | path | `SHA256SUMS` beside `--probe` | `SY_SPARK_RELEASE_MANIFEST` | Signed inventory for the binary and separate catalog TOMLs. |
 | `--listen-address` | IP | none | `SY_SPARK_LISTEN_ADDRESS` | Explicit LAN address for the HTTPS listener. |
 | `--listen-port` | u16 | `9843` | `SY_SPARK_LISTEN_PORT` | HTTPS listener port. |
-| `--release-signature` | path | none | `SY_SPARK_RELEASE_SIGNATURE` | Minisign signature for the ARM64 release (required with `--yes`). |
+| `--release-signature` | path | none | `SY_SPARK_RELEASE_SIGNATURE` | Minisign signature for `SHA256SUMS` (required with `--yes`). |
 | `--release-public-key` | path | none | `SY_SPARK_RELEASE_PUBLIC_KEY` | Pinned minisign public key (required with `--yes`). |
 | `--config-dir` | path | Spark config root | `SY_SPARK_CONFIG_DIR` | Local Spark configuration root. |
 

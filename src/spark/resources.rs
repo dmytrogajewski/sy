@@ -341,12 +341,14 @@ pub struct AdmissionReport {
 #[cfg_attr(feature = "spark-agent", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdmissionSelection {
-    #[serde(rename = "engine_id", alias = "recipe_id")]
-    pub recipe_id: String,
+    pub engine_id: String,
     pub selection_kind: String,
     pub engine: String,
     pub image: String,
     pub fingerprint: String,
+    pub artifacts: super::wire::ModelArtifactsDocument,
+    pub artifact_fingerprint: String,
+    pub compile_cache_namespace: String,
 }
 
 #[cfg(feature = "spark-agent")]
@@ -409,7 +411,7 @@ pub fn evaluate_admission(
         problems.push("spark.resources.pressure".into());
     }
     if !request.compatibility_verified {
-        problems.push("spark.recipe.unsupported".into());
+        problems.push("spark.engine.unsupported".into());
     }
     if !request.guard_healthy {
         problems.push("spark.executor.guard-unhealthy".into());
@@ -989,7 +991,7 @@ mod tests {
         assert!(policy.emergency_available_floor_bytes > 0);
         assert!(policy.disk_reserve_bytes > 0);
         assert!(policy.emergency_consecutive_samples > 0);
-        assert!((0.0..=100.0).contains(&policy.memory_full_psi_avg10_percent));
+        assert_eq!(policy.memory_full_psi_avg10_percent, 100.0);
     }
 
     #[tokio::test]

@@ -27,9 +27,7 @@ jobs:
       - run: cargo auditable zigbuild --release --target aarch64-unknown-linux-gnu --no-default-features --features spark-agent --bin sy
       - name: Build signed-manifest inputs
         run: |
-          mkdir -p target/spark-release
-          cp target/aarch64-unknown-linux-gnu/release/sy target/spark-release/sy-aarch64
-          sha256sum target/spark-release/sy-aarch64 configs/sy/spark/hf-http-fallback.lock configs/sy/spark/recipes/*.toml specs/openapi/sy-spark-control-v1.json > target/spark-release/SHA256SUMS
+          scripts/package-spark-release.sh target/aarch64-unknown-linux-gnu/release/sy target/spark-release
           cargo metadata --locked --format-version 1 > target/spark-release/cargo-metadata.json
           cargo tree --locked --no-default-features --features spark-agent -e features > target/spark-release/resolved-features.txt
           cargo tree --locked -d > target/spark-release/duplicate-dependencies.txt
