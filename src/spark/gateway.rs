@@ -966,7 +966,7 @@ impl ResponsesEncoder {
             output.push((
                 index,
                 serde_json::json!({"id":format!("msg_{}", &self.id[5..]),
-            "type":"message","status":"completed","role":"assistant","content":[{
+            "type":"message","status":"completed","role":"assistant","phase":self.text_phase(),"content":[{
                 "type":"output_text","text":self.text,"annotations":[]}]}),
             ));
         }
@@ -979,6 +979,14 @@ impl ResponsesEncoder {
         }))));
         output.sort_by_key(|(index, _)| *index);
         output.into_iter().map(|(_, item)| item).collect()
+    }
+
+    fn text_phase(&self) -> &'static str {
+        if self.tools.is_empty() {
+            "final_answer"
+        } else {
+            "commentary"
+        }
     }
 
     fn allocate_index(&mut self) -> u32 {
@@ -1100,10 +1108,11 @@ impl ResponsesEncoder {
             return;
         };
         let item_id = format!("msg_{}", &self.id[5..]);
+        let phase = self.text_phase();
         let part = serde_json::json!({"type":"output_text","text":self.text,"annotations":[]});
         self.event("response.output_text.done", serde_json::json!({"item_id":item_id,"output_index":index,"content_index":0,"text":self.text}));
         self.event("response.content_part.done", serde_json::json!({"item_id":item_id,"output_index":index,"content_index":0,"part":part.clone()}));
-        let item = serde_json::json!({"id":item_id,"type":"message","status":"completed","role":"assistant","content":[part]});
+        let item = serde_json::json!({"id":item_id,"type":"message","status":"completed","role":"assistant","phase":phase,"content":[part]});
         self.event(
             "response.output_item.done",
             serde_json::json!({"output_index":index,"item":item}),
@@ -2458,10 +2467,64 @@ fn response_messages(
         .as_array()
         .ok_or_else(|| invalid_request("input must be a string or item array"))?;
     let mut images = ImageBudget::default();
-    items
-        .iter()
-        .map(|item| response_input_item(item, vision, &mut images))
-        .collect()
+    // Responses represents one assistant turn as adjacent heterogeneous items;
+    // Qwen's chat template expects those fields on one assistant message.
+    let mut messages: Vec<Value> = Vec::with_capacity(items.len());
+    for item in items {
+        let message = response_input_item(item, vision, &mut images)?;
+        if message["role"] == "assistant"
+            && messages
+                .last()
+                .is_some_and(|previous| previous["role"] == "assistant")
+        {
+            if let Some(previous) = messages.last_mut() {
+                merge_response_assistant(previous, &message);
+            }
+        } else {
+            messages.push(message);
+        }
+    }
+    Ok(messages)
+}
+
+fn merge_response_assistant(target: &mut Value, source: &Value) {
+    let Some(target) = target.as_object_mut() else {
+        return;
+    };
+    for field in ["reasoning_content", "content"] {
+        let Some(incoming) = source.get(field).and_then(response_assistant_text) else {
+            continue;
+        };
+        if incoming.is_empty() {
+            continue;
+        }
+        let mut combined = target
+            .get(field)
+            .and_then(response_assistant_text)
+            .unwrap_or_default();
+        combined.push_str(&incoming);
+        target.insert(field.into(), combined.into());
+    }
+    if let Some(incoming) = source.get("tool_calls").and_then(Value::as_array) {
+        let calls = target
+            .entry("tool_calls")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if let Some(calls) = calls.as_array_mut() {
+            calls.extend(incoming.iter().cloned());
+        }
+    }
+}
+
+fn response_assistant_text(value: &Value) -> Option<String> {
+    match value {
+        Value::Null => Some(String::new()),
+        Value::String(text) => Some(text.clone()),
+        Value::Array(parts) => parts.iter().try_fold(String::new(), |mut text, part| {
+            text.push_str(part.get("text")?.as_str()?);
+            Some(text)
+        }),
+        _ => None,
+    }
 }
 
 fn response_input_item(
@@ -3111,6 +3174,28 @@ mod tests {
     }
 
     #[test]
+    fn responses_coalesces_one_assistant_turn_for_qwen_history() {
+        let request = rewrite_responses_request(
+            br#"{"model":"ornith","input":[{"type":"message","role":"user","content":"start"},{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"inspect state"}]},{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"I will inspect."}]},{"type":"function_call","call_id":"call_1","name":"run","arguments":"{}"},{"type":"function_call","call_id":"call_2","name":"read","arguments":"{\"path\":\"README.md\"}"},{"type":"function_call_output","call_id":"call_1","output":"done"},{"type":"function_call_output","call_id":"call_2","output":"contents"}]}"#,
+            "Ornith-1.5-9B",
+        )
+        .unwrap();
+        let request: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(
+            request["messages"],
+            serde_json::json!([
+                {"role":"user","content":"start"},
+                {"role":"assistant","content":"I will inspect.","reasoning_content":"inspect state","tool_calls":[
+                    {"id":"call_1","type":"function","function":{"name":"run","arguments":"{}"}},
+                    {"id":"call_2","type":"function","function":{"name":"read","arguments":"{\"path\":\"README.md\"}"}}
+                ]},
+                {"role":"tool","tool_call_id":"call_1","content":"done"},
+                {"role":"tool","tool_call_id":"call_2","content":"contents"}
+            ])
+        );
+    }
+
+    #[test]
     fn anthropic_and_openai_adapters_share_events_not_json() {
         let events = [
             GenerationEvent::TextDelta { text: "hi".into() },
@@ -3275,6 +3360,51 @@ mod tests {
             .map(|event| event.data["output_index"].as_u64().unwrap())
             .collect::<Vec<_>>();
         assert_eq!(indices, [0, 1, 2]);
+    }
+
+    #[test]
+    fn responses_marks_tool_preamble_as_commentary() {
+        let mut encoder = ResponsesEncoder::new("ornith".into(), BTreeSet::new());
+        for event in [
+            GenerationEvent::TextDelta {
+                text: "checking".into(),
+            },
+            GenerationEvent::ToolCallDelta {
+                index: 0,
+                call_id: Some("call_1".into()),
+                name: Some("shell".into()),
+                arguments: "{}".into(),
+            },
+            GenerationEvent::Done,
+        ] {
+            encoder.accept(event).unwrap();
+        }
+        let message = std::iter::from_fn(|| encoder.pop())
+            .find(|event| {
+                event.name == "response.output_item.done" && event.data["item"]["type"] == "message"
+            })
+            .unwrap();
+        assert_eq!(message.data["item"]["phase"], "commentary");
+        assert_eq!(encoder.final_document()["output"][0]["phase"], "commentary");
+    }
+
+    #[test]
+    fn responses_marks_terminal_text_as_final_answer() {
+        let mut encoder = ResponsesEncoder::new("ornith".into(), BTreeSet::new());
+        encoder
+            .accept(GenerationEvent::TextDelta {
+                text: "done".into(),
+            })
+            .unwrap();
+        encoder.accept(GenerationEvent::Done).unwrap();
+        let message = std::iter::from_fn(|| encoder.pop())
+            .find(|event| event.name == "response.output_item.done")
+            .unwrap();
+        assert_eq!(message.data["item"]["phase"], "final_answer");
+        assert_eq!(
+            encoder.final_document()["output"][0]["phase"],
+            "final_answer"
+        );
     }
 
     #[test]

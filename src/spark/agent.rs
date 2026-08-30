@@ -3006,9 +3006,11 @@ fn required_disk_growth(
     resources: &super::wire::RecipeResourceEnvelopeDocument,
     storage: &CandidateStorage,
 ) -> u64 {
-    let image = (!storage.image_present)
-        .then_some(resources.image_bytes)
-        .unwrap_or(0);
+    let image = if storage.image_present {
+        0
+    } else {
+        resources.image_bytes
+    };
     let cache = resources
         .compile_cache_bytes
         .checked_sub(storage.compile_cache_allocated_bytes)
