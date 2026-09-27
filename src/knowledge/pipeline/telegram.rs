@@ -159,6 +159,12 @@ impl TelegramPipeline {
                 let rel = m.voice_media.as_deref()?;
                 let media = base.join(rel);
                 let transcript = transcribe_cached(transcriber, &media).ok()?;
+                // Silence and sound-effect labels are not content: indexing
+                // them produced degenerate one-character chunks that outranked
+                // real messages. See `transcribe::MIN_SPEECH_CHARS`.
+                if !crate::knowledge::transcribe::has_speech(&transcript) {
+                    return None;
+                }
                 Some(m.into_voice_record(&media.display().to_string(), transcript))
             })
             .collect()
@@ -381,6 +387,41 @@ mod tests {
         assert!(recs
             .iter()
             .all(|r| r.payload.kind.as_deref() == Some("telegram-voice")));
+    }
+
+    /// A round video with no speech in it must produce **no chunk at all**.
+    /// Whisper answers silence with `""`, `[Music]`, or one stray character,
+    /// and those were being indexed as content — 155 of this machine's 4 133
+    /// transcripts — where their degenerate vectors then outranked real
+    /// messages in dense search (BUG-20260927-2355). The transcript is still
+    /// cached, because re-running whisper on a silent file every pass would
+    /// pay for a result we already know to discard.
+    #[test]
+    fn silent_media_produces_no_record_but_stays_cached() {
+        {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let media_dir = dir.path().join("voice_messages");
+            std::fs::create_dir_all(&media_dir).expect("mkdir");
+            std::fs::write(media_dir.join("file_7.ogg"), b"audio").expect("media");
+            let key = dir.path().join("result.json").display().to_string();
+
+            for junk in ["", "[Music]", "-"] {
+                {
+                    assert!(
+                        TelegramPipeline
+                            .voice_records(&key, VOICE_FIXTURE, &FakeTranscriber(junk))
+                            .is_empty(),
+                        "transcript {junk:?} must not become a chunk"
+                    );
+                }
+            }
+            let cached = std::fs::read_dir(&media_dir)
+                .expect("readdir")
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().ends_with(".txt"))
+                .count();
+            assert!(cached > 0, "rejected transcripts stay cached: {cached}");
+        }
     }
 
     #[test]

@@ -110,6 +110,54 @@ impl SourceKind {
     }
 }
 
+/// Kinds a *search* may be filtered to. Identical to [`SourceKind`] plus the
+/// kind overrides a pipeline stamps per record but no registry entry owns —
+/// today only `telegram-voice`
+/// ([`crate::knowledge::pipeline::telegram::VOICE_KIND`]).
+///
+/// That override was previously unselectable: `sy knowledge search --kind`
+/// accepted the `SourceKind` enum only, so on a host where voice notes are
+/// 4 132 of the 6 141 search-visible chunks, two thirds of that corpus could
+/// not be filtered from the CLI even though the qdrant filter has always
+/// matched on the free-form payload string. Kept as a separate enum rather
+/// than a new `SourceKind` variant because `SourceKind` drives *indexing*
+/// decisions (pipeline selection, auto-classification of a path) that a
+/// per-record override must not participate in; the drift test
+/// `search_kind_covers_every_source_kind` pins the two lists together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum SearchKind {
+    Telegram,
+    ClaudeTranscripts,
+    AgentHistory,
+    Email,
+    Slack,
+    Notes,
+    Code,
+    Generic,
+    /// Transcribed Telegram voice notes / round videos: a per-record
+    /// override, not a source kind.
+    TelegramVoice,
+}
+
+impl SearchKind {
+    /// Kebab wire string, delegated to [`SourceKind::as_kebab`] for every
+    /// registry kind so the two enums cannot drift apart on the wire.
+    pub fn as_kebab(self) -> &'static str {
+        match self {
+            SearchKind::Telegram => SourceKind::Telegram.as_kebab(),
+            SearchKind::ClaudeTranscripts => SourceKind::ClaudeTranscripts.as_kebab(),
+            SearchKind::AgentHistory => SourceKind::AgentHistory.as_kebab(),
+            SearchKind::Email => SourceKind::Email.as_kebab(),
+            SearchKind::Slack => SourceKind::Slack.as_kebab(),
+            SearchKind::Notes => SourceKind::Notes.as_kebab(),
+            SearchKind::Code => SourceKind::Code.as_kebab(),
+            SearchKind::Generic => SourceKind::Generic.as_kebab(),
+            SearchKind::TelegramVoice => crate::knowledge::pipeline::telegram::VOICE_KIND,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Source {
     pub path: String,
@@ -558,6 +606,35 @@ pub fn set_mcp_enabled(value: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// The two kind enums must stay in step: every registry kind stays
+    /// selectable from the CLI, and the only addition may be the per-record
+    /// `telegram-voice` override. Without this, adding a `SourceKind` variant
+    /// would silently leave it unfilterable from `sy knowledge search`.
+    #[test]
+    fn search_kind_covers_every_source_kind() {
+        use clap::ValueEnum;
+        let source: Vec<&str> = <SourceKind as ValueEnum>::value_variants()
+            .iter()
+            .map(|k| k.as_kebab())
+            .collect();
+        let search: Vec<&str> = <SearchKind as ValueEnum>::value_variants()
+            .iter()
+            .map(|k| k.as_kebab())
+            .collect();
+        for k in &source {
+            assert!(search.contains(k), "{k} is not selectable in search");
+        }
+        assert!(
+            search.contains(&crate::knowledge::pipeline::telegram::VOICE_KIND),
+            "the per-record voice kind must be selectable"
+        );
+        assert_eq!(
+            search.len(),
+            source.len() + 1,
+            "exactly one record-level override expected: {search:?} vs {source:?}"
+        );
+    }
+
     use super::*;
 
     #[test]

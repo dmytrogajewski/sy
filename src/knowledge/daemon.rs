@@ -38,6 +38,9 @@ use anyhow::{Context, Result};
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 
+use crate::aiplane::degraded;
+use crate::aiplane::registry::WorkloadKind;
+
 use super::{
     calibrate, cli, embed, ipc, manifest, qdrant, query, repair, runctx::RunCtx, sources, sparse,
     state, status, QDRANT_PORT,
@@ -365,6 +368,10 @@ pub fn run() -> Result<()> {
     // that never converges — the daemon would be killed mid-pass, restart,
     // and re-start the same long pass forever.
     let mut first_pass = true;
+    // Set once per degradation episode so the journal says "indexing
+    // suspended" once instead of every 1 s tick.
+    let mut warned_while_degraded = false;
+    let mut last_degraded_status = Instant::now();
 
     let shutdown = Arc::new(AtomicBool::new(false));
     install_signal_handlers(shutdown.clone());
@@ -529,6 +536,45 @@ pub fn run() -> Result<()> {
                 ),
             }
         }
+        // BUG-20260927-0119: fire no scheduled / fs / resync passes while a
+        // required worker is degraded. An index pass would die on its first
+        // embed, and `run_full_resync` *drops and recreates* the collection
+        // before re-embedding — so a wiped model cache would have destroyed
+        // the 112k points it merely made unqueryable. IPC-driven `IndexNow`
+        // is unaffected (the caller asked for it and gets the error back).
+        let workers_ready = !indexing_blocked();
+        if workers_ready {
+            warned_while_degraded = false;
+        } else {
+            want_index_user = false;
+            want_index_fs = false;
+            want_full_resync = false;
+            if !warned_while_degraded {
+                warned_while_degraded = true;
+                tracing::warn!(
+                    target: "sy::knowledge::daemon",
+                    degraded = %degraded::current().kinds().join(","),
+                    "indexing suspended until the workers load"
+                );
+            }
+            // Keep the tile honest: without this the status file goes stale
+            // after FRESH_SECS and the applet claims "daemon down" when the
+            // truth is "daemon up, worker missing". Throttled well inside
+            // FRESH_SECS because each snapshot costs a qdrant point-count.
+            if last_degraded_status.elapsed() >= Duration::from_secs(DEGRADED_STATUS_SECS) {
+                last_degraded_status = Instant::now();
+                save_snapshot(
+                    false,
+                    paused.load(Ordering::SeqCst),
+                    false,
+                    &last_pass,
+                    interval,
+                    last_run,
+                    &active_manifests,
+                );
+            }
+        }
+
         // Skip pass-firing while paused. FS-tickles still set `want_index_fs`,
         // but we don't honour them — on resume the catch-up `IndexNow` op
         // queued by the IPC bridge will re-walk and pick up everything.
@@ -556,7 +602,7 @@ pub fn run() -> Result<()> {
             last_run = Instant::now();
             last_fs_pass = Instant::now();
         } else {
-            let scheduled_due = last_run.elapsed() >= interval;
+            let scheduled_due = workers_ready && last_run.elapsed() >= interval;
             let fs_due = want_index_fs && last_fs_pass.elapsed() >= FS_TICKLE_FLOOR;
             if want_index_user || scheduled_due || fs_due {
                 let throttle = scheduled_due || fs_due; // never throttle user-driven
@@ -771,7 +817,10 @@ fn build_status(
         last_index_skipped: last.skipped,
         last_index_deleted: last.deleted,
         last_index_chunks: last.chunks,
-        last_error: last.error.clone(),
+        // A degraded worker outranks a stale pass error: the loader's
+        // message names the missing artifact *and* the rebuild command,
+        // which is what the operator needs to see on the tile.
+        last_error: last.error.clone().or_else(|| degraded::current().summary()),
         // Per-workload health, one row per kind the supervisor is
         // managing. Empty until the supervisor has performed at
         // least one health poll (sub-second after init).
@@ -866,15 +915,54 @@ fn supervisor_health() -> std::collections::HashMap<String, crate::aiplane::regi
         .collect()
 }
 
+/// Worker kinds the daemon tries to raise at start-up, in order.
+const REQUIRED_WORKLOADS: [WorkloadKind; 2] = [WorkloadKind::Embed, WorkloadKind::Rerank];
+
+/// True when a workload the index pass depends on is degraded.
+///
+/// Criticality comes from `aiplane::workloads::ArtifactSet` so the daemon's
+/// "suspend indexing" decision and `sy doctor`'s fail/warn split read the
+/// same flag. `rerank` is non-critical: it re-scores hits, so a missing
+/// reranker costs retrieval quality and must never freeze the indexing
+/// schedule or lock the already-indexed points behind it.
+fn indexing_blocked() -> bool {
+    let kinds = degraded::current().kinds();
+    crate::aiplane::workloads::artifact_sets()
+        .iter()
+        .any(|set| set.indexing_critical && kinds.contains(&set.kind.as_str()))
+}
+
+/// How often the recovery thread re-checks the degraded kinds against the
+/// supervisor's health view.
+const WORKER_RECOVERY_POLL_SECS: u64 = 15;
+
+/// Status-write cadence while the plane is degraded. Must stay inside
+/// `status::FRESH_SECS` (90) so the tile distinguishes "degraded" (red
+/// glyph, live tooltip) from "dead" (no snapshot in 90 s).
+const DEGRADED_STATUS_SECS: u64 = 30;
+
+/// Opt back in to the pre-BUG-20260927-0119 fail-fast behaviour. The
+/// `test-npu` gate sets it so NPU tests still see a hard error instead of
+/// a daemon that starts half-loaded.
+const REQUIRE_WORKLOADS_ENV: &str = "SY_KNOWLEDGE_REQUIRE_WORKLOADS";
+
 /// Spin up the aiplane supervisor, spawn embed + rerank worker
 /// children, block until each reaches `Ready`, install the
 /// process-shared handle, and start a background poll thread.
-/// Returns `Err(_)` if any of the configured workers fails to load —
-/// the daemon's caller catches that and falls back to the legacy
-/// in-process path (search keeps working on the embed side via
-/// `knowledge::embed::embed_one`; rerank goes unavailable).
+///
+/// A worker that will not load no longer takes the plane down
+/// (BUG-20260927-0119). It used to: one missing `bf16.onnx` made this
+/// return `Err`, `run()` propagated it, the daemon `exit(1)`-ed *before
+/// writing a single status snapshot*, systemd latched the unit `failed`
+/// after five fast retries, and the bar applet — which renders nothing at
+/// all for a dead daemon — vanished, so a four-day outage looked like an
+/// unconfigured rice. Now the failure is recorded in the
+/// [`degraded`] gate, `status.last_error` carries the loader's own
+/// actionable message, the IPC socket and the already-indexed points keep
+/// answering, and [`spawn_worker_recovery`] heals the plane as soon as the
+/// artifact reappears. `Err` is reserved for a supervisor that cannot be
+/// built at all, plus `SY_KNOWLEDGE_REQUIRE_WORKLOADS=1` (NPU test gate).
 fn init_aiplane_supervisor() -> Result<()> {
-    use crate::aiplane::registry::WorkloadKind;
     use crate::aiplane::supervisor::{self, Supervisor};
     use std::sync::Arc;
 
@@ -888,7 +976,8 @@ fn init_aiplane_supervisor() -> Result<()> {
     // run `prep_npu_workload.py` manually so it warms the cache
     // outside the daemon's hot path.
     let ready_deadline = Duration::from_secs(1800);
-    for kind in [WorkloadKind::Embed, WorkloadKind::Rerank] {
+    let mut failed: Vec<WorkloadKind> = Vec::new();
+    for kind in REQUIRED_WORKLOADS {
         tracing::info!(
             target: "sy::knowledge::daemon",
             kind = %kind,
@@ -910,10 +999,37 @@ fn init_aiplane_supervisor() -> Result<()> {
                 );
             }
             Err(e) => {
-                supv.shutdown(Duration::from_secs(5));
-                return Err(e);
+                let reason = format!("{e:#}");
+                tracing::error!(
+                    target: "sy::knowledge::daemon",
+                    kind = %kind,
+                    reason = %reason,
+                    "worker failed to load; continuing degraded"
+                );
+                degraded::current().record(kind, reason);
+                failed.push(kind);
             }
         }
+    }
+
+    if !failed.is_empty() {
+        if std::env::var_os(REQUIRE_WORKLOADS_ENV).is_some_and(|v| v == "1") {
+            supv.shutdown(Duration::from_secs(5));
+            let kinds = failed
+                .iter()
+                .map(|k| k.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let reason = degraded::current().summary().unwrap_or_default();
+            anyhow::bail!("worker {kinds} failed to load: {reason}");
+        }
+        tracing::warn!(
+            target: "sy::knowledge::daemon",
+            degraded = %failed.iter().map(|k| k.to_string()).collect::<Vec<_>>().join(","),
+            retry_secs = WORKER_RECOVERY_POLL_SECS,
+            "starting degraded: IPC + existing index stay live, indexing is suspended until the workers load"
+        );
+        spawn_worker_recovery(supv.clone());
     }
 
     // Background poll: every second, probe each child's Health and
@@ -928,6 +1044,34 @@ fn init_aiplane_supervisor() -> Result<()> {
 
     supervisor::set_current(supv);
     Ok(())
+}
+
+/// Clear gate entries as soon as the supervisor reports a degraded
+/// worker `Ready` again.
+///
+/// Deliberately observation-only: `reap_and_restart` already respawns the
+/// dead child with exponential backoff capped at 60 s
+/// (`supervisor::health::backoff_for_attempt`), so a second respawn loop
+/// here would double the spawn pressure on a worker that is failing for a
+/// reason a human has to fix. This thread just translates "worker came
+/// back" into "plane is healthy", and exits once the gate drains.
+fn spawn_worker_recovery(supv: Arc<crate::aiplane::supervisor::Supervisor>) {
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_secs(WORKER_RECOVERY_POLL_SECS));
+        if degraded::current().is_empty() {
+            return;
+        }
+        for (kind, health) in supv.all_health() {
+            let ready = health.is_some_and(|h| h.state.is_ready());
+            if ready && degraded::current().clear(kind) {
+                tracing::info!(
+                    target: "sy::knowledge::daemon",
+                    kind = %kind,
+                    "worker recovered — plane no longer degraded"
+                );
+            }
+        }
+    });
 }
 
 /// Write a status snapshot to disk, blending the indexing flag, the
@@ -1441,10 +1585,7 @@ fn handle_req(req: ipc::Req) -> ipc::Resp {
                         .into_iter()
                         .map(|h| ipc::HitRow {
                             score: h.score,
-                            chunk_id: crate::knowledge::chunk::point_id(
-                                &h.payload.file_path,
-                                h.payload.chunk_index,
-                            ),
+                            chunk_id: h.id,
                             file_path: h.payload.file_path,
                             chunk_index: h.payload.chunk_index,
                             chunk_text: h.payload.chunk_text,
@@ -1654,10 +1795,7 @@ fn handle_search_rerank(
         .take(take)
         .map(|(rerank_score, h)| ipc::HitRow {
             score: rerank_score,
-            chunk_id: crate::knowledge::chunk::point_id(
-                &h.payload.file_path,
-                h.payload.chunk_index,
-            ),
+            chunk_id: h.id,
             file_path: h.payload.file_path,
             chunk_index: h.payload.chunk_index,
             chunk_text: h.payload.chunk_text,

@@ -65,8 +65,10 @@ pub enum KnowledgeCmd {
     },
 
     /// One-shot incremental index (re-walks all sources, embeds new/changed
-    /// chunks, removes deleted ones). Talks to Qdrant directly; works
-    /// without the daemon.
+    /// chunks, removes deleted ones). Writes Qdrant from this process, but
+    /// embedding always runs on the plane's NPU worker (`aiplane.batch`), so
+    /// `sy-knowledge.service` must be up — the CLI never opens a second
+    /// ORT session on the single-context device.
     Index {
         /// Restrict to a single registered source path.
         #[arg(long)]
@@ -133,8 +135,10 @@ pub enum KnowledgeCmd {
         from: Vec<String>,
         /// Restrict to these source kinds (repeatable, any-of). Naming
         /// `claude-transcripts` opts it back into scope (REQ-1).
+        /// `telegram-voice` selects transcribed voice notes / round videos,
+        /// a per-record kind the source registry does not own.
         #[arg(long, env = "SY_KB_KIND", value_delimiter = ',')]
-        kind: Vec<sources::SourceKind>,
+        kind: Vec<sources::SearchKind>,
         /// Source names that must be present (repeatable, must). REQ-2.
         #[arg(long = "include-source", env = "SY_KB_INCLUDE", value_delimiter = ',')]
         include_source: Vec<String>,
@@ -197,6 +201,20 @@ pub enum KnowledgeCmd {
     /// Cancel any in-flight pass cooperatively. Daemon stays paused if it
     /// was paused before. Files already embedded keep their qdrant points.
     Cancel,
+
+    /// Sweep indexed transcribed chunks that are not speech: whisper answers
+    /// silence with an empty string, `[Music]`, or one stray character, and
+    /// each of those became a point whose degenerate vector outranked real
+    /// messages. A re-index cannot heal them (the export JSON is unchanged, so
+    /// the file is skipped by content hash). Dry-run by default.
+    /// BUG-20260927-2355.
+    Prune {
+        /// Actually delete; without this the command only reports the count.
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Throughput probe: embed N dummy chunks, report chunks/s, batch ms,
     /// and the active embed backend (cuda | cpu).
@@ -304,6 +322,7 @@ pub fn dispatch(cmd: KnowledgeCmd) -> Result<()> {
         KnowledgeCmd::Resume => cli::resume(),
         KnowledgeCmd::TogglePause => cli::toggle_pause(),
         KnowledgeCmd::Cancel => cli::cancel_op(),
+        KnowledgeCmd::Prune { apply, json } => cli::prune(apply, json),
         KnowledgeCmd::Bench { n, json } => cli::bench(n, json),
         KnowledgeCmd::Mcp => mcp::run(),
         KnowledgeCmd::McpEnable { apply, json } => cli::mcp_enable(apply, json),

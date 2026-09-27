@@ -14,7 +14,7 @@ use ignore::WalkBuilder;
 use serde_json::json;
 
 use super::{
-    embed, eval, exit, extract, ipc, manifest,
+    calibrate, embed, eval, exit, extract, ipc, manifest,
     pipeline::{self, Record},
     qdrant::{self, Point, PointPayload},
     repair,
@@ -230,20 +230,24 @@ fn human_count_full(n: u64) -> String {
     out
 }
 
+/// Glyph every knowledge tile leads with, live or dead.
+const GLYPH: &str = "\u{1f9e0}";
+/// Tile class for "installed, unreachable". Rendered in the warning
+/// colour so a dead plane is impossible to miss on the bar.
+const CLASS_DOWN: &str = "down";
+/// Tile class for "this plane never ran on this host" — the one case
+/// where collapsing the tile to zero width is honest.
+const CLASS_HIDDEN: &str = "hidden";
+
 /// One-line JSON for the waybar `custom/sy-knowledge` module. Reads the
-/// status file the daemon writes; falls back to an empty/hidden tile
-/// when the daemon hasn't written one in the last 90 s.
+/// status file the daemon writes; a snapshot that is stale or reports
+/// `daemon_running: false` yields a **visible** down tile (see
+/// [`down_tile`]), and only a missing status file collapses the tile.
 pub fn waybar() -> Result<()> {
-    let st = status::load().ok();
-    let payload = match st {
-        None => json!({"text": "", "class": "hidden", "tooltip": ""}),
-        Some(s) if !status::is_fresh(&s) || !s.daemon_running => {
-            let tooltip = format!(
-                "sy knowledge — daemon down\\nlast status {}s ago",
-                state::now_secs().saturating_sub(s.ts_unix)
-            );
-            json!({"text": "", "class": "hidden", "tooltip": tooltip})
-        }
+    let now = state::now_secs();
+    let payload = match status::load().ok() {
+        None => absent_tile(),
+        Some(s) if !status::is_fresh(&s) || !s.daemon_running => down_tile(&s, now),
         Some(s) => waybar_payload(&s),
     };
     // Manual single-line print: waybar parses one JSON per stdout line.
@@ -251,8 +255,37 @@ pub fn waybar() -> Result<()> {
     Ok(())
 }
 
+/// Tile for a knowledge plane that is configured but not answering.
+///
+/// BUG-20260927-0119: this used to emit `class:"hidden"` with empty
+/// text, and `#custom-sy-knowledge.hidden` in `style.css` zeroes the
+/// tile's padding and width — so a daemon that had been crash-looping for
+/// four days looked like an applet that was never installed. A dead plane
+/// must be *seen*: keep the glyph, flag it, and name the next command in
+/// the tooltip. Real `\n`s, because waybar renders the tooltip verbatim.
+fn down_tile(s: &status::Status, now: u64) -> serde_json::Value {
+    let age = now.saturating_sub(s.ts_unix);
+    json!({
+        "text": format!("{GLYPH} !"),
+        "class": CLASS_DOWN,
+        "tooltip": format!(
+            "sy knowledge — daemon down\nlast status {age}s ago\ndiagnose: sy doctor\nrestart:  systemctl --user restart sy-knowledge.service"
+        ),
+        "alt": CLASS_DOWN,
+    })
+}
+
+/// Tile for a host where the plane has never written a snapshot.
+fn absent_tile() -> serde_json::Value {
+    json!({
+        "text": "",
+        "class": CLASS_HIDDEN,
+        "tooltip": "sy knowledge — never ran on this host (`sy knowledge daemon`)",
+    })
+}
+
 fn waybar_payload(s: &status::Status) -> serde_json::Value {
-    let glyph = "🧠";
+    let glyph = GLYPH;
     let class = if s.paused {
         "paused"
     } else if s.cancelling {
@@ -545,6 +578,67 @@ pub fn cancel_op() -> Result<()> {
     send_or_warn(&ipc::Op::Cancel, "cancel")
 }
 
+/// Point ids whose stored text no longer clears the transcription gate.
+/// Pure so the *rule* is unit-testable while the corpus walk stays I/O.
+fn junk_transcript_ids(points: &[(String, String)]) -> Vec<String> {
+    points
+        .iter()
+        .filter(|(_, text)| !crate::knowledge::transcribe::has_speech(text))
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// Re-apply the transcription gate to points that were indexed before it
+/// existed. Whisper answers silence with `""`, `[Music]`, or one stray
+/// character, and every one of those became a searchable point whose
+/// degenerate vector could outrank a real message; the pass cannot heal them
+/// on its own, because the export JSON that yielded them is unchanged and so
+/// the file is skipped by content hash. Dry-run by default {d} it prints what
+/// it would remove {d} and only deletes under `--apply`.
+pub fn prune(apply: bool, json_out: bool) -> Result<()> {
+    use crate::knowledge::transcribe::TRANSCRIBED_KINDS;
+    let mut junk: Vec<String> = Vec::new();
+    let mut scanned = 0usize;
+    for kind in TRANSCRIBED_KINDS {
+        let points = qdrant::scan_kind(kind)?;
+        scanned += points.len();
+        junk.extend(junk_transcript_ids(&points));
+    }
+    let mut deleted = 0usize;
+    if apply {
+        for page in junk.chunks(qdrant::DELETE_PAGE) {
+            qdrant::delete_points(page)?;
+            deleted += page.len();
+        }
+    }
+    if json_out {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "scanned": scanned,
+                "junk": junk.len(),
+                "deleted": deleted,
+                "applied": apply,
+                "sample": junk.iter().take(10).collect::<Vec<_>>(),
+            }))?
+        );
+    } else {
+        println!(
+            "transcribed chunks scanned: {scanned}\nno usable speech:         {}{}",
+            junk.len(),
+            if apply {
+                format!(" ({deleted} deleted)")
+            } else {
+                " (dry run)".to_string()
+            }
+        );
+        if !apply && !junk.is_empty() {
+            println!("re-run with --apply to delete them");
+        }
+    }
+    Ok(())
+}
+
 fn send_or_warn(op: &ipc::Op, label: &str) -> Result<()> {
     // ipc::send swallows missing-socket as Ok (fire-and-forget). We probe
     // the socket separately so we can give the user a hint when the
@@ -557,16 +651,20 @@ fn send_or_warn(op: &ipc::Op, label: &str) -> Result<()> {
     Ok(())
 }
 
-/// Throughput / EP probe. Embeds N short strings in batches and prints
-/// `chunks/s`, `mean batch ms`, `p95 batch ms`, plus the active EP. Run
-/// alongside `nvidia-smi dmon -s u` to verify GPU engagement.
+/// Throughput / EP probe. Embeds N short strings and prints `chunks/s`,
+/// `mean batch ms`, `p95 batch ms`, plus the active EP. Each timed batch is
+/// one dispatched embed group ([`embed::EMBED_IPC_MAX_CALL]) — not a
+/// separate client-side slice — so `mean batch ms` *is* the longest a
+/// foreground search can be held up behind bulk work, which is the number
+/// BUG-20260927-2010 sized that constant against. Run alongside
+/// `nvidia-smi dmon -s u` to verify GPU engagement.
 pub fn bench(n: usize, json_out: bool) -> Result<()> {
     let n = n.max(8);
     let pad = "lorem ipsum dolor sit amet, consectetur adipiscing elit. ";
     let texts: Vec<String> = (0..n)
         .map(|i| format!("bench chunk {i} — {}", pad.repeat(8)))
         .collect();
-    let batch_size = 64usize;
+    let batch_size = embed::EMBED_IPC_MAX_CALL.min(n);
     let mut batch_ms: Vec<u128> = Vec::new();
     let total_start = std::time::Instant::now();
     for chunk in texts.chunks(batch_size) {
@@ -1004,6 +1102,9 @@ pub fn search(
             .map(|h| {
                 json!({
                     "score": h.score,
+                    // Same id the MCP tool advertises, so `sy knowledge
+                    // search --json` output can be drilled into by id too.
+                    "chunk_id": h.chunk_id.clone(),
                     "file_path": h.file_path,
                     "chunk_index": h.chunk_index,
                     "chunk_text": h.chunk_text,
@@ -1151,17 +1252,38 @@ pub fn include_opts_into_excluded_kinds(include_sources: &[String]) -> Vec<Strin
 }
 
 /// Exit code for `sy knowledge eval` when a metric regresses past
-/// tolerance (CLAUDE.md exit-code convention: 3 = drift detected). CI
-/// gates `make eval` on this non-zero exit.
+/// tolerance (CLAUDE.md exit-code convention: 3 = drift detected). Run by
+/// hand or from a pre-push hook — GitHub Actions has no index to score
+/// against, so `make eval` is the on-host gate, not a CI gate.
 pub const EVAL_DRIFT: i32 = 3;
 
-/// Default CI regression floors for `sy knowledge eval` (REQ-9). Tuned
-/// conservatively against a tiny golden set; raise as recall improves.
+/// Regression floors for `sy knowledge eval` (REQ-9).
+///
+/// Re-baselined 2026-09-27 after BUG-20260927-1910, which invalidated both
+/// the previous floors and the previous measurements. Three things had to be
+/// true at once: the harness had to stop scoring recall on abstained
+/// (therefore empty) responses, the calibrator had to stop double-applying
+/// the sigmoid, and the golden set's four `date-range` rows had to window the
+/// messages they ask about (2022–2024) instead of the Telegram export's file
+/// mtime (2026, zero indexed points).
+///
+/// Measured on the live 115k-point index (15 answerable, 9 unanswerable):
+/// recall@1 0.867, recall@5 0.933, mrr 0.900, abstain accuracy 0.958,
+/// false-abstain rate 0.067. Floors sit roughly one answerable query
+/// (1/15 ≈ 0.067) below each measurement, so losing a hit trips the gate
+/// while normal rerank jitter does not. The `false_abstain_rate` ceiling is
+/// two answerable queries (0.133) plus margin: one row (`Кениг …`, top-1
+/// probability 0.15) is honestly uncertain and stays suppressed by design.
+///
+/// Note that `recall@1 < recall@5` again. The old equality was never a
+/// property of this corpus — it was the harness emptying the hit list of
+/// every query its calibrator disliked.
 pub const DEFAULT_EVAL_TOLERANCE: eval::Tolerance = eval::Tolerance {
-    min_recall_at_1: 0.3,
-    min_recall_at_5: 0.5,
-    min_mrr: 0.4,
-    min_abstain_accuracy: 0.5,
+    min_recall_at_1: 0.80,
+    min_recall_at_5: 0.85,
+    min_mrr: 0.82,
+    min_abstain_accuracy: 0.90,
+    max_false_abstain_rate: 0.15,
 };
 
 /// Repo-relative location of the checked-in golden set (REQ-9).
@@ -1193,13 +1315,37 @@ where
     let ranked: Vec<eval::RankedResult> = queries.iter().map(&runner).collect::<Result<_>>()?;
     let m = eval::metrics(queries, &ranked);
     if json_out {
-        println!("{}", serde_json::to_string_pretty(&m)?);
+        // The SPEC §4.7 metric keys stay at the object root; `per_query` is
+        // an additive diagnostic so a regression names the query instead of
+        // just the metric.
+        let mut out = serde_json::to_value(&m)?;
+        out["per_query"] = serde_json::to_value(eval::per_query(queries, &ranked))?;
+        println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         println!("recall@1         {:.3}", m.recall_at_1);
         println!("recall@5         {:.3}", m.recall_at_5);
         println!("mrr              {:.3}", m.mrr);
         println!("abstain_accuracy {:.3}", m.abstain_accuracy);
+        println!("false_abstain    {:.3}", m.false_abstain_rate);
         println!("n                {}", m.n);
+        for row in eval::per_query(queries, &ranked) {
+            let rank = match row.rank {
+                Some(r) => r.to_string(),
+                None => "-".into(),
+            };
+            println!(
+                "  {:<9} rank={:<4} conf={:<5.3} abstained={:<5} {}",
+                if row.answerable {
+                    "answerable"
+                } else {
+                    "unanswer"
+                },
+                rank,
+                row.confidence,
+                row.abstained,
+                row.query
+            );
+        }
     }
     if let Some(reason) = tol.regression(&m) {
         return Err(super::KnowledgeError {
@@ -1234,6 +1380,9 @@ fn run_query_live(q: &eval::LabelledQuery) -> Result<eval::RankedResult> {
         Vec::new(),
         Vec::new(),
     );
+    // Abstention is requested OFF so the ranking survives; the abstain
+    // decision is then recomputed from the returned confidence by
+    // [`eval_ranked`] (BUG-20260927-1910).
     let outcome = search_outcome_filtered(
         &q.query,
         eval::RECALL_K,
@@ -1242,16 +1391,33 @@ fn run_query_live(q: &eval::LabelledQuery) -> Result<eval::RankedResult> {
         8,
         sy_core::Priority::Interactive,
         Some(filter),
-        Some(DEFAULT_EVAL_ABSTAIN),
+        None,
     )?;
-    Ok(eval::RankedResult {
-        ids: outcome
+    Ok(eval_ranked(
+        outcome
             .hits
             .iter()
             .map(|h| format!("{}#{}\n{}", h.file_path, h.chunk_index, h.chunk_text))
             .collect(),
-        abstained: outcome.abstained,
-    })
+        outcome.confidence,
+    ))
+}
+
+/// Reduce a live search response to eval inputs: keep the full ranking and
+/// derive the abstain flag from the calibrated confidence against
+/// [`DEFAULT_EVAL_ABSTAIN`].
+///
+/// This is the seam that keeps the two axes independent. Asking the daemon to
+/// abstain *and* scoring recall on the response is self-defeating: the daemon
+/// returns an empty hit list when it abstains, so every suppressed query
+/// scored as a retrieval failure and `recall@1` came out equal to
+/// `recall@5` for the whole suite (BUG-20260927-1910).
+fn eval_ranked(ids: Vec<String>, confidence: f32) -> eval::RankedResult {
+    eval::RankedResult {
+        ids,
+        abstained: calibrate::should_abstain(confidence, DEFAULT_EVAL_ABSTAIN),
+        confidence,
+    }
 }
 
 /// Abstain threshold used by the eval runner so unanswerable golden-set
@@ -1531,6 +1697,18 @@ pub fn run_index(
     ctx: &RunCtx,
 ) -> Result<IndexReport> {
     let start = std::time::Instant::now();
+    // A chunker/embedder contract change invalidates every stored hash
+    // comparison, so an incremental pass must refuse rather than keep a
+    // stale corpus "indexed". Only a full resync clears the drift, because
+    // it drops the collection (see `state::resync_required`).
+    if let Some(why) = state::resync_required(idx) {
+        if !full_resync {
+            anyhow::bail!(why);
+        }
+    }
+    if full_resync {
+        idx.chunk_schema_version = state::CHUNK_SCHEMA_VERSION;
+    }
     let jobs = collect_jobs(only_source)?;
     if jobs.is_empty() {
         return Ok(IndexReport::default());
@@ -1827,6 +2005,32 @@ fn build_point(id: String, vector: Vec<f32>, record: &Record, item: &PendingFile
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aiplane::status::tests::test_status;
+
+    /// `prune` deletes points irreversibly, so its selector is pinned on both
+    /// sides: every junk shape whisper actually produces, and the real
+    /// transcripts that must survive {d} including the 7-character Russian
+    /// word and the 3-character Chinese phrase that a naive length check
+    /// would have eaten.
+    #[test]
+    fn prune_selects_only_non_speech_points() {
+        let points = vec![
+            ("junk-empty".to_string(), String::new()),
+            ("junk-effect".to_string(), "[Music]".to_string()),
+            ("junk-paren".to_string(), "(".to_string()),
+            ("junk-char".to_string(), "в".to_string()),
+            ("real-word".to_string(), "спасибо".to_string()),
+            (
+                "real-prose".to_string(),
+                "we should ship this on Friday".to_string(),
+            ),
+            ("real-cjk".to_string(), "你好吗".to_string()),
+        ];
+        assert_eq!(
+            junk_transcript_ids(&points),
+            vec!["junk-empty", "junk-effect", "junk-paren", "junk-char"],
+        );
+    }
 
     #[test]
     fn upsert_point_carries_dense_and_sparse() {
@@ -2059,6 +2263,7 @@ mod tests {
             Ok(eval::RankedResult {
                 ids: vec!["chunk about X5 Магнит".into()],
                 abstained: false,
+                confidence: 0.9,
             })
         };
         // Loose tolerance so a perfect run does not regress.
@@ -2067,6 +2272,7 @@ mod tests {
             min_recall_at_5: 0.0,
             min_mrr: 0.0,
             min_abstain_accuracy: 0.0,
+            max_false_abstain_rate: 1.0,
         };
         // Drives the metrics + JSON branch; returns Ok (no regression).
         run_eval(&queries, runner, true, &tol).expect("json metrics, no regression");
@@ -2081,6 +2287,7 @@ mod tests {
             Ok(eval::RankedResult {
                 ids: vec!["unrelated noise".into()],
                 abstained: false,
+                confidence: 0.9,
             })
         };
         let err =
@@ -2089,6 +2296,24 @@ mod tests {
             .downcast_ref::<super::super::KnowledgeError>()
             .expect("KnowledgeError");
         assert_eq!(ke.code, EVAL_DRIFT);
+    }
+
+    /// A suppressed-but-correct answer must stay visible in the ranking: the
+    /// abstain flag is derived from the confidence, never by discarding the
+    /// hits (BUG-20260927-1910 regression guard).
+    #[test]
+    fn eval_ranked_keeps_ranking_and_derives_abstain_from_confidence() {
+        let ids = vec!["telegram/result.json#7\nзолотой чанк".to_string()];
+        let suppressed = eval_ranked(ids.clone(), DEFAULT_EVAL_ABSTAIN - 0.01);
+        assert!(suppressed.abstained, "below threshold must abstain");
+        assert_eq!(
+            suppressed.ids, ids,
+            "recall must still see the ranking the policy suppressed"
+        );
+        let confident = eval_ranked(ids.clone(), DEFAULT_EVAL_ABSTAIN + 0.2);
+        assert!(!confident.abstained, "at/above threshold must not abstain");
+        assert_eq!(confident.ids, ids);
+        assert!((suppressed.confidence - (DEFAULT_EVAL_ABSTAIN - 0.01)).abs() < 1e-6);
     }
 
     #[test]
@@ -2100,5 +2325,120 @@ mod tests {
         let queries = parse_golden_set(&body).expect("parse golden set");
         assert!((20..=40).contains(&queries.len()), "20-40 rows");
         assert!(queries.iter().filter(|q| !q.answerable).count() >= 5);
+    }
+
+    /// The golden set is data, and data rots. An answerable row with no gold
+    /// string is unscoreable, and a date-filtered row with an inverted window
+    /// matches nothing — both are shape errors the shipped file must not
+    /// carry, so they are pinned statically rather than discovered as a
+    /// mysterious metric drop.
+    #[test]
+    fn checked_in_golden_set_rows_are_scorable_shapes() {
+        let path = repo_relative(GOLDEN_SET_REL).expect("repo path");
+        let body = std::fs::read_to_string(&path).expect("read golden set");
+        let queries = parse_golden_set(&body).expect("parse golden set");
+        for q in &queries {
+            if q.answerable {
+                assert!(
+                    !q.expected.is_empty(),
+                    "answerable row needs a gold: {}",
+                    q.query
+                );
+            }
+            if let (Some(lo), Some(hi)) = (&q.date_from, &q.date_to) {
+                assert!(lo < hi, "inverted date window for {}: {lo} > {hi}", q.query);
+            }
+        }
+    }
+
+    /// A `date-range` row must window the *fact it asks about*, not the
+    /// export's file mtime. BUG-20260927-1910 found four answerable rows whose
+    /// windows came from the 2026 export timestamp while the messages are
+    /// dated 2022–2024: the gold chunk was unreachable by construction, so
+    /// recall@5 was pinned at 0.667 by labelling, not by retrieval. Rows carry
+    /// the gold's real message date in `_gold_date` so the containment rule
+    /// stays checkable without a live index.
+    #[test]
+    fn checked_in_golden_set_date_windows_contain_their_gold_date() {
+        let path = repo_relative(GOLDEN_SET_REL).expect("repo path");
+        let body = std::fs::read_to_string(&path).expect("read golden set");
+        let mut checked = 0usize;
+        for line in body.lines().filter(|l| !l.trim().is_empty()) {
+            let v: serde_json::Value = serde_json::from_str(line).expect("row json");
+            let Some(gold_date) = v.get("_gold_date").and_then(|g| g.as_str()) else {
+                continue;
+            };
+            let lo = v
+                .get("date_from")
+                .and_then(|d| d.as_str())
+                .expect("date_from");
+            let hi = v.get("date_to").and_then(|d| d.as_str()).expect("date_to");
+            // Compare date prefixes: the bounds are RFC 3339 instants, the
+            // bookkeeping value is a calendar date.
+            let (lo, hi) = (&lo[..10], &hi[..10]);
+            assert!(
+                lo <= gold_date && gold_date <= hi,
+                "gold date {gold_date} outside window {lo}..{hi} for {}",
+                v.get("query").and_then(|q| q.as_str()).unwrap_or("?")
+            );
+            checked += 1;
+        }
+        assert!(checked >= 4, "expected >=4 date-window rows: {checked}");
+    }
+
+    // BUG-20260927-0119: a configured-but-dead plane must be *visibly*
+    // dead. These three tests pin the tile contract that used to render
+    // `class:"hidden"` + empty text, which is indistinguishable from
+    // "applet never installed" — that is how a wiped model cache went
+    // unnoticed for four days.
+
+    #[test]
+    fn stale_status_tile_is_visible_and_classed_down() {
+        let mut s = test_status();
+        s.ts_unix = 1_000;
+        s.daemon_running = true; // stale by age alone
+        let v = down_tile(&s, 1_000 + status::FRESH_SECS + 1);
+        assert_eq!(v["class"], CLASS_DOWN);
+        assert_eq!(v["text"], format!("{GLYPH} !"), "tile must not be empty");
+        let tip = v["tooltip"].as_str().expect("tooltip");
+        assert!(tip.contains("daemon down"), "{tip}");
+        assert!(
+            tip.contains("sy doctor"),
+            "tooltip must name the probe: {tip}"
+        );
+        assert!(
+            tip.contains("\n"),
+            "tooltip needs a real newline for waybar: {tip:?}"
+        );
+    }
+
+    #[test]
+    fn shutdown_status_tile_is_classed_down() {
+        // Daemon wrote its final `daemon_running:false` snapshot: fresh
+        // timestamp, dead process — still a visible red tile.
+        let mut s = test_status();
+        s.daemon_running = false;
+        let v = down_tile(&s, s.ts_unix + 1);
+        assert_eq!(v["class"], CLASS_DOWN);
+        assert!(!v["text"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn absent_status_file_collapses_the_tile() {
+        // `hidden` is reserved for "this plane never ran here", which is
+        // the only case where an invisible applet is honest.
+        let v = absent_tile();
+        assert_eq!(v["class"], CLASS_HIDDEN);
+        assert_eq!(v["text"], "");
+    }
+
+    #[test]
+    fn live_status_tile_keeps_the_brain_glyph_classes() {
+        let mut s = test_status();
+        s.paused = true;
+        assert_eq!(waybar_payload(&s)["class"], "paused");
+        s.paused = false;
+        s.points = 1_234;
+        assert_eq!(waybar_payload(&s)["class"], "idle");
     }
 }
