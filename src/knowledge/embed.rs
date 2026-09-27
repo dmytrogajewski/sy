@@ -271,7 +271,7 @@ fn plane_unreachable(reason: impl std::fmt::Display) -> KnowledgeError {
 }
 
 /// Unwrap `WorkloadOutput::Vector` positionally. A wrong variant is fatal
-/// here: callers map vector[i] → chunk[i] when they build qdrant points.
+/// here: callers map `vector[i]` → `chunk[i]` when they build qdrant points.
 fn vectors_from(outputs: Vec<WorkloadOutput>) -> Result<Vec<Vec<f32>>> {
     let mut out = Vec::with_capacity(outputs.len());
     for o in outputs {

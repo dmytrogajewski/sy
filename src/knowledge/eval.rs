@@ -72,7 +72,7 @@ pub struct Metrics {
     pub mrr: f64,
     pub abstain_accuracy: f64,
     /// Fraction of *answerable* queries whose gold the retriever found but
-    /// the abstain policy suppressed. See [`metrics`].
+    /// the abstain policy suppressed. See [`metrics()`].
     pub false_abstain_rate: f64,
     pub n: usize,
 }
@@ -192,7 +192,7 @@ pub struct QueryOutcome {
 }
 
 /// Per-query [`QueryOutcome`] rows, parallel to `labelled` (truncated to the
-/// shorter input so the function stays total, like [`metrics`]).
+/// shorter input so the function stays total, like [`metrics()`]).
 pub fn per_query(labelled: &[LabelledQuery], ranked: &[RankedResult]) -> Vec<QueryOutcome> {
     labelled
         .iter()
