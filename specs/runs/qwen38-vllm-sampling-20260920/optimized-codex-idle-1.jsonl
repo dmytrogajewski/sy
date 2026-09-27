@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"01a0c049-4e6a-7990-ba18-832837887329"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"The user wants a brief response and explicitly said not to use any tools.\n"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"\n\nUnderstood — zuzino agent ready, inference only, no tools, no file reads, no changes. Ask away."}}
+{"type":"turn.completed","usage":{"input_tokens":21595,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":44,"reasoning_output_tokens":0}}

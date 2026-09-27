@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"01a0c046-f457-7722-b85e-1657898da449"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 1/5 (stream disconnected before completion: Transport error: network error: error decoding response body)"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"The user just wants a brief response without any tools or file operations—just acknowledging that I'm ready to help.\n"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"\n\nUnderstood — standing by, inference-only. No tools, no file reads, no changes. Ask away."}}
+{"type":"turn.completed","usage":{"input_tokens":21595,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":49,"reasoning_output_tokens":0}}

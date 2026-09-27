@@ -1,0 +1,20 @@
+{
+  "schema": "sy.spark.benchmark-observations/v1",
+  "native": {
+    "kv_cache_tokens": 415179,
+    "mtp_num_speculative_tokens": 3,
+    "max_262144_request_concurrency": 1.58
+  },
+  "resources": {
+    "mem_available_bytes": 12530397184,
+    "memory_full_psi_avg10_percent": 0.0,
+    "swap_in_pages_delta": 0,
+    "disk_available_bytes": 124165812224
+  },
+  "lifecycle": {
+    "generation": 3,
+    "healthy": true,
+    "startup_milliseconds": 713035,
+    "restart_failures": 0
+  }
+}

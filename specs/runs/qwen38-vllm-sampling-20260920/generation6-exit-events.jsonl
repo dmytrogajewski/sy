@@ -1,0 +1,12 @@
+{"time":1789928901,"Action":"die","name":"sy-spark-i_399d6f488a7be6ee2831fdc7ef153624-g6","exitCode":"0","signal":null}
+{"time":1789928902,"Action":"start","name":"sy-spark-i_399d6f488a7be6ee2831fdc7ef153624-g6","exitCode":null,"signal":null}
+{"time":1789928902,"Action":"update","name":"sy-spark-i_399d6f488a7be6ee2831fdc7ef153624-g6","exitCode":null,"signal":null}
+{"time":1789928903,"Action":"update","name":"sy-spark-i_399d6f488a7be6ee2831fdc7ef153624-g6","exitCode":null,"signal":null}
+{"time":1789928904,"Action":"update","name":"sy-spark-i_399d6f488a7be6ee2831fdc7ef153624-g6","exitCode":null,"signal":null}
+{"time":1789928905,"Action":"update","name":"sy-spark-i_399d6f488a7be6ee2831fdc7ef153624-g6","exitCode":null,"signal":null}
+{"time":1789928906,"Action":"update","name":"sy-spark-i_399d6f488a7be6ee2831fdc7ef153624-g6","exitCode":null,"signal":null}
+{"time":1789928907,"Action":"update","name":"sy-spark-i_399d6f488a7be6ee2831fdc7ef153624-g6","exitCode":null,"signal":null}
+{"time":1789928907,"Action":"kill","name":"sy-spark-i_399d6f488a7be6ee2831fdc7ef153624-g6","exitCode":null,"signal":"15"}
+{"time":1789928907,"Action":"stop","name":"sy-spark-i_399d6f488a7be6ee2831fdc7ef153624-g6","exitCode":null,"signal":null}
+{"time":1789928907,"Action":"die","name":"sy-spark-i_399d6f488a7be6ee2831fdc7ef153624-g6","exitCode":"143","signal":null}
+{"time":1789928907,"Action":"destroy","name":"sy-spark-i_399d6f488a7be6ee2831fdc7ef153624-g6","exitCode":null,"signal":null}

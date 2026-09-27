@@ -1,0 +1,9 @@
+{
+  "schema": "sy.spark.resources.snapshot/v1",
+  "observed_at_unix_ms": 1789921263212,
+  "mem_total_bytes": 128427978752,
+  "mem_available_bytes": 12470484992,
+  "memory_full_psi_avg10_percent": 0.0,
+  "swap_in_pages_delta": 1,
+  "disk_available_bytes": 124165300224
+}

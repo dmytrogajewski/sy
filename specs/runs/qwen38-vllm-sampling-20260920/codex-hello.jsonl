@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a0bfe8-eea5-7ef3-82dc-e5e2816a181e"}
+{"type":"turn.started"}
+{"type":"error","message":"{\"error\":{\"code\":\"unsupported_tool\",\"message\":\"only client-side function and custom tools are supported\",\"param\":null,\"type\":\"invalid_request_error\"}}"}
+{"type":"turn.failed","error":{"message":"{\"error\":{\"code\":\"unsupported_tool\",\"message\":\"only client-side function and custom tools are supported\",\"param\":null,\"type\":\"invalid_request_error\"}}"}}

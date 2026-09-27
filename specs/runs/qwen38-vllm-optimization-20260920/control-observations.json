@@ -1,0 +1,10 @@
+{
+  "schema": "sy.spark.benchmark-observations/v1",
+  "native": {},
+  "resources": {
+    "mem_available_bytes": 16402890752,
+    "memory_full_psi_avg10_percent": 0.0,
+    "swap_in_pages_delta": 0
+  },
+  "lifecycle": {}
+}

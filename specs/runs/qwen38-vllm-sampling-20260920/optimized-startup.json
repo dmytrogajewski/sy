@@ -1,0 +1,1524 @@
+{
+  "schema": "sy.spark.engine-logs/v2",
+  "instance_id": "i_399d6f488a7be6ee2831fdc7ef153624",
+  "generation": 8,
+  "engine_id": "vllm-qwen38-mmap-arm64",
+  "engine_fingerprint": "sha256:1b878194852da5048ecd7b104b89b0cc42758ac8fd35c97206378b1db4ec0df4",
+  "artifacts": {
+    "schema": "sy.spark.model-artifacts/v2",
+    "format": "safetensors",
+    "primary": {
+      "path": "model.safetensors.index.json",
+      "bytes": 34258807,
+      "sha256": "da5ca9c3b65e48e151329e64e141c2fa700bf2f99aec53cc014e4b52a6ff7a84"
+    },
+    "auxiliary": [
+      {
+        "role": "weight_shard",
+        "path": "layer-00000-experts-0000-0127.safetensors",
+        "bytes": 354098208,
+        "sha256": "d367f9ed6570543e49a99db0a8f88fe12ed94117f9bb3db0d90624937cb56457"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00000-experts-0128-0255.safetensors",
+        "bytes": 354099528,
+        "sha256": "e24ede1ac5e0341608da8ada2989bc92981ff6286e2f1601025ccb8c8d8b36ee"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00000-experts-0256-0383.safetensors",
+        "bytes": 354099528,
+        "sha256": "7ab7f14e3072a3073079701c721c05aca111c365336294d9eb78651355565bd3"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00000-experts-0384-0511.safetensors",
+        "bytes": 354099528,
+        "sha256": "1d91a60f90dbc44655c37d97d7eb37c93d5a8a872b92efed20f77d0705277045"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00001-experts-0000-0127.safetensors",
+        "bytes": 354098208,
+        "sha256": "f987d5b4bf0a09f933e77230a7155917caeccd684a9c2af65ae055e7ba2f5841"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00001-experts-0128-0255.safetensors",
+        "bytes": 354099528,
+        "sha256": "6bfd3aa965124674ef499f5e33e842ef6e012755dfa659da1e09a2f689a3257d"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00001-experts-0256-0383.safetensors",
+        "bytes": 354099528,
+        "sha256": "3e38e9e9a79a96cad1473f129897ff2fa79593b65cc9dd1d7416370b96675040"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00001-experts-0384-0511.safetensors",
+        "bytes": 354099528,
+        "sha256": "2f277f27504d22712822fb711071a212dd695841c9cbf4be7d3719d78f64d3db"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00002-experts-0000-0127.safetensors",
+        "bytes": 354098208,
+        "sha256": "e50f19bc1547c83a18d278b5b7c1cb544d76ee1a9487ee16be6e2af7a5135244"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00002-experts-0128-0255.safetensors",
+        "bytes": 354099528,
+        "sha256": "76671caa9d6bef00bdead734b3b325aa08091ba3ff10df802ab3a8299cb4380e"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00002-experts-0256-0383.safetensors",
+        "bytes": 354099528,
+        "sha256": "21170bf6d48641a8deb3b72c91a92386361ac15071cb96bc8c3ec60dd4c1428c"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00002-experts-0384-0511.safetensors",
+        "bytes": 354099528,
+        "sha256": "fc02c5de9f8be6cc33c8b9426022ab3af2e8de71665d75b49863e3c4243fd3f6"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00003-experts-0000-0127.safetensors",
+        "bytes": 354098208,
+        "sha256": "81a41d71d0405ce057ea78c81fe967cda0e4df89b70eca587306798007aae674"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00003-experts-0128-0255.safetensors",
+        "bytes": 354099528,
+        "sha256": "13d153729652cba5f9f33eb5f7cbc4c2696453d5d7c125b451a5b04319cf8c02"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00003-experts-0256-0383.safetensors",
+        "bytes": 354099528,
+        "sha256": "000bb3a3a9148a08cd12ecfb308fc9dc565026aff9fa3f6a39e300a91d21e463"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00003-experts-0384-0511.safetensors",
+        "bytes": 354099528,
+        "sha256": "e27cb3b27f029ec5c18d78cea549f7939336894c2ae01b0b4c174626f639201b"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00004-experts-0000-0127.safetensors",
+        "bytes": 354098208,
+        "sha256": "e784a5b42e35615d3f2eb8ab264ab6d1498e3e8791076b3b0a1c34f3eac9c8c6"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00004-experts-0128-0255.safetensors",
+        "bytes": 354099528,
+        "sha256": "2479cc9a39ff2648f9c225ade0ce635ab7393662793f7097ff0f502a9b0e44b2"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00004-experts-0256-0383.safetensors",
+        "bytes": 354099528,
+        "sha256": "4926bf02da40ce2adfb2c2e06325b81340d91589aa7c383a8d047bc499c8f573"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00004-experts-0384-0511.safetensors",
+        "bytes": 354099528,
+        "sha256": "a05a14cd5e08b38074b35b39e4c961402827d3b9e4737df4b76fc338483859ab"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00005-experts-0000-0127.safetensors",
+        "bytes": 354098208,
+        "sha256": "912811df1ffc0226b3a21f42fdd5e979d448a2bc329321087eaa87553aa9d1df"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00005-experts-0128-0255.safetensors",
+        "bytes": 354099528,
+        "sha256": "e76dace09c68bba7d573f688958c1ab79c2790666dafa3641067168ec189b361"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00005-experts-0256-0383.safetensors",
+        "bytes": 354099528,
+        "sha256": "ec950a8a7013a2904028f6aa450fe321f38d1a97483d3048f3824794287f74da"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00005-experts-0384-0511.safetensors",
+        "bytes": 354099528,
+        "sha256": "7a7dcfd32d7b27221d4595343462d475093d45c95705e0eb51117bfe4c42906b"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00006-experts-0000-0127.safetensors",
+        "bytes": 354098208,
+        "sha256": "933a455efdb7de629b707fa58d2ea93af64c9d289aadc0907993d0eed364e70e"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00006-experts-0128-0255.safetensors",
+        "bytes": 354099528,
+        "sha256": "09d9c4301048b95ef3f4cb43756c76bcf1caf181fc1f46c80d113699f9cc1190"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00006-experts-0256-0383.safetensors",
+        "bytes": 354099528,
+        "sha256": "9a24d6de2c4044f161e296f9d8206fb732514a73a357bcc5b5aa492265050cc3"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00006-experts-0384-0511.safetensors",
+        "bytes": 354099528,
+        "sha256": "1b0c1b76e2ea2ad41a8be46b699119af9ca1deb6f4101e3f2766ae73c2c3889a"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00007-experts-0000-0127.safetensors",
+        "bytes": 354098208,
+        "sha256": "ebbf7d1038139ede10a6d51024c8766f2d41f14550cb8fafd8c6870f11f73dfb"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00007-experts-0128-0255.safetensors",
+        "bytes": 354099528,
+        "sha256": "5d0d93dbe8accb9934ef2dd1b46ae16016378c87e0fce1b67cf76c05fb042f27"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00007-experts-0256-0383.safetensors",
+        "bytes": 354099528,
+        "sha256": "edcca3b3819218b11d747f5411d889e79ae8cc8cd4e87842a09ef630e874b2dc"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00007-experts-0384-0511.safetensors",
+        "bytes": 354099528,
+        "sha256": "521779414bc473815c661931323f75012165e5d59256eb31a7d88f93fdf931e7"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00008-experts-0000-0127.safetensors",
+        "bytes": 354098208,
+        "sha256": "5070037b26df8c3d87a13248226f2fe1bd1312e8ec7933ad95071f5591a49f0e"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00008-experts-0128-0255.safetensors",
+        "bytes": 354099528,
+        "sha256": "29063412c01ee9c8eec38bc5028eab090e85339219114ab193cc3577c032fcc8"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00008-experts-0256-0383.safetensors",
+        "bytes": 354099528,
+        "sha256": "999422559453720ac35c64e46ac30b5c8427a5c8e2c694831369b4b29920bc21"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00008-experts-0384-0511.safetensors",
+        "bytes": 354099528,
+        "sha256": "6fad6ce894124a7d74f2a34a82954a2cd1128206dcace823e63af7788f023980"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00009-experts-0000-0127.safetensors",
+        "bytes": 354098208,
+        "sha256": "90ef8f76c7415a1ca69c4bf8b64135f5ee27d42b2b03a6af1556daf084a3ffcd"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00009-experts-0128-0255.safetensors",
+        "bytes": 354099528,
+        "sha256": "75edef05364e8d6d89da56111cbc0ee6a7ff70b61f6d63c7ec7dcdf5b0db801c"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00009-experts-0256-0383.safetensors",
+        "bytes": 354099528,
+        "sha256": "56f9f90923efeb3e05a9ef7e086826cebc1eb3a4f62d628a3501596f20c623ce"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00009-experts-0384-0511.safetensors",
+        "bytes": 354099528,
+        "sha256": "4094286ed6b1518046b321d70bab660d33eaa285cbd275ca1b5d9c687c986121"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00010-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "68a4532a1432712d21c09dae384dfaefce7f68b4e6be3528571676a8bede2960"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00010-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "ad652e49701dc1ebb7fcb6189dd60c09966dacab32ac5c30184992bc9cc9f025"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00010-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "88b8cd2a04946087315f4f7354a9c229689c494c99a1a6e63e2a5ef155db6b7b"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00010-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "19596339ee4ef575452cfa2d2aece12c525fda94308b7d6893eb317fe65ba759"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00011-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "b6200a9b68496dc61b705d29b2b1ea1b7d13cc516edcdc14cdfe98d7cfef0730"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00011-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "bc879b9347d0587157ad96c7cb056675996f3fabfcdb9465d4883ec5eb443f4a"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00011-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "dbe5c9568538e9228baa101d1d945c3d832c87d61d63ca0baac23059859a49af"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00011-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "558b97015911a591cf5586ca5d37bc0b10eed01d2255b1669749d32b1be70e59"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00012-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "2d397a091516cc731e96816a9f04ed2f91e57ca9c05f3f1e0457bb0e45f503f7"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00012-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "24f7f2abfb8b767cb15b16cdd54178c3683c6d71d2f829c285b376986ae2eea2"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00012-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "4321bfe78906522316a4d0c2493872edf74c5e439cf1cf81892d51f273db0136"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00012-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "47346d69140682e1471ce33c82136014f7b21d6ba4213a7733a833479c0c7aee"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00013-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "3f8fe8175f1a6b91e138909ac1c443c86d6a88042ca2ab50b9b11bd51cadf834"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00013-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "62b0b839555207d96c894c4110a9aa757e34b756b6b9553edce24fa8d74faec4"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00013-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "7c7000b3619b91b2a30ee3d451180c431747ecf15e14fc1de8d4c4582356c0de"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00013-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "0eafff8f1fa3d84cda08d8fba633ae4ba3428c710792be00704e014a5132d1bc"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00014-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "3bc4d5fc2a77321dc1873246c3a472f8c1b5314feff2522254fa2f299f78e2e5"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00014-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "b823e0cee319b619968acaeba80c8b18d520ae9fc178cf4724034338c46c7d57"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00014-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "58a262f85cce6607232a9ccc67bdeaeb2872139b9c22877241d54ad2cd98c834"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00014-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "c2f1a5e3401305b6270cb5a5dd9721143e4470da05f70004ae6b57c978a193b8"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00015-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "567cc35e0ced101973b5d92aa384779b6cc1006199f52314e9d4cd9cdfe273b4"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00015-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "b5eabab058dc2195ed5594ea8968e2f2ed5fc8d92d39961d24a42ddc9fbe2506"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00015-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "0673c5fdce8dd6104a88b3baf9e27a29ddb147009af2f48556ddc03e91561b68"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00015-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "4b9e16bbb6f34671fce3cd3627ef0cf1a542095c46bbfa4967c7fa191772cc57"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00016-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "549cf0a240c5bfc08c5134e4477d453a19a90afee0baabbead88cbd3d32556ea"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00016-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "508331705c85d792a8f2fbd7344cd6f05f98fb0851fff79e4ac4b48a4c7150df"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00016-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "23e3d1654fff408816edb1192268736c2a58090e0dc6f8f931d407e98f611cc3"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00016-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "e5b5709cc3799ca076cafcf64b6f7ad1eb5820cf64188d9dc92f13888006fdb5"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00017-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "c158fc5bbf96cc64e8fdaa1be1fa0d12df5da6048e5236c2268058fe3560c700"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00017-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "168581b524e2b6937405c11cf227a917ca7732a907a9e2c6f28e5a18cc8fe40f"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00017-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "d3b503750fe0829af5171372c5a90d106694cc85f9518420fd82e7a5a445b3e4"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00017-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "37beff318fcd350d83f3a841a4864c6e466f846b9691f7b6fa87f189328b70c7"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00018-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "b80b8151e21d27ed41f9e64a383469db85f982ce10a0be76b2b3053e7539a5a5"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00018-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "c3284c528f0c2083ef72dfce27c890fa31286e6c3c0636183edeea3bce1f96e5"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00018-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "940ff868de9b0bae4184cccf7cd410aea022df8fe5f1aaaa3c7946e9a7d3473e"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00018-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "861632cf423d474282da4e967d9b1dadafc8bcdf5232553d5d568d8ac3b6e72c"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00019-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "b169c46264cedb7ab0223f361dbb64f13abd8dd36a75935ea47fe17634d6db5d"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00019-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "60068e4f6634e07d1e9ce6d1f64066e91cb832655e42002e263cb194beede0b3"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00019-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "4526078c89f23834251b8b449a4c5b35b8de4c5116adf204dbb7476c089242f4"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00019-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "23bbff916cac0b589920a1cfa689a4feb30b09bae71d62298554c9caa614c14b"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00020-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "3f60eb3bf1c5ef04894b50cd99d064cadc9e836c340c576b230f753867dce9aa"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00020-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "9f335aa65fa587e99342dd607277c0d6e2672f1feb3cab3dd93bc8f303804ff6"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00020-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "3c5b9f9e8df064c205187b1ec733b6b0850f11a75020960357a55102fdbce8d5"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00020-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "2642d5d728ff4985abbbdaf086cc55e374c3459c9e7a4ae693ed6db5a013ebce"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00021-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "93227a3733f1a851eb36543f4b7df765869ba56110acf8966ed0e1118b2296c3"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00021-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "244185aaf74c55b9ce74c789b500691983d7606cf22579fe6d5144e205063110"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00021-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "a542ae04a12af360987efff19022cdb3c23c66eb4336f12f9798f858c3e7fe9d"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00021-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "a7437f07bb1eb8901f7c304e396efa6bf5ac7ed63c7eb0e193ab58736bf7161a"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00022-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "8dddafa23e0c34888775e566b0c03591e7148049d9e96402b23b96e43e17120e"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00022-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "1f12162297cc4967a14531b5ce4323107062e28b4e043ff326a6597361ec5e66"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00022-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "b9df10513e1aa7a3c32934b0ee572b3d2f81b43bd8f73186e3779658b93fb96f"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00022-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "93b54aa4fc9ef06cf2bf8ac295a605c125380ebd56adff36c1f68a7d8aeacf17"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00023-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "b7bc6a1a6e4355016e3916a23f8060702a80db9b5a200202185ab2506509e8fc"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00023-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "cdec95b4defdff52735c3c14f9e6a223bc9979ac3ac2a301880f34ea79f4c1f7"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00023-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "3b0079ad9b1b18433823488c3cf37052c79a01e782fe8c7e1184e84548560225"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00023-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "20d44d6e85ffb0b9e939b07ac63e994cd4707ba5f4c6b3c2bf3ef66b357109f2"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00024-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "08750c65b4c40c65bb45b4fd4e5ad6255b89f29f3ce203d002643a65df5c343d"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00024-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "defd82e8300c9fceabb5cfd321327471050a5c42876f855c3f428c97cc0797e3"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00024-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "1df6e0ba920a67ea4a30efcef8f24abd8407687d40db7d0f0dfda7f7a223371a"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00024-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "99ff047c10b039d8b2c29959158f30dda36d88bb727dc8901a3a72bd616c8146"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00025-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "193bd0313811df798e6bed2773757f5bb51987acb5f675d830576db1f79c6c86"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00025-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "e476c290b5beeba1c39233f03b78a695789b5d108a1af2a71781d75f1c872708"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00025-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "1ae4130404619dedea46db458a5d6ddab15e58064b48001ee3d0696c3742d265"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00025-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "17a6ac277c4b1357da4afab1e394fb1e1e99be2553a33ff98a3a9251818a256d"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00026-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "1bf688d4658c7dbe186793a2b3944ec1a1a1effbf0b91d0dcb137f4e4dac249c"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00026-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "234aec40e56b29ca1ea38f5483ce7a2aacdea5e3377d76417a6c6e5e710d2bee"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00026-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "64093f5572a8ddefc149f7385b916a5c032c87ec3511dca7087f4484a349950d"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00026-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "2421857831c4cd4ea4b091b0128f30012e90b9747514bf89d81d5f3b30ed4330"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00027-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "2782b3eb51fe5ae4e95865c330e9a36d0d8e8d1e46e1b07ef3f34e6cdb2aee05"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00027-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "2ca1523a585acba2383abb9e7ad1f46ec92df4c81dab7ff0f929ff0220e73510"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00027-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "2da2e96a25e3af4a8f66e6e31196c2e897f792a4d5aa31a3ba2013ec7a9b256e"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00027-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "31f7ab38d0035b96a0c8df3fa001edd87a9dcd4321c9fafc262fe52bc490029b"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00028-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "34e51dd4f3f802e6093f76ccfb2bfae6d6c4edc0bbc4372a2aeec089bdffbf4f"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00028-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "f04304ba3fd5e27093ffa3448f320004ea3777dfa04b883a29041e79dd5149d7"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00028-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "1b4279f0e6c4f33e614f3096dce0d46460f735771d22e7a17235162db3a524d6"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00028-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "9ca3cc8d3116b7c21c46bc29d39ffc611be1173f6259024270553b379cbe87a7"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00029-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "c234e5b5b535e3c4bf019b11aefa152d615e4ea2709b9bc69d1b8f6d749e8689"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00029-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "c753cdab380aafb7402fad4cc5df30a79a2fcf2f9c3455b910721804880fd1ad"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00029-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "90a299234ec3a99318d21c678399afdc4f31c3b4186b3ba879cc1cab939a8a30"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00029-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "199194fa12c33b3ce6ebdf12283d544aa881ca04e976849c71bb4f95de4928e4"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00030-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "09ac224ea1329677f5e6b45c042c01f3a024788e0caca1333c80d5b0d1d465a9"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00030-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "f825803df1f7cb6eacc59891244cfd471f99aace90d50beabc67a2e04e6f759c"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00030-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "8f6753ddbb0f37b6e0574cb50ff9482d23582f7ca3075cfadaaef9860db023d8"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00030-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "1ca4e72c3dddc366a4cf8dd994dee03dc46c0b8e1ffe53d6478e00a46107730e"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00031-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "e0b10583cee6577735ee1d3cad89d5503fce19b1c0cd58ecaf33192bd69f03ad"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00031-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "9a85f4d1860671e6cd7f5ab559facea9c0efdfc78c2a4fc3e0345662e987296d"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00031-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "382268f75b5a3c0a7e3de912985838b42cc6b4c72718bc254d18cafb14adf425"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00031-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "7da4d40aa6fbeaaeddcd19d8a0dde214f3ce96f896e04cb80f3672f89338df15"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00032-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "ce63cd41815193124b34e8f0a4206a2d1d5483eac1ace84106ee009a51f4ec14"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00032-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "576b8243444fb8f307cda8207cd03647d60ebde51503952915f67734b913d62c"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00032-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "1e9e15cddbf992a8defa7d20055795ad8ec2ee85e6dbac1a55afc393ddd72ca0"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00032-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "f7c42fcd6d54dfe180e70664c2169b91b76c6347f51febc2bc28ae105d7a427b"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00033-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "ba0a7f73f57af2aa3cf4c2fd50b6533cdeeb2c02de9d1e902f305bb3946f76c3"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00033-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "806419069af5028e7cebf5d023adf52bc2b56fa5f1c972bfd26b9ad0df4fab18"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00033-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "9ecd76884ac0db2df1ced1ca7f7b756e74c7aca67ef9a34f5d23e041e284ad89"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00033-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "6d4558b6cf22f515a3ea9cd409165b5874feb7e18b9b6e0945ffaa88f45ce453"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00034-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "518e346dfa56a49667f04cf604404af602c481216ce319cb1bb6baa9b49b333b"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00034-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "23fd381f089ca5ba0c73bb78eced8d52a518ec473f969dbd795e506739567318"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00034-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "849667349cf940a7e86c6905a84b7fd7fb55d511f825c4e6a653d2150c9f92e4"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00034-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "e0c883b155b1c6fca9ce36984c08f87ecd758bde32104d3ef9ebcc1d02b3823d"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00035-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "ecadcb5e6d2f6143b0d15d778b668da783556a85b42befd7637c9978fd3bd77e"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00035-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "c91a550feeec731332d0e97e855311a28c92df4fc3bf974cc6ddc00b5c0e12d1"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00035-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "917fcc655a0effc987d27587df3e62130ad530aa6bea96aefe6cede4bd7debff"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00035-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "ece021a3df0741cddaf89182b41e06febeb460052689668fabc6dbb61ad168b4"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00036-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "388bd0564300638b5c9bb6e125c6d5c68a33902e233b9c7821539990345e344a"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00036-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "57bf69a35e9465cd41ef8515e0bc3fe1bdc219609346469b0e3c4b0dcd3a4cb6"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00036-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "d4da83c4ab407187c8deb681b4253f52bc073c3b80b6ec46ea46b8c1ac960c82"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00036-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "c977ab88b65759b93d7895902a9b58c703d8a8f86679490684b3fcbff81118bc"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00037-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "b65f84bbf3745538804b78b6e6f57fc1e2cfbcf792f1c6e2645cd0d98f879ef9"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00037-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "90fb9aeee9d52864d68476f42aa93005f83b5ed44284b0b4ef93a2ee4b9d1d59"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00037-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "1cf68b76e59192b1949e9ee6da8bc2b57fc5cbfcd59e56b84d072bc340e5bebe"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00037-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "6c3e5d929e50ef57dea6b0e6ddbb596f478bbd8005d0a1829cdde4ec3d1378c5"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00038-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "66fbdc1602ec1d7017f61092d2a79ef4b3d6669d3e79934c7bbea9dc6f1b5857"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00038-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "9e90062c4e8d2a847c4e1c4a732658382e491d50d3311b1844eb6677a608de29"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00038-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "d94b3b12e49031c484947c3638b33cd460fcf85e94d232b5860cf9e840800504"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00038-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "e48b1f406d505f5743559a744a20ddc57eadd6369ee61f7b759c472e5c15185d"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00039-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "2ddc77522f5bdcb2cf910732ac5400c7eb81c4cc434e904b092a2c1f0b289d18"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00039-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "68a5c858ded2433bc9b3f1e6f1f253761a229184f068888e672364ab94efd4b2"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00039-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "a105df175935fe92be45b56a03783fe1eef829bc432781ca735b35a2b14045f3"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00039-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "6f503890fcd49194a35c6a80167ab5508f53cf41986f874ec492f38f0b1e56b9"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00040-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "762c34b27295007c74d0e0da0100d9d623a7229a8f5536c21d3575cc4d626e20"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00040-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "fd611b47e966171d27e39b776eb27b9c7033c374166c91b79a2175e8a8c76ddc"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00040-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "2fb1a10066b50789bd93e7ce48ef2d65d4a10186850d8a0260e3270cd6d993f8"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00040-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "5480dc8a605c06fcbb7b555ba109a6a04f3fe5c63176f8eeef0ce0fea5306dd3"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00041-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "45d2db6be7f04188b66e5112ed11cea8c76c51a189e532bd637acc048e7d9ec9"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00041-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "c81d815cffba9e7892369547efd1022564b60985992903e80e8ac389829ff09a"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00041-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "861a80e534f394c1780cb956cbf80e1a94a11296f6b958e33ce7b71d731e0a98"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00041-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "103092afac9547792b476d46d1443602e2719143801cc20441dbb5f2f07483a4"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00042-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "f255b100c78bb3b8d045baee5ad85e409c626d139f6e70e935f6cee80f640e26"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00042-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "be0caa2be8ee8b0a41b3095cb4556767e228c4425014112a606475dc478a8f3c"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00042-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "1781ddba444b925ebbde4788232e5ec1facafe5b290f82386a0752739f8d9c7b"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00042-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "747efaca036ab0e82eae83eebc41704b1435976771cb0ad2988fe9f0d0949566"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00043-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "4f4a15d21467099a816bcc928602d969b84f01a3411d37c70be01c415281e662"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00043-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "9255aa9eb41a4cb8a7453aecdf6b76a998ad673f452eac4fa4f8841c4c49708f"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00043-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "c879dd2a43ef33c4243ffcd308e504faf8bf51543ed729e6fd67015648c7fdbc"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00043-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "1f08bd35554dad5e49198d20fd3cbe855b646b676813ceb41427f12bbcca64cb"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00044-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "43ba77225aedadb59ed3fd3f8fc3851732754ce3668a596b7ba915ca117b079f"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00044-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "9ac895c194e7a03ac64e191a4a05d64e71360fe256076a6b7bf13d79a8246498"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00044-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "7b88df75d991390e29bd22277101df43fae3c8814e2ab475e6c8f4c37b920fb2"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00044-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "e91039a72f3441d56ab33ba282ced4a19e6bdd304330668bbdc7a9d33a4836a3"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00045-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "6b4663f20730626d814f11a50d90cc17b6e5be1dd87009e39ca4837538db54d0"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00045-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "af1babf5b99606b70c8678ada7f75fca9c7db39147ea1dd54eada8ca0ec71892"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00045-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "800bbc3b5b223fdef3d9279ec5264896cc1f0c06e2a6a12e923ebd2d939c9e87"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00045-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "6a674a58b9aad03755c21d42a1178ddcad06d65328e290910320946839c4ae9b"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00046-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "8e4e00860f4a7bd95b83ea2e31465a021fb3028ab74a39c98a15604d78ac1dc4"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00046-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "bae896040e1e3ac32f30f141f4fae5e61d0deac63814eab285b16f413dfb3c5c"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00046-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "10d5537a449a1a2ed75187040a668111dfa42f13aa5dcd3686b099237dd465b4"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00046-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "02f108a39b01e72f8c745f52aeaa93b2048d3051bbe8858d45f19dbc06056ece"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00047-experts-0000-0127.safetensors",
+        "bytes": 354099744,
+        "sha256": "ffb11d556f354b7cfbe516a48b3223c9a0b344498c36d60de384eaea9b056c33"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00047-experts-0128-0255.safetensors",
+        "bytes": 354101064,
+        "sha256": "86625a4d2f2e5a02f149e0a02255e85593c454812708d8f64dbe974f594ff123"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00047-experts-0256-0383.safetensors",
+        "bytes": 354101064,
+        "sha256": "49fc6dbad8e129fa444bfe0b263bd43e8b7b8625fa544c0aa95216e71e97327e"
+      },
+      {
+        "role": "weight_shard",
+        "path": "layer-00047-experts-0384-0511.safetensors",
+        "bytes": 354101064,
+        "sha256": "38d3c582a5b60166c9e6747dae816bc0b4fc7da19a130545a055eb1261f7b90a"
+      },
+      {
+        "role": "weight_shard",
+        "path": "model-bf16-00001.safetensors",
+        "bytes": 1273114461,
+        "sha256": "5990db4bb32ad7183a1ece76387e0c832c2c96b7cf2576a928e3439f606cef14"
+      },
+      {
+        "role": "weight_shard",
+        "path": "model-bf16-00010.safetensors",
+        "bytes": 323564201,
+        "sha256": "0c2c3ef0030f5134edca0f3bbffc111cfa5da4b39b839cb8248ec762009be0aa"
+      },
+      {
+        "role": "weight_shard",
+        "path": "model-bf16-00011.safetensors",
+        "bytes": 10727387912,
+        "sha256": "d18b0db2e27fa066b3f8f86913686f572ee29406d971c8f5b0ec2902e3419ad9"
+      },
+      {
+        "role": "weight_shard",
+        "path": "model-bf16-00012.safetensors",
+        "bytes": 3683689888,
+        "sha256": "6c7c599218f8be53472c7b9ab0a9683b753cc187c5b7a49223e22348470b80e2"
+      },
+      {
+        "role": "weight_shard",
+        "path": "model-plefp8-00000.safetensors",
+        "bytes": 5200027199,
+        "sha256": "dc2e845b7edd35bda92834fba3626bf7d199e28d6aceac99fee654aade390cfd"
+      },
+      {
+        "role": "weight_shard",
+        "path": "model-plefp8-00001.safetensors",
+        "bytes": 5200027202,
+        "sha256": "899eaa0716e28594468a1389ee58cb065c23907f1270de3831f5ecb0a4f82d56"
+      },
+      {
+        "role": "weight_shard",
+        "path": "model-plefp8-00002.safetensors",
+        "bytes": 5200027198,
+        "sha256": "06fd8a11abf0419a669f89397b8d70dd6ff42d401e6b2a037c65e49704faaf71"
+      },
+      {
+        "role": "weight_shard",
+        "path": "model-plefp8-00003.safetensors",
+        "bytes": 5200027189,
+        "sha256": "c6aaa1fc08e84eced3c8151ac8679ed943888eba0fcef2556963693430f95bd9"
+      },
+      {
+        "role": "weight_shard",
+        "path": "model-plefp8-00004.safetensors",
+        "bytes": 5200027190,
+        "sha256": "d94e97c96d3ea09208614da016960f3f4b429f47a044c898a51b493f42f74ba2"
+      },
+      {
+        "role": "weight_shard",
+        "path": "model-plefp8-00005.safetensors",
+        "bytes": 5200027190,
+        "sha256": "03d5d4792e14a4ab55bae50bb459624b01786f818bbcfcaed1a5d0235af484c6"
+      },
+      {
+        "role": "weight_shard",
+        "path": "model-plefp8-00006.safetensors",
+        "bytes": 5200027190,
+        "sha256": "586cccbc12383021bc9bc02f206d9b19fbd1672373ed9a5d91e3b0ce34c2418f"
+      },
+      {
+        "role": "weight_shard",
+        "path": "model-plefp8-00007.safetensors",
+        "bytes": 5200027190,
+        "sha256": "c4a23bcc10f3cde6b633e82c282a9a518e3a64d433628283e1bc592c94cf3d6c"
+      },
+      {
+        "role": "weight_shard",
+        "path": "model-plefp8-00008.safetensors",
+        "bytes": 5200027190,
+        "sha256": "2dc8098c0d020bff277c9cf499a6b908e17836b70a5f949dfa24793371c9a87e"
+      },
+      {
+        "role": "weight_shard",
+        "path": "model-plefp8-00009.safetensors",
+        "bytes": 4400023163,
+        "sha256": "61de98b89bb79f386795787d7a76827a26f1e292c26edbb0a1b613da455f5a9c"
+      }
+    ],
+    "quantization": "NVFP4",
+    "capabilities": [
+      "reasoning",
+      "text_generation",
+      "tool_calling"
+    ],
+    "configured_alias": "qwen3.8:flash-next",
+    "engine_profile": "qwen3.8-flash-next-nvfp4"
+  },
+  "artifact_fingerprint": "sha256:26d708967d17a7b261018701fffcce2f40f2efa98476905e1a7e365db4872de6",
+  "cursor": 0,
+  "next_cursor": 1789932227007619340,
+  "truncated": true,
+  "lines": [
+    "2026-09-20T19:20:59.322291532Z (EngineCore pid=130) Loading safetensors checkpoint shards: 50% Completed | 102/206 [00:20<00:21, 4.82it/s]",
+    "2026-09-20T19:20:59.549655540Z (EngineCore pid=130) Loading safetensors checkpoint shards: 50% Completed | 103/206 [00:20<00:21, 4.68it/s]",
+    "2026-09-20T19:20:59.775486163Z (EngineCore pid=130) Loading safetensors checkpoint shards: 50% Completed | 104/206 [00:20<00:22, 4.60it/s]",
+    "2026-09-20T19:21:00.004021622Z (EngineCore pid=130) Loading safetensors checkpoint shards: 51% Completed | 105/206 [00:20<00:22, 4.53it/s]",
+    "2026-09-20T19:21:00.229444983Z (EngineCore pid=130) Loading safetensors checkpoint shards: 51% Completed | 106/206 [00:21<00:22, 4.50it/s]",
+    "2026-09-20T19:21:00.457757644Z (EngineCore pid=130) Loading safetensors checkpoint shards: 52% Completed | 107/206 [00:21<00:22, 4.47it/s]",
+    "2026-09-20T19:21:00.681464422Z (EngineCore pid=130) Loading safetensors checkpoint shards: 52% Completed | 108/206 [00:21<00:21, 4.47it/s]",
+    "2026-09-20T19:21:00.916922906Z (EngineCore pid=130) Loading safetensors checkpoint shards: 53% Completed | 109/206 [00:21<00:22, 4.40it/s]",
+    "2026-09-20T19:21:01.130785777Z (EngineCore pid=130) Loading safetensors checkpoint shards: 53% Completed | 110/206 [00:21<00:21, 4.48it/s]",
+    "2026-09-20T19:21:01.362069977Z (EngineCore pid=130) Loading safetensors checkpoint shards: 54% Completed | 111/206 [00:22<00:21, 4.43it/s]",
+    "2026-09-20T19:21:01.588880822Z (EngineCore pid=130) Loading safetensors checkpoint shards: 54% Completed | 112/206 [00:22<00:21, 4.42it/s]",
+    "2026-09-20T19:21:01.807886342Z (EngineCore pid=130) Loading safetensors checkpoint shards: 55% Completed | 113/206 [00:22<00:20, 4.47it/s]",
+    "2026-09-20T19:21:02.047231289Z (EngineCore pid=130) Loading safetensors checkpoint shards: 55% Completed | 114/206 [00:22<00:21, 4.38it/s]",
+    "2026-09-20T19:21:02.270752374Z (EngineCore pid=130) Loading safetensors checkpoint shards: 56% Completed | 115/206 [00:23<00:20, 4.41it/s]",
+    "2026-09-20T19:21:02.490597843Z (EngineCore pid=130) Loading safetensors checkpoint shards: 56% Completed | 116/206 [00:23<00:20, 4.45it/s]",
+    "2026-09-20T19:21:02.717898783Z (EngineCore pid=130) Loading safetensors checkpoint shards: 57% Completed | 117/206 [00:23<00:20, 4.43it/s]",
+    "2026-09-20T19:21:02.933090226Z (EngineCore pid=130) Loading safetensors checkpoint shards: 57% Completed | 118/206 [00:23<00:19, 4.49it/s]",
+    "2026-09-20T19:21:03.152149219Z (EngineCore pid=130) Loading safetensors checkpoint shards: 58% Completed | 119/206 [00:23<00:19, 4.51it/s]",
+    "2026-09-20T19:21:03.373098301Z (EngineCore pid=130) Loading safetensors checkpoint shards: 58% Completed | 120/206 [00:24<00:19, 4.52it/s]",
+    "2026-09-20T19:21:03.614689287Z (EngineCore pid=130) Loading safetensors checkpoint shards: 59% Completed | 121/206 [00:24<00:19, 4.40it/s]",
+    "2026-09-20T19:21:03.843767019Z (EngineCore pid=130) Loading safetensors checkpoint shards: 59% Completed | 122/206 [00:24<00:19, 4.39it/s]",
+    "2026-09-20T19:21:04.054846514Z (EngineCore pid=130) Loading safetensors checkpoint shards: 60% Completed | 123/206 [00:24<00:18, 4.49it/s]",
+    "2026-09-20T19:21:04.275125375Z (EngineCore pid=130) Loading safetensors checkpoint shards: 60% Completed | 124/206 [00:25<00:18, 4.50it/s]",
+    "2026-09-20T19:21:04.494366689Z (EngineCore pid=130) Loading safetensors checkpoint shards: 61% Completed | 125/206 [00:25<00:17, 4.52it/s]",
+    "2026-09-20T19:21:04.723178408Z (EngineCore pid=130) Loading safetensors checkpoint shards: 61% Completed | 126/206 [00:25<00:17, 4.47it/s]",
+    "2026-09-20T19:21:04.979865150Z (EngineCore pid=130) Loading safetensors checkpoint shards: 62% Completed | 127/206 [00:25<00:18, 4.28it/s]",
+    "2026-09-20T19:21:05.190937798Z (EngineCore pid=130) Loading safetensors checkpoint shards: 62% Completed | 128/206 [00:26<00:17, 4.41it/s]",
+    "2026-09-20T19:21:05.425381859Z (EngineCore pid=130) Loading safetensors checkpoint shards: 63% Completed | 129/206 [00:26<00:17, 4.37it/s]",
+    "2026-09-20T19:21:05.649903102Z (EngineCore pid=130) Loading safetensors checkpoint shards: 63% Completed | 130/206 [00:26<00:17, 4.39it/s]",
+    "2026-09-20T19:21:05.880743212Z (EngineCore pid=130) Loading safetensors checkpoint shards: 64% Completed | 131/206 [00:26<00:17, 4.37it/s]",
+    "2026-09-20T19:21:06.101618936Z (EngineCore pid=130) Loading safetensors checkpoint shards: 64% Completed | 132/206 [00:26<00:16, 4.42it/s]",
+    "2026-09-20T19:21:06.341137487Z (EngineCore pid=130) Loading safetensors checkpoint shards: 65% Completed | 133/206 [00:27<00:16, 4.34it/s]",
+    "2026-09-20T19:21:06.569388010Z (EngineCore pid=130) Loading safetensors checkpoint shards: 65% Completed | 134/206 [00:27<00:16, 4.35it/s]",
+    "2026-09-20T19:21:06.731485139Z (EngineCore pid=130) Loading safetensors checkpoint shards: 66% Completed | 135/206 [00:27<00:14, 4.77it/s]",
+    "2026-09-20T19:21:06.866589800Z (EngineCore pid=130) Loading safetensors checkpoint shards: 66% Completed | 136/206 [00:27<00:13, 5.35it/s]",
+    "2026-09-20T19:21:07.084560738Z (EngineCore pid=130) Loading safetensors checkpoint shards: 67% Completed | 137/206 [00:27<00:13, 5.09it/s]",
+    "2026-09-20T19:21:07.287703297Z (EngineCore pid=130) Loading safetensors checkpoint shards: 67% Completed | 138/206 [00:28<00:13, 5.04it/s]",
+    "2026-09-20T19:21:07.514951969Z (EngineCore pid=130) Loading safetensors checkpoint shards: 67% Completed | 139/206 [00:28<00:13, 4.83it/s]",
+    "2026-09-20T19:21:07.693319777Z (EngineCore pid=130) Loading safetensors checkpoint shards: 68% Completed | 140/206 [00:28<00:13, 5.04it/s]",
+    "2026-09-20T19:21:07.887366889Z (EngineCore pid=130) Loading safetensors checkpoint shards: 68% Completed | 141/206 [00:28<00:12, 5.07it/s]",
+    "2026-09-20T19:21:08.098101573Z (EngineCore pid=130) Loading safetensors checkpoint shards: 69% Completed | 142/206 [00:28<00:12, 4.97it/s]",
+    "2026-09-20T19:21:08.263145442Z (EngineCore pid=130) Loading safetensors checkpoint shards: 69% Completed | 143/206 [00:29<00:11, 5.25it/s]",
+    "2026-09-20T19:21:08.445709408Z (EngineCore pid=130) Loading safetensors checkpoint shards: 70% Completed | 144/206 [00:29<00:11, 5.32it/s]",
+    "2026-09-20T19:21:08.647163559Z (EngineCore pid=130) Loading safetensors checkpoint shards: 70% Completed | 145/206 [00:29<00:11, 5.21it/s]",
+    "2026-09-20T19:21:08.812206692Z (EngineCore pid=130) Loading safetensors checkpoint shards: 71% Completed | 146/206 [00:29<00:11, 5.44it/s]",
+    "2026-09-20T19:21:08.985544171Z (EngineCore pid=130) Loading safetensors checkpoint shards: 71% Completed | 147/206 [00:29<00:10, 5.53it/s]",
+    "2026-09-20T19:21:09.155156565Z (EngineCore pid=130) Loading safetensors checkpoint shards: 72% Completed | 148/206 [00:29<00:10, 5.64it/s]",
+    "2026-09-20T19:21:09.343311257Z (EngineCore pid=130) Loading safetensors checkpoint shards: 72% Completed | 149/206 [00:30<00:10, 5.53it/s]",
+    "2026-09-20T19:21:09.525115883Z (EngineCore pid=130) Loading safetensors checkpoint shards: 73% Completed | 150/206 [00:30<00:10, 5.53it/s]",
+    "2026-09-20T19:21:09.754782258Z (EngineCore pid=130) Loading safetensors checkpoint shards: 73% Completed | 151/206 [00:30<00:10, 5.11it/s]",
+    "2026-09-20T19:21:09.948832827Z (EngineCore pid=130) Loading safetensors checkpoint shards: 74% Completed | 152/206 [00:30<00:10, 5.13it/s]",
+    "2026-09-20T19:21:10.159893144Z (EngineCore pid=130) Loading safetensors checkpoint shards: 74% Completed | 153/206 [00:30<00:10, 5.00it/s]",
+    "2026-09-20T19:21:10.330740316Z (EngineCore pid=130) Loading safetensors checkpoint shards: 75% Completed | 154/206 [00:31<00:09, 5.23it/s]",
+    "2026-09-20T19:21:10.509050750Z (EngineCore pid=130) Loading safetensors checkpoint shards: 75% Completed | 155/206 [00:31<00:09, 5.34it/s]",
+    "2026-09-20T19:21:10.716599227Z (EngineCore pid=130) Loading safetensors checkpoint shards: 76% Completed | 156/206 [00:31<00:09, 5.17it/s]",
+    "2026-09-20T19:21:10.954070351Z (EngineCore pid=130) Loading safetensors checkpoint shards: 76% Completed | 157/206 [00:31<00:10, 4.84it/s]",
+    "2026-09-20T19:21:11.169435529Z (EngineCore pid=130) Loading safetensors checkpoint shards: 77% Completed | 158/206 [00:32<00:10, 4.78it/s]",
+    "2026-09-20T19:21:11.364496784Z (EngineCore pid=130) Loading safetensors checkpoint shards: 77% Completed | 159/206 [00:32<00:09, 4.88it/s]",
+    "2026-09-20T19:21:11.564168225Z (EngineCore pid=130) Loading safetensors checkpoint shards: 78% Completed | 160/206 [00:32<00:09, 4.92it/s]",
+    "2026-09-20T19:21:11.736129841Z (EngineCore pid=130) Loading safetensors checkpoint shards: 78% Completed | 161/206 [00:32<00:08, 5.16it/s]",
+    "2026-09-20T19:21:11.907978817Z (EngineCore pid=130) Loading safetensors checkpoint shards: 79% Completed | 162/206 [00:32<00:08, 5.34it/s]",
+    "2026-09-20T19:21:12.091428621Z (EngineCore pid=130) Loading safetensors checkpoint shards: 79% Completed | 163/206 [00:32<00:08, 5.37it/s]",
+    "2026-09-20T19:21:12.278067931Z (EngineCore pid=130) Loading safetensors checkpoint shards: 80% Completed | 164/206 [00:33<00:07, 5.37it/s]",
+    "2026-09-20T19:21:12.500556918Z (EngineCore pid=130) Loading safetensors checkpoint shards: 80% Completed | 165/206 [00:33<00:08, 5.07it/s]",
+    "2026-09-20T19:21:12.681209375Z (EngineCore pid=130) Loading safetensors checkpoint shards: 81% Completed | 166/206 [00:33<00:07, 5.20it/s]",
+    "2026-09-20T19:21:12.883010551Z (EngineCore pid=130) Loading safetensors checkpoint shards: 81% Completed | 167/206 [00:33<00:07, 5.12it/s]",
+    "2026-09-20T19:21:13.077664385Z (EngineCore pid=130) Loading safetensors checkpoint shards: 82% Completed | 168/206 [00:33<00:07, 5.13it/s]",
+    "2026-09-20T19:21:13.295186467Z (EngineCore pid=130) Loading safetensors checkpoint shards: 82% Completed | 169/206 [00:34<00:07, 4.96it/s]",
+    "2026-09-20T19:21:13.494950245Z (EngineCore pid=130) Loading safetensors checkpoint shards: 83% Completed | 170/206 [00:34<00:07, 4.97it/s]",
+    "2026-09-20T19:21:13.723251734Z (EngineCore pid=130) Loading safetensors checkpoint shards: 83% Completed | 171/206 [00:34<00:07, 4.78it/s]",
+    "2026-09-20T19:21:13.932938540Z (EngineCore pid=130) Loading safetensors checkpoint shards: 83% Completed | 172/206 [00:34<00:07, 4.78it/s]",
+    "2026-09-20T19:21:14.162215193Z (EngineCore pid=130) Loading safetensors checkpoint shards: 84% Completed | 173/206 [00:34<00:07, 4.64it/s]",
+    "2026-09-20T19:21:14.382755150Z (EngineCore pid=130) Loading safetensors checkpoint shards: 84% Completed | 174/206 [00:35<00:06, 4.61it/s]",
+    "2026-09-20T19:21:14.624471843Z (EngineCore pid=130) Loading safetensors checkpoint shards: 85% Completed | 175/206 [00:35<00:06, 4.46it/s]",
+    "2026-09-20T19:21:14.816618265Z (EngineCore pid=130) Loading safetensors checkpoint shards: 85% Completed | 176/206 [00:35<00:06, 4.66it/s]",
+    "2026-09-20T19:21:15.002185565Z (EngineCore pid=130) Loading safetensors checkpoint shards: 86% Completed | 177/206 [00:35<00:05, 4.86it/s]",
+    "2026-09-20T19:21:15.167104192Z (EngineCore pid=130) Loading safetensors checkpoint shards: 86% Completed | 178/206 [00:36<00:05, 5.16it/s]",
+    "2026-09-20T19:21:15.373073896Z (EngineCore pid=130) Loading safetensors checkpoint shards: 87% Completed | 179/206 [00:36<00:05, 5.07it/s]",
+    "2026-09-20T19:21:15.558933723Z (EngineCore pid=130) Loading safetensors checkpoint shards: 87% Completed | 180/206 [00:36<00:05, 5.16it/s]",
+    "2026-09-20T19:21:15.716173361Z (EngineCore pid=130) Loading safetensors checkpoint shards: 88% Completed | 181/206 [00:36<00:04, 5.47it/s]",
+    "2026-09-20T19:21:15.880970548Z (EngineCore pid=130) Loading safetensors checkpoint shards: 88% Completed | 182/206 [00:36<00:04, 5.64it/s]",
+    "2026-09-20T19:21:16.051668253Z (EngineCore pid=130) Loading safetensors checkpoint shards: 89% Completed | 183/206 [00:36<00:04, 5.70it/s]",
+    "2026-09-20T19:21:16.235733305Z (EngineCore pid=130) Loading safetensors checkpoint shards: 89% Completed | 184/206 [00:37<00:03, 5.62it/s]",
+    "2026-09-20T19:21:16.393387229Z (EngineCore pid=130) Loading safetensors checkpoint shards: 90% Completed | 185/206 [00:37<00:03, 5.82it/s]",
+    "2026-09-20T19:21:16.525252967Z (EngineCore pid=130) Loading safetensors checkpoint shards: 90% Completed | 186/206 [00:37<00:03, 6.26it/s]",
+    "2026-09-20T19:21:16.712350309Z (EngineCore pid=130) Loading safetensors checkpoint shards: 91% Completed | 187/206 [00:37<00:03, 5.95it/s]",
+    "2026-09-20T19:21:16.897960491Z (EngineCore pid=130) Loading safetensors checkpoint shards: 91% Completed | 188/206 [00:37<00:03, 5.77it/s]",
+    "2026-09-20T19:21:17.046160282Z (EngineCore pid=130) Loading safetensors checkpoint shards: 92% Completed | 189/206 [00:37<00:02, 6.03it/s]",
+    "2026-09-20T19:21:17.227908498Z (EngineCore pid=130) Loading safetensors checkpoint shards: 92% Completed | 190/206 [00:38<00:02, 5.86it/s]",
+    "2026-09-20T19:21:17.411790880Z (EngineCore pid=130) Loading safetensors checkpoint shards: 93% Completed | 191/206 [00:38<00:02, 5.73it/s]",
+    "2026-09-20T19:21:17.592968058Z (EngineCore pid=130) Loading safetensors checkpoint shards: 93% Completed | 192/206 [00:38<00:02, 5.67it/s]",
+    "2026-09-20T19:21:37.955657999Z (EngineCore pid=130) Loading safetensors checkpoint shards: 95% Completed | 195/206 [00:58<00:42, 3.90s/it]",
+    "2026-09-20T19:21:53.386922692Z (EngineCore pid=130) Loading safetensors checkpoint shards: 95% Completed | 196/206 [01:14<01:03, 6.33s/it]",
+    "2026-09-20T19:21:53.421028798Z (EngineCore pid=130) Loading safetensors checkpoint shards: 100% Completed | 206/206 [01:14<00:00, 2.77it/s]",
+    "2026-09-20T19:21:53.421058718Z (EngineCore pid=130)",
+    "2026-09-20T19:21:53.517224599Z (EngineCore pid=130) INFO 09-20 19:21:53 [default_loader.py:430] Loading weights took 74.37 seconds",
+    "2026-09-20T19:21:53.735264984Z (EngineCore pid=130) INFO 09-20 19:21:53 [unquantized.py:399] Using MoEPrepareAndFinalizeNoDPEPModular",
+    "2026-09-20T19:21:53.735358664Z (EngineCore pid=130) INFO 09-20 19:21:53 [unquantized.py:400] Using FlashInferExperts MoE backend",
+    "2026-09-20T19:21:53.743468788Z (EngineCore pid=130) WARNING 09-20 19:21:53 [speculator.py:178] Draft model Qwen3_8FlashNextMTP does not support external multimodal embeddings. Embeddings from the target model will not be passed to the drafter; using text-only draft inputs instead.",
+    "2026-09-20T19:21:54.295927465Z (EngineCore pid=130) INFO 09-20 19:21:54 [model_runner.py:407] Model loading took 79.42 GiB memory and 565.168239 seconds",
+    "2026-09-20T19:21:54.350588328Z (EngineCore pid=130) INFO 09-20 19:21:54 [topk_topp_sampler.py:62] Using FlashInfer for top-p & top-k sampling.",
+    "2026-09-20T19:21:54.353399388Z (EngineCore pid=130) INFO 09-20 19:21:54 [interface.py:915] Setting attention block size to 1600 tokens to ensure that attention page size is >= mamba page size.",
+    "2026-09-20T19:21:54.353420796Z (EngineCore pid=130) INFO 09-20 19:21:54 [interface.py:939] Padding mamba page size by 0.25% to ensure that mamba page size and attention page size are exactly equal.",
+    "2026-09-20T19:21:54.357757033Z (EngineCore pid=130) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}",
+    "2026-09-20T19:21:54.357838073Z (EngineCore pid=130) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}",
+    "2026-09-20T19:21:55.831676321Z (EngineCore pid=130) [transformers] The `use_fast` parameter is deprecated and will be removed in a future version. Use `backend=\"torchvision\"` instead of `use_fast=True`, or `backend=\"pil\"` instead of `use_fast=False`.",
+    "2026-09-20T19:21:56.955580192Z (EngineCore pid=130) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}",
+    "2026-09-20T19:21:56.955838399Z (EngineCore pid=130) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}",
+    "2026-09-20T19:21:58.764532252Z (EngineCore pid=130) INFO 09-20 19:21:58 [encoder_runner.py:120] Encoder cache will be initialized with a budget of 16384 tokens, and profiled with 1 image items of the maximum feature size.",
+    "2026-09-20T19:22:13.985094102Z [19:22:13.985][281336035996032][CUDA][E] No CUDA context is current to the calling thread",
+    "2026-09-20T19:22:13.985122502Z [19:22:13.985][281336035996032][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2",
+    "2026-09-20T19:22:13.997399537Z [19:22:13.997][281335901778304][CUDA][E] No CUDA context is current to the calling thread",
+    "2026-09-20T19:22:13.997417249Z [19:22:13.997][281335901778304][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2",
+    "2026-09-20T19:22:14.002309660Z [19:22:14.002][281336061358464][CUDA][E] No CUDA context is current to the calling thread",
+    "2026-09-20T19:22:14.002328780Z [19:22:14.002][281336061358464][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2",
+    "2026-09-20T19:22:14.013089581Z [19:22:14.013][281336019087744][CUDA][E] No CUDA context is current to the calling thread",
+    "2026-09-20T19:22:14.013106573Z [19:22:14.013][281336019087744][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2",
+    "2026-09-20T19:22:14.024456732Z [19:22:14.024][281335884870016][CUDA][E] No CUDA context is current to the calling thread",
+    "2026-09-20T19:22:14.024468828Z [19:22:14.024][281335884870016][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2",
+    "2026-09-20T19:22:14.025162857Z [19:22:14.024][281336027541888][CUDA][E] No CUDA context is current to the calling thread",
+    "2026-09-20T19:22:14.025194985Z [19:22:14.024][281336027541888][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2",
+    "2026-09-20T19:22:14.052418675Z [19:22:14.052][281336147276160][CUDA][E] No CUDA context is current to the calling thread",
+    "2026-09-20T19:22:14.052443747Z [19:22:14.052][281336147276160][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2",
+    "2026-09-20T19:22:14.057715964Z [19:22:14.057][281336591741312][CUDA][E] No CUDA context is current to the calling thread",
+    "2026-09-20T19:22:14.057742044Z [19:22:14.057][281336591741312][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2",
+    "2026-09-20T19:22:14.059292422Z [19:22:14.059][281335876415872][CUDA][E] No CUDA context is current to the calling thread",
+    "2026-09-20T19:22:14.059301110Z [19:22:14.059][281335876415872][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2",
+    "2026-09-20T19:22:14.063393972Z [19:22:14.063][281336052904320][CUDA][E] No CUDA context is current to the calling thread",
+    "2026-09-20T19:22:14.063410228Z [19:22:14.063][281336052904320][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2",
+    "2026-09-20T19:22:14.066806661Z [19:22:14.066][281336044450176][CUDA][E] No CUDA context is current to the calling thread",
+    "2026-09-20T19:22:14.066823941Z [19:22:14.066][281336044450176][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2",
+    "2026-09-20T19:22:14.072018831Z [19:22:14.071][281336155730304][CUDA][E] No CUDA context is current to the calling thread",
+    "2026-09-20T19:22:14.072039167Z [19:22:14.071][281336155730304][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2",
+    "2026-09-20T19:22:14.096400597Z (EngineCore pid=130) INFO 09-20 19:22:14 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=19 num_submods=51",
+    "2026-09-20T19:22:14.109473469Z (EngineCore pid=130) INFO 09-20 19:22:14 [decorators.py:311] Directly load AOT compilation from path /compile-cache/vllm/torch_compile_cache/torch_aot_compile/3a52d89d6ece1a3fba7fdf4412a174560c9fd7022801680bfe0eba99df0b748d/rank_0_0/model",
+    "2026-09-20T19:22:14.109499325Z (EngineCore pid=130) INFO 09-20 19:22:14 [monitor.py:53] torch.compile took 0.39 s in total",
+    "2026-09-20T19:22:14.650579563Z (EngineCore pid=130) INFO 09-20 19:22:14 [vllm_ple_mmap.py:468] PLE mmap: PROMETHEUS_MULTIPROC_DIR is unset, so the vllm:ple_mmap_* counters stay in this process and will not appear on /metrics while the engine runs in its own process. scripts/serve.sh exports them with PROM_MULTIPROC=1.",
+    "2026-09-20T19:22:14.650612955Z (EngineCore pid=130) INFO 09-20 19:22:14 [vllm_ple_mmap.py:512] PLE mmap: Prometheus counters registered",
+    "2026-09-20T19:22:14.651722566Z (EngineCore pid=130) INFO 09-20 19:22:14 [vllm_ple_mmap.py:546] PLE mmap stats (last 30s): 1 ops, op 43 ms total (42.93 ms/op), gather 4 ms total (4.38 ms/op), 40 rows, 0.0 MiB read, gpu-wait 0.04 ms/op, host 42.89 ms/op (dedup 4.99, gather 4.38, stage 0.77)",
+    "2026-09-20T19:22:17.224589865Z (EngineCore pid=130) INFO 09-20 19:22:17 [monitor.py:81] Initial profiling/warmup run took 3.11 s",
+    "2026-09-20T19:22:17.474678003Z (EngineCore pid=130) INFO 09-20 19:22:17 [backends.py:1094] Using cache directory: /compile-cache/vllm/torch_compile_cache/fa7e399409/rank_0_0/eagle_head for vLLM's torch.compile",
+    "2026-09-20T19:22:17.474911602Z (EngineCore pid=130) INFO 09-20 19:22:17 [backends.py:1155] Dynamo bytecode transform time: 0.24 s",
+    "2026-09-20T19:22:18.181993388Z (EngineCore pid=130) [rank0]:W0920 19:22:18.181000 130 torch/_inductor/utils.py:1953] Not enough SMs to use max_autotune_gemm mode",
+    "2026-09-20T19:22:20.211066609Z (EngineCore pid=130) INFO 09-20 19:22:20 [backends.py:393] Compiling a graph for compile range (1, 8192) takes 2.58 s",
+    "2026-09-20T19:22:20.606963963Z (EngineCore pid=130) INFO 09-20 19:22:20 [backends.py:920] collected artifacts: 2 entries, 2 artifacts, 2414815 bytes total",
+    "2026-09-20T19:22:20.612736498Z (EngineCore pid=130) INFO 09-20 19:22:20 [decorators.py:708] saved AOT compiled function to /compile-cache/vllm/torch_compile_cache/torch_aot_compile/9281bf9897316a781b7ed059e7932d9d878db58a0006e8d3262086c244fcd74d/rank_0_0/model",
+    "2026-09-20T19:22:20.612761538Z (EngineCore pid=130) INFO 09-20 19:22:20 [monitor.py:53] torch.compile took 3.37 s in total",
+    "2026-09-20T19:22:20.685910072Z (EngineCore pid=130) INFO 09-20 19:22:20 [monitor.py:81] Initial profiling/warmup run took 0.07 s",
+    "2026-09-20T19:22:20.709520578Z (EngineCore pid=130) INFO 09-20 19:22:20 [mtp.py:469] MTP reduced draft vocabulary: 65536 of 248320 rows (1212 -> 320 MiB per draft step)",
+    "2026-09-20T19:22:21.011468768Z (EngineCore pid=130) INFO 09-20 19:22:21 [gpu_worker.py:621] Initial free memory 112.69 GiB, reserved 12.0 GiB memory for KV Cache as specified by kv_cache_memory_bytes config and skipped memory profiling. This does not respect the gpu_memory_utilization config. Only use kv_cache_memory_bytes config when you want manual control of KV cache memory size. If OOM'ed, check the difference of initial free memory between the current run and the previous run where kv_cache_memory_bytes is suggested and update it correspondingly.",
+    "2026-09-20T19:22:21.013130857Z (EngineCore pid=130) INFO 09-20 19:22:21 [kv_cache_utils.py:2258] GPU KV cache size: 415,179 tokens, Maximum concurrency for 262,144 tokens per request: 1.58x",
+    "2026-09-20T19:22:21.015752574Z (EngineCore pid=130) INFO 09-20 19:22:21 [speculator.py:117] Fused multi-step draft decode is not supported by attention backend(s) QWEN38_FLASH_NEXT_EXP_QSA_STATE; falling back to rebuilding attention metadata between draft steps.",
+    "2026-09-20T19:22:22.293495055Z (EngineCore pid=130) INFO 09-20 19:22:22 [kernel_warmup.py:170] Skipping FlashInfer autotune because it is disabled.",
+    "2026-09-20T19:22:22.674872314Z (EngineCore pid=130) QSADET active: /opt/llm/kernel-det/_C_det.so",
+    "2026-09-20T19:22:26.163819221Z (EngineCore pid=130) Capturing CUDA graphs (PIECEWISE): 0%| | 0/11 [00:00<?, ?it/s] Capturing CUDA graphs (PIECEWISE): 9%|▉ | 1/11 [00:00<00:05, 1.80it/s] Capturing CUDA graphs (PIECEWISE): 18%|█▊ | 2/11 [00:00<00:04, 2.15it/s] Capturing CUDA graphs (PIECEWISE): 27%|██▋ | 3/11 [00:01<00:03, 2.35it/s] Capturing CUDA graphs (PIECEWISE): 36%|███▋ | 4/11 [00:01<00:02, 2.46it/s] Capturing CUDA graphs (PIECEWISE): 45%|████▌ | 5/11 [00:02<00:02, 2.52it/s] Capturing CUDA graphs (PIECEWISE): 55%|█████▍ | 6/11 [00:02<00:01, 2.56it/s] Capturing CUDA graphs (PIECEWISE): 64%|██████▎ | 7/11 [00:02<00:01, 2.62it/s] Capturing CUDA graphs (PIECEWISE): 73%|███████▎ | 8/11 [00:02<00:00, 3.23it/s] Capturing CUDA graphs (PIECEWISE): 82%|████████▏ | 9/11 [00:03<00:00, 3.91it/s] Capturing CUDA graphs (PIECEWISE): 91%|█████████ | 10/11 [00:03<00:00, 4.53it/s] Capturing CUDA graphs (PIECEWISE): 100%|██████████| 11/11 [00:03<00:00, 3.92it/s] Capturing CUDA graphs (PIECEWISE): 100%|██████████| 11/11 [00:03<00:00, 3.05it/s]",
+    "2026-09-20T19:22:26.163945925Z (EngineCore pid=130) INFO 09-20 19:22:26 [speculator.py:148] Capturing model for speculator...",
+    "2026-09-20T19:22:26.302555716Z (EngineCore pid=130) Capturing prefill CUDA graphs (PIECEWISE): 0%| | 0/11 [00:00<?, ?it/s] Capturing prefill CUDA graphs (PIECEWISE): 73%|███████▎ | 8/11 [00:00<00:00, 74.94it/s] Capturing prefill CUDA graphs (PIECEWISE): 100%|██████████| 11/11 [00:00<00:00, 79.83it/s]",
+    "2026-09-20T19:22:26.302664403Z (EngineCore pid=130) INFO 09-20 19:22:26 [model_runner.py:953] Graph capturing finished in 4 secs, took 0.47 GiB",
+    "2026-09-20T19:22:26.513347310Z (EngineCore pid=130) INFO 09-20 19:22:26 [warmup.py:232] Completed finite top-k/top-p sampler startup coverage",
+    "2026-09-20T19:22:28.007293339Z (EngineCore pid=130) INFO 09-20 19:22:28 [jit_monitor.py:85] Kernel JIT monitor activated; monitored JIT compilations during inference will use mode=warn.",
+    "2026-09-20T19:22:28.279936639Z (EngineCore pid=130) INFO 09-20 19:22:28 [torch_utils.py:262] Reducing Torch threads from 20 to 1 for serving. Set OMP_NUM_THREADS in the external environment to override.",
+    "2026-09-20T19:22:28.279970527Z (EngineCore pid=130) INFO 09-20 19:22:28 [core.py:347] init engine (profile, create kv cache, warmup model) took 33.93 s (compilation: 3.76 s)",
+    "2026-09-20T19:22:28.533515604Z (EngineCore pid=130) INFO 09-20 19:22:28 [kernel.py:308] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'])",
+    "2026-09-20T19:22:28.609046722Z (APIServer pid=7) INFO 09-20 19:22:28 [api_server.py:653] Supported tasks: ['generate']",
+    "2026-09-20T19:22:28.741969034Z (APIServer pid=7) INFO 09-20 19:22:28 [parser_manager.py:58] \"auto\" tool choice has been enabled.",
+    "2026-09-20T19:22:28.743312244Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}",
+    "2026-09-20T19:22:28.743403348Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}",
+    "2026-09-20T19:22:29.086837306Z (APIServer pid=7) INFO 09-20 19:22:29 [hf.py:551] Detected the chat template content format to be 'openai'. You can set `--chat-template-content-format` to override this.",
+    "2026-09-20T19:22:36.197450050Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}",
+    "2026-09-20T19:22:36.197650113Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}",
+    "2026-09-20T19:22:42.496550633Z (APIServer pid=7) INFO 09-20 19:22:42 [base.py:235] Multi-modal warmup completed in 13.398s",
+    "2026-09-20T19:22:43.323012873Z (APIServer pid=7) INFO 09-20 19:22:43 [base.py:235] Readonly multi-modal warmup completed in 0.823s",
+    "2026-09-20T19:22:43.330749704Z (APIServer pid=7) WARNING 09-20 19:22:43 [model.py:1713] Default vLLM sampling parameters have been overridden by the model's `generation_config.json`: `{'temperature': 1.0, 'top_k': 20, 'top_p': 0.95}`. If this is not intended, please relaunch vLLM instance with `--generation-config vllm`.",
+    "2026-09-20T19:22:43.344915357Z (APIServer pid=7) INFO 09-20 19:22:43 [api_server.py:657] Starting vLLM server on http://0.0.0.0:8000",
+    "2026-09-20T19:22:43.344936252Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:51] Available routes are:",
+    "2026-09-20T19:22:43.344937900Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /openapi.json, Methods: GET, HEAD",
+    "2026-09-20T19:22:43.344939196Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /docs, Methods: GET, HEAD",
+    "2026-09-20T19:22:43.344940524Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /docs/oauth2-redirect, Methods: GET, HEAD",
+    "2026-09-20T19:22:43.344941596Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /redoc, Methods: GET, HEAD",
+    "2026-09-20T19:22:43.344942588Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /load, Methods: GET",
+    "2026-09-20T19:22:43.344943644Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /version, Methods: GET",
+    "2026-09-20T19:22:43.344944892Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /health, Methods: GET",
+    "2026-09-20T19:22:43.344945852Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /metrics, Methods: GET",
+    "2026-09-20T19:22:43.344947036Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /tokenize, Methods: POST",
+    "2026-09-20T19:22:43.344948188Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /detokenize, Methods: POST",
+    "2026-09-20T19:22:43.344949340Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/models, Methods: GET",
+    "2026-09-20T19:22:43.344950508Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /ping, Methods: GET",
+    "2026-09-20T19:22:43.344951724Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /ping, Methods: POST",
+    "2026-09-20T19:22:43.344952668Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /invocations, Methods: POST",
+    "2026-09-20T19:22:43.345072204Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/chat/completions, Methods: POST",
+    "2026-09-20T19:22:43.345087228Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/chat/completions/batch, Methods: POST",
+    "2026-09-20T19:22:43.345088988Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/responses, Methods: POST",
+    "2026-09-20T19:22:43.345090252Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/responses/{response_id}, Methods: GET",
+    "2026-09-20T19:22:43.345091356Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/responses/{response_id}/cancel, Methods: POST",
+    "2026-09-20T19:22:43.345092492Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/completions, Methods: POST",
+    "2026-09-20T19:22:43.345093596Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/messages, Methods: POST",
+    "2026-09-20T19:22:43.345094892Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/messages/count_tokens, Methods: POST",
+    "2026-09-20T19:22:43.345105980Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /generative_scoring, Methods: POST",
+    "2026-09-20T19:22:43.345107036Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /scale_elastic_ep, Methods: POST",
+    "2026-09-20T19:22:43.345108076Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /is_scaling_elastic_ep, Methods: POST",
+    "2026-09-20T19:22:43.345109004Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/chat/completions/render, Methods: POST",
+    "2026-09-20T19:22:43.345110044Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/completions/render, Methods: POST",
+    "2026-09-20T19:22:43.345110972Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/chat/completions/derender, Methods: POST",
+    "2026-09-20T19:22:43.345112012Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/completions/derender, Methods: POST",
+    "2026-09-20T19:22:43.345113004Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /inference/v1/generate, Methods: POST",
+    "2026-09-20T19:22:43.515194158Z (APIServer pid=7) INFO: Started server process [7]",
+    "2026-09-20T19:22:43.515212430Z (APIServer pid=7) INFO: Waiting for application startup.",
+    "2026-09-20T19:22:43.746901885Z (APIServer pid=7) INFO: Application startup complete.",
+    "2026-09-20T19:22:43.785360122Z (APIServer pid=7) INFO: 172.18.0.1:53526 - \"GET /health HTTP/1.1\" 200 OK",
+    "2026-09-20T19:22:43.786975284Z (APIServer pid=7) INFO: 172.18.0.1:53530 - \"GET /v1/models HTTP/1.1\" 200 OK",
+    "2026-09-20T19:22:43.915793124Z (APIServer pid=7) INFO: 172.18.0.1:53532 - \"POST /v1/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:22:43.932008592Z (APIServer pid=7) INFO: 172.18.0.1:53544 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:22:43.953376454Z (EngineCore pid=130) WARNING 09-20 19:22:43 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _qsa_mqa_paged_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.",
+    "2026-09-20T19:22:43.955549500Z (EngineCore pid=130) WARNING 09-20 19:22:43 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _expand_qsa_indices_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.",
+    "2026-09-20T19:22:43.959233277Z (EngineCore pid=130) WARNING 09-20 19:22:43 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _qsa_sparse_paged_gqa_splitk_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.",
+    "2026-09-20T19:22:44.077449738Z (EngineCore pid=130) WARNING 09-20 19:22:44 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _compute_local_logits_stats_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.",
+    "2026-09-20T19:22:44.128944257Z (EngineCore pid=130) WARNING 09-20 19:22:44 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _rejection_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.",
+    "2026-09-20T19:22:44.131973860Z (EngineCore pid=130) WARNING 09-20 19:22:44 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _resample_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.",
+    "2026-09-20T19:22:44.174504977Z (APIServer pid=7) INFO: 172.18.0.1:53554 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:22:44.853404259Z (EngineCore pid=130) INFO 09-20 19:22:44 [vllm_ple_mmap.py:546] PLE mmap stats (last 30s): 34 ops, op 257 ms total (7.56 ms/op), gather 112 ms total (3.28 ms/op), 5528 rows, 0.8 MiB read, gpu-wait 2.86 ms/op, host 4.70 ms/op (dedup 0.22, gather 3.28, stage 0.11)",
+    "2026-09-20T19:22:51.446326627Z (APIServer pid=7) INFO: 172.18.0.1:46748 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:22:51.465296116Z (APIServer pid=7) INFO: 172.18.0.1:46754 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:22:52.379938411Z (EngineCore pid=130) WARNING 09-20 19:22:52 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _qsa_pre_indexer_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.",
+    "2026-09-20T19:22:53.746888159Z (APIServer pid=7) INFO 09-20 19:22:53 [loggers.py:310] Engine 000: Avg prompt throughput: 11.7 tokens/s, Avg generation throughput: 1.2 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.0%",
+    "2026-09-20T19:22:53.746992303Z (APIServer pid=7) INFO 09-20 19:22:53 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 3.62, Accepted throughput: 0.83 tokens/s, Drafted throughput: 0.95 tokens/s, Accepted: 21 tokens, Drafted: 24 tokens, Per-position acceptance rate: 0.875, 0.875, 0.875, Avg Draft acceptance rate: 87.5%",
+    "2026-09-20T19:23:03.748283575Z (APIServer pid=7) INFO 09-20 19:23:03 [loggers.py:310] Engine 000: Avg prompt throughput: 2107.1 tokens/s, Avg generation throughput: 10.7 tokens/s, Running: 2 reqs, Waiting: 0 reqs, GPU KV cache usage: 19.5%, Prefix cache hit rate: 0.0%",
+    "2026-09-20T19:23:03.748335287Z (APIServer pid=7) INFO 09-20 19:23:03 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.62, Accepted throughput: 6.50 tokens/s, Drafted throughput: 12.00 tokens/s, Accepted: 65 tokens, Drafted: 120 tokens, Per-position acceptance rate: 0.675, 0.550, 0.400, Avg Draft acceptance rate: 54.2%",
+    "2026-09-20T19:23:07.418298504Z (APIServer pid=7) INFO: 172.18.0.1:58186 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:07.419321875Z (APIServer pid=7) INFO: 172.18.0.1:58188 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:07.419660770Z (APIServer pid=7) INFO: 172.18.0.1:58210 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:07.434660660Z (APIServer pid=7) INFO: 172.18.0.1:58220 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:08.414286174Z (EngineCore pid=130) WARNING 09-20 19:23:08 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _gumbel_sample_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.",
+    "2026-09-20T19:23:13.748635672Z (APIServer pid=7) INFO 09-20 19:23:13 [loggers.py:310] Engine 000: Avg prompt throughput: 194.9 tokens/s, Avg generation throughput: 57.4 tokens/s, Running: 4 reqs, Waiting: 0 reqs, GPU KV cache usage: 29.1%, Prefix cache hit rate: 45.2%",
+    "2026-09-20T19:23:13.748664360Z (APIServer pid=7) INFO 09-20 19:23:13 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.58, Accepted throughput: 34.90 tokens/s, Drafted throughput: 66.30 tokens/s, Accepted: 349 tokens, Drafted: 663 tokens, Per-position acceptance rate: 0.710, 0.525, 0.344, Avg Draft acceptance rate: 52.6%",
+    "2026-09-20T19:23:14.873721823Z (EngineCore pid=130) INFO 09-20 19:23:14 [vllm_ple_mmap.py:546] PLE mmap stats (last 30s): 121 ops, op 1209 ms total (9.99 ms/op), gather 796 ms total (6.57 ms/op), 22088 rows, 3.4 MiB read, gpu-wait 2.37 ms/op, host 7.63 ms/op (dedup 0.15, gather 6.57, stage 0.16)",
+    "2026-09-20T19:23:15.080770139Z (APIServer pid=7) INFO: 172.18.0.1:34938 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:15.084129565Z (APIServer pid=7) INFO: 172.18.0.1:34952 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:15.085661975Z (APIServer pid=7) INFO: 172.18.0.1:34970 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:15.085852182Z (APIServer pid=7) INFO: 172.18.0.1:34964 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:15.682892350Z (EngineCore pid=130) WARNING 09-20 19:23:15 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _qsa_merge_splitk_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.",
+    "2026-09-20T19:23:21.151579357Z (APIServer pid=7) INFO: 172.18.0.1:34984 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:21.687268699Z (APIServer pid=7) INFO: 172.18.0.1:35000 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:21.828920135Z (APIServer pid=7) INFO: 172.18.0.1:35016 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:22.703031278Z (APIServer pid=7) INFO: 172.18.0.1:35032 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:23.750318531Z (APIServer pid=7) INFO 09-20 19:23:23 [loggers.py:310] Engine 000: Avg prompt throughput: 209.7 tokens/s, Avg generation throughput: 66.8 tokens/s, Running: 4 reqs, Waiting: 0 reqs, GPU KV cache usage: 29.1%, Prefix cache hit rate: 60.2%",
+    "2026-09-20T19:23:23.750389378Z (APIServer pid=7) INFO 09-20 19:23:23 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.72, Accepted throughput: 42.19 tokens/s, Drafted throughput: 73.79 tokens/s, Accepted: 422 tokens, Drafted: 738 tokens, Per-position acceptance rate: 0.776, 0.545, 0.394, Avg Draft acceptance rate: 57.2%",
+    "2026-09-20T19:23:29.367269361Z (APIServer pid=7) INFO: 172.18.0.1:47768 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:29.627648813Z (APIServer pid=7) INFO: 172.18.0.1:47774 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:29.905487122Z (APIServer pid=7) INFO: 172.18.0.1:47790 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:30.977201243Z (APIServer pid=7) INFO: 172.18.0.1:47806 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:31.608269462Z (APIServer pid=7) INFO: 172.18.0.1:47810 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:33.305166827Z (APIServer pid=7) INFO: 172.18.0.1:47822 - \"POST /v1/chat/completions HTTP/1.1\" 200 OK",
+    "2026-09-20T19:23:33.750820538Z (APIServer pid=7) INFO 09-20 19:23:33 [loggers.py:310] Engine 000: Avg prompt throughput: 77.2 tokens/s, Avg generation throughput: 53.4 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 59.5%",
+    "2026-09-20T19:23:33.750838538Z (APIServer pid=7) INFO 09-20 19:23:33 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.75, Accepted throughput: 34.30 tokens/s, Drafted throughput: 58.80 tokens/s, Accepted: 343 tokens, Drafted: 588 tokens, Per-position acceptance rate: 0.801, 0.566, 0.383, Avg Draft acceptance rate: 58.3%",
+    "2026-09-20T19:23:43.751022086Z (APIServer pid=7) INFO 09-20 19:23:43 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 14.0%, Prefix cache hit rate: 11.8%",
+    "2026-09-20T19:23:47.007619340Z (EngineCore pid=130) INFO 09-20 19:23:47 [vllm_ple_mmap.py:546] PLE mmap stats (last 32s): 145 ops, op 4561 ms total (31.46 ms/op), gather 862 ms total (5.94 ms/op), 40824 rows, 6.2 MiB read, gpu-wait 23.34 ms/op, host 8.12 ms/op (dedup 0.34, gather 5.94, stage 0.17)"
+  ]
+}

@@ -1,0 +1,10 @@
+{"type":"thread.started","thread_id":"01a0c012-774f-7103-8634-a6bb7530611f"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `huggingface:RadixArk/Qwen3.8-Flash-Next-NVFP4@7b719225242aacd3dbd3f9407468c2ee9a9d2594#sha256:069e380200041a5b7249a952e005de0a1b50c83f38fdd473282d189c5610e683` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 2/5 (stream disconnected before completion: invalid peer certificate: UnknownIssuer)"}
+{"type":"error","message":"Reconnecting... 3/5 (stream disconnected before completion: invalid peer certificate: UnknownIssuer)"}
+{"type":"error","message":"Reconnecting... 4/5 (stream disconnected before completion: invalid peer certificate: UnknownIssuer)"}
+{"type":"error","message":"Reconnecting... 5/5 (stream disconnected before completion: invalid peer certificate: UnknownIssuer)"}
+{"type":"item.completed","item":{"id":"item_1","type":"error","message":"Falling back from WebSockets to HTTPS transport. stream disconnected before completion: invalid peer certificate: UnknownIssuer"}}
+{"type":"error","message":"{\"detail\":\"The 'huggingface:RadixArk/Qwen3.8-Flash-Next-NVFP4@7b719225242aacd3dbd3f9407468c2ee9a9d2594#sha256:069e380200041a5b7249a952e005de0a1b50c83f38fdd473282d189c5610e683' model is not supported when using Codex with a ChatGPT account.\"}"}
+{"type":"turn.failed","error":{"message":"{\"detail\":\"The 'huggingface:RadixArk/Qwen3.8-Flash-Next-NVFP4@7b719225242aacd3dbd3f9407468c2ee9a9d2594#sha256:069e380200041a5b7249a952e005de0a1b50c83f38fdd473282d189c5610e683' model is not supported when using Codex with a ChatGPT account.\"}"}}

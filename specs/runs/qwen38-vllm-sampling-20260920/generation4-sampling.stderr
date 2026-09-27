@@ -1,0 +1,22 @@
+Traceback (most recent call last):
+  File "/home/dmitriy/sources/sy/specs/runs/qwen38-vllm-optimization-20260920/qualify.py", line 98, in <module>
+    for result, _ in pool.map(generate, requests):
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib64/python3.12/concurrent/futures/_base.py", line 619, in result_iterator
+    yield _result_or_cancel(fs.pop())
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib64/python3.12/concurrent/futures/_base.py", line 317, in _result_or_cancel
+    return fut.result(timeout)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib64/python3.12/concurrent/futures/_base.py", line 456, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib64/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/usr/lib64/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dmitriy/sources/sy/specs/runs/qwen38-vllm-optimization-20260920/qualify.py", line 58, in generate
+    assert document is not None and document.get('status') != 'failed', document
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'error': {'code': 'server_error', 'message': 'upstream stream failed'}, 'id': 'resp_01m2zyhtpe6d0rw7g41je6fmj3', 'model': 'huggingface:RadixArk/Qwen3.8-Flash-Next-NVFP4@7b719225242aacd3dbd3f9407468c2ee9a9d2594#sha256:069e380200041a5b7249a952e005de0a1b50c83f38fdd473282d189c5610e683', 'object': 'response', 'output': [], 'status': 'failed'}

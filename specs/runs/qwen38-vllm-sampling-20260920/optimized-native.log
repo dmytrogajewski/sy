@@ -1,0 +1,796 @@
+2026-09-20T19:12:05.330598209Z (APIServer pid=7) INFO 09-20 19:12:05 [api_utils.py:333] 
+2026-09-20T19:12:05.330627329Z (APIServer pid=7) INFO 09-20 19:12:05 [api_utils.py:333]        █     █     █▄   ▄█
+2026-09-20T19:12:05.330629424Z (APIServer pid=7) INFO 09-20 19:12:05 [api_utils.py:333]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.1.dev20073+g8e685d198
+2026-09-20T19:12:05.330630672Z (APIServer pid=7) INFO 09-20 19:12:05 [api_utils.py:333]   █▄█▀ █     █     █     █  model   /models/snapshots/7b719225242aacd3dbd3f9407468c2ee9a9d2594
+2026-09-20T19:12:05.330631760Z (APIServer pid=7) INFO 09-20 19:12:05 [api_utils.py:333]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+2026-09-20T19:12:05.330632976Z (APIServer pid=7) INFO 09-20 19:12:05 [api_utils.py:333] 
+2026-09-20T19:12:05.333574311Z (APIServer pid=7) INFO 09-20 19:12:05 [api_utils.py:272] non-default args: {'model_tag': '/models/snapshots/7b719225242aacd3dbd3f9407468c2ee9a9d2594', 'enable_auto_tool_choice': True, 'tool_call_parser': 'qwen3_coder', 'host': '0.0.0.0', 'model': '/models/snapshots/7b719225242aacd3dbd3f9407468c2ee9a9d2594', 'max_model_len': 262144, 'served_model_name': ['Qwen3.8-Flash-Next-NVFP4'], 'load_format': 'safetensors', 'reasoning_parser': 'qwen3', 'kv_cache_memory_bytes': 12884901888, 'enable_prefix_caching': True, 'max_num_batched_tokens': 8192, 'max_num_seqs': 8, 'enable_chunked_prefill': True, 'enable_flashinfer_autotune': False, 'speculative_config': {'method': 'mtp', 'num_speculative_tokens': 3}, 'compilation_config': {'mode': None, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': [], 'ir_enable_torch_wrap': None, 'splitting_ops': ['vllm::unified_attention_with_output', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::qwen3_8_flash_next_ple_short_conv', 'vllm::qwen3_8_flash_next_qsa_with_output', 'vllm::linear_attention', 'vllm::qwen_gdn_attention_core', 'vllm::qwen_gdn_attention_core_fused_norm_packed', 'vllm::sparse_attn_indexer', 'vllm::ple_mmap_lookup'], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': None, 'compile_ranges_endpoints': None, 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.PIECEWISE: 1>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': None, 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': None, 'pass_config': {}, 'max_cudagraph_capture_size': None, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': None, 'static_all_moe_layers': []}}
+2026-09-20T19:12:05.333935076Z (APIServer pid=7) WARNING 09-20 19:12:05 [envs.py:2224] Unknown vLLM environment variable detected: VLLM_PLE_MMAP
+2026-09-20T19:12:05.333945924Z (APIServer pid=7) WARNING 09-20 19:12:05 [envs.py:2224] Unknown vLLM environment variable detected: VLLM_PLE_MMAP_WORKERS
+2026-09-20T19:12:05.333962964Z (APIServer pid=7) WARNING 09-20 19:12:05 [envs.py:2224] Unknown vLLM environment variable detected: VLLM_PLE_MMAP_FAST_ROWS
+2026-09-20T19:12:05.333965940Z (APIServer pid=7) WARNING 09-20 19:12:05 [envs.py:2224] Unknown vLLM environment variable detected: VLLM_PLE_MMAP_MADVISE
+2026-09-20T19:12:05.333982292Z (APIServer pid=7) WARNING 09-20 19:12:05 [envs.py:2224] Unknown vLLM environment variable detected: VLLM_MTP_DRAFT_VOCAB
+2026-09-20T19:12:05.333986340Z (APIServer pid=7) WARNING 09-20 19:12:05 [envs.py:2224] Unknown vLLM environment variable detected: VLLM_QSA_DET_TOPK
+2026-09-20T19:12:05.333988564Z (APIServer pid=7) WARNING 09-20 19:12:05 [envs.py:2224] Unknown vLLM environment variable detected: VLLM_PLE_MMAP_PREWARM
+2026-09-20T19:12:05.364246098Z (APIServer pid=7) INFO 09-20 19:12:05 [model.py:672] Resolved architecture: Qwen4ExpForConditionalGeneration
+2026-09-20T19:12:05.364476864Z (APIServer pid=7) INFO 09-20 19:12:05 [model.py:1965] Using max model len 262144
+2026-09-20T19:12:09.200589423Z (APIServer pid=7) [ERROR] `min_frames` is part of Qwen3VLVideoProcessorInitKwargs, but not documented. Make sure to add it to the docstring of the function in /usr/local/lib/python3.12/dist-packages/transformers/models/qwen3_vl/video_processing_qwen3_vl.py.
+2026-09-20T19:12:09.200619263Z (APIServer pid=7) [ERROR] `max_frames` is part of Qwen3VLVideoProcessorInitKwargs, but not documented. Make sure to add it to the docstring of the function in /usr/local/lib/python3.12/dist-packages/transformers/models/qwen3_vl/video_processing_qwen3_vl.py.
+2026-09-20T19:12:09.200637471Z (APIServer pid=7) INFO 09-20 19:12:09 [vllm_ple_mmap.py:832] PLE mmap patch applied to vllm.models.qwen3_8_flash_next.nvidia.ple_layer.Qwen3_8FlashNextNGramEmbedding
+2026-09-20T19:12:09.220398184Z (APIServer pid=7) INFO 09-20 19:12:09 [mtp.py:484] MTP reduced draft vocabulary enabled: /opt/llm/draft_vocab_65536.npy
+2026-09-20T19:12:10.176445936Z (APIServer pid=7) INFO 09-20 19:12:10 [model.py:672] Resolved architecture: Qwen3_8FlashNextMTP
+2026-09-20T19:12:10.176464959Z (APIServer pid=7) INFO 09-20 19:12:10 [model.py:1965] Using max model len 262144
+2026-09-20T19:12:10.176466463Z (APIServer pid=7) WARNING 09-20 19:12:10 [speculative.py:1010] Enabling num_speculative_tokens > 1 will run multiple times of forward on same MTP layer,which may result in lower acceptance rate
+2026-09-20T19:12:10.176468415Z (APIServer pid=7) INFO 09-20 19:12:10 [scheduler.py:246] Chunked prefill is enabled with max_num_batched_tokens=8192.
+2026-09-20T19:12:10.176738509Z (APIServer pid=7) INFO 09-20 19:12:10 [config.py:605] Mamba cache mode is set to 'align' for Qwen4ExpForConditionalGeneration by default when prefix caching is enabled
+2026-09-20T19:12:10.176750845Z (APIServer pid=7) WARNING 09-20 19:12:10 [modelopt.py:1011] Detected ModelOpt NVFP4 checkpoint (quant_algo=NVFP4). Please note that the format is experimental and could change in future.
+2026-09-20T19:12:10.176994587Z (APIServer pid=7) INFO 09-20 19:12:10 [kernel.py:308] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'])
+2026-09-20T19:12:10.217546260Z (APIServer pid=7) INFO 09-20 19:12:10 [compilation.py:329] Enabled custom fusions: act_quant, rope_kvcache_cat_mla
+2026-09-20T19:12:05.356299062Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:05.356516564Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:05.358450612Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:05.358453316Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:05.358454884Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:06.739334023Z [19:12:06.739][276590124742432][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:12:06.739356134Z [19:12:06.739][276590124742432][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:12:06.739357654Z [19:12:06.739][276590124742432][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:12:06.739358742Z [19:12:06.739][276590124742432][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:12:06.739360198Z [19:12:06.739][276590124742432][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:12:06.739361206Z [19:12:06.739][276590124742432][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:12:09.059371466Z [19:12:09.059][276590124742432][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:12:09.059397322Z [19:12:09.059][276590124742432][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:12:09.059398890Z [19:12:09.059][276590124742432][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:12:09.059400074Z [19:12:09.059][276590124742432][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:12:09.221009123Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:09.221209185Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:09.223231152Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:09.223236576Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:09.223239152Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:10.170992606Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:10.171220636Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:10.173162907Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:10.173180363Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:10.173181851Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:12.847060951Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:12.847308133Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:14.363319729Z (APIServer pid=7) [transformers] The `use_fast` parameter is deprecated and will be removed in a future version. Use `backend="torchvision"` instead of `use_fast=True`, or `backend="pil"` instead of `use_fast=False`.
+2026-09-20T19:12:15.545206555Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:15.545518633Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:25.559019287Z [19:12:25.558][281354646464448][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:12:25.559042727Z [19:12:25.558][281354646464448][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:12:25.559044279Z [19:12:25.558][281354646464448][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:12:25.559045383Z [19:12:25.558][281354646464448][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:12:25.559046583Z [19:12:25.558][281354646464448][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:12:25.559047543Z [19:12:25.558][281354646464448][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:12:27.364759814Z (EngineCore pid=130) INFO 09-20 19:12:27 [core.py:122] Initializing a V1 LLM engine (v0.1.dev20073+g8e685d198) with config: model='/models/snapshots/7b719225242aacd3dbd3f9407468c2ee9a9d2594', speculative_config=SpeculativeConfig(method='mtp', model='/models/snapshots/7b719225242aacd3dbd3f9407468c2ee9a9d2594', num_spec_tokens=3), tokenizer='/models/snapshots/7b719225242aacd3dbd3f9407468c2ee9a9d2594', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=262144, download_dir=None, load_format=safetensors, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=modelopt_fp4, quantization_config=None, enforce_eager=False, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='qwen3', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=0, served_model_name=Qwen3.8-Flash-Next-NVFP4, enable_prefix_caching=True, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.VLLM_COMPILE: 3>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['none'], 'ir_enable_torch_wrap': True, 'splitting_ops': ['vllm::unified_attention_with_output', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::qwen3_8_flash_next_ple_short_conv', 'vllm::qwen3_8_flash_next_qsa_with_output', 'vllm::linear_attention', 'vllm::qwen_gdn_attention_core', 'vllm::qwen_gdn_attention_core_fused_norm_packed', 'vllm::sparse_attn_indexer', 'vllm::ple_mmap_lookup'], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': [], 'compile_ranges_endpoints': [8192], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.PIECEWISE: 1>, 'cudagraph_num_of_warmups': 1, 'cudagraph_capture_sizes': [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': False, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': True, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': 64, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native']), enable_flashinfer_autotune=False, enable_cutedsl_warmup=True, enable_jit_warmup=True, enable_bf16x3_router_gemm=False, moe_backend='auto', linear_backend='auto')
+2026-09-20T19:12:28.052222587Z (EngineCore pid=130) [ERROR] `min_frames` is part of Qwen3VLVideoProcessorInitKwargs, but not documented. Make sure to add it to the docstring of the function in /usr/local/lib/python3.12/dist-packages/transformers/models/qwen3_vl/video_processing_qwen3_vl.py.
+2026-09-20T19:12:28.052243723Z (EngineCore pid=130) [ERROR] `max_frames` is part of Qwen3VLVideoProcessorInitKwargs, but not documented. Make sure to add it to the docstring of the function in /usr/local/lib/python3.12/dist-packages/transformers/models/qwen3_vl/video_processing_qwen3_vl.py.
+2026-09-20T19:12:28.052245259Z (EngineCore pid=130) INFO 09-20 19:12:28 [vllm_ple_mmap.py:832] PLE mmap patch applied to vllm.models.qwen3_8_flash_next.nvidia.ple_layer.Qwen3_8FlashNextNGramEmbedding
+2026-09-20T19:12:28.070051976Z (EngineCore pid=130) INFO 09-20 19:12:28 [mtp.py:484] MTP reduced draft vocabulary enabled: /opt/llm/draft_vocab_65536.npy
+2026-09-20T19:12:27.933534255Z [19:12:27.933][281354646464448][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:12:27.933551423Z [19:12:27.933][281354646464448][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:12:27.933552894Z [19:12:27.933][281354646464448][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:12:27.933554046Z [19:12:27.933][281354646464448][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:12:28.079226125Z (EngineCore pid=130) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:28.079278044Z (EngineCore pid=130) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:28.081437291Z (EngineCore pid=130) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:28.081466330Z (EngineCore pid=130) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:28.081469002Z (EngineCore pid=130) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:12:28.688127057Z (EngineCore pid=130) INFO 09-20 19:12:28 [parallel_state.py:1638] world_size=1 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_77b9ee22a34b41618971158dc223ec23 backend=nccl
+2026-09-20T19:12:28.696193134Z (EngineCore pid=130) INFO 09-20 19:12:28 [parallel_state.py:1982] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, EP rank 0, EPLB rank N/A
+2026-09-20T19:12:28.696215534Z (EngineCore pid=130) INFO 09-20 19:12:28 [gpu_worker.py:500] Using V2 Model Runner
+2026-09-20T19:12:28.688053713Z [19:12:28.688][281354646464448][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:12:28.688072337Z [19:12:28.688][281354646464448][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:12:28.696299821Z [19:12:28.696][281354646464448][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:12:28.696301053Z [19:12:28.696][281354646464448][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:12:28.697970208Z [19:12:28.697][281354646464448][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:12:28.697971936Z [19:12:28.697][281354646464448][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:12:29.341895335Z (EngineCore pid=130) INFO 09-20 19:12:29 [model_runner.py:385] Loading model from scratch...
+2026-09-20T19:12:29.418426753Z (EngineCore pid=130) INFO 09-20 19:12:29 [cuda.py:545] Using backend AttentionBackendEnum.FLASH_ATTN for vit attention
+2026-09-20T19:12:29.419116683Z (EngineCore pid=130) INFO 09-20 19:12:29 [mm_encoder_attention.py:375] Using AttentionBackendEnum.FLASH_ATTN for MMEncoderAttention.
+2026-09-20T19:12:29.534410582Z (EngineCore pid=130) INFO 09-20 19:12:29 [qwen_gdn_linear_attn.py:158] Using Triton/FLA GDN prefill kernel (requested=auto, head_k_dim=128).
+2026-09-20T19:12:29.534526725Z (EngineCore pid=130) INFO 09-20 19:12:29 [qwen_gdn_linear_attn.py:505] GDN decode kernel: cuda
+2026-09-20T19:12:29.552454385Z (EngineCore pid=130) INFO 09-20 19:12:29 [nvfp4.py:291] Using 'FLASHINFER_CUTLASS' NvFp4 MoE backend out of potential backends: ['FLASHINFER_TRTLLM', 'FLASHINFER_CUTEDSL', 'FLASHINFER_CUTEDSL_BATCHED', 'FLASHINFER_CUTLASS', 'VLLM_CUTLASS', 'MARLIN', 'HUMMING', 'EMULATION'].
+2026-09-20T19:12:28.909627839Z [19:12:28.909][281354646464448][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:12:28.909648639Z [19:12:28.909][281354646464448][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:12:29.608154487Z (EngineCore pid=130) INFO 09-20 19:12:29 [vllm_ple_mmap.py:732] PLE mmap: language_model.model.layers.1.ple.ple_embedding -> placeholder embedding (320001536 rows x 160), table will be mmapped
+2026-09-20T19:12:29.772705468Z (EngineCore pid=130) INFO 09-20 19:12:29 [flash_attn.py:911] Using FlashAttention version 2
+2026-09-20T19:12:32.739087968Z (EngineCore pid=130) INFO 09-20 19:12:32 [weight_utils.py:866] Filesystem type for checkpoints: EXT4. Checkpoint size: 125.91 GiB. Available RAM: 35.94 GiB.
+2026-09-20T19:12:32.739111664Z (EngineCore pid=130) INFO 09-20 19:12:32 [weight_utils.py:896] Auto-prefetch is disabled because the filesystem (EXT4) is not a recognized network FS (NFS/Lustre) and the checkpoint size (125.91 GiB) exceeds 90% of available RAM (35.94 GiB).
+2026-09-20T19:12:32.739505421Z (EngineCore pid=130) Loading safetensors checkpoint shards:   0% Completed | 0/206 [00:00<?, ?it/s]
+2026-09-20T19:12:34.694899910Z (EngineCore pid=130) Loading safetensors checkpoint shards:   0% Completed | 1/206 [00:01<06:40,  1.96s/it]
+2026-09-20T19:12:36.690676081Z (EngineCore pid=130) Loading safetensors checkpoint shards:   1% Completed | 2/206 [00:03<06:43,  1.98s/it]
+2026-09-20T19:12:38.703661788Z (EngineCore pid=130) Loading safetensors checkpoint shards:   1% Completed | 3/206 [00:05<06:44,  1.99s/it]
+2026-09-20T19:12:40.703103537Z (EngineCore pid=130) Loading safetensors checkpoint shards:   2% Completed | 4/206 [00:07<06:43,  2.00s/it]
+2026-09-20T19:12:42.846489046Z (EngineCore pid=130) Loading safetensors checkpoint shards:   2% Completed | 5/206 [00:10<06:51,  2.05s/it]
+2026-09-20T19:12:45.155972275Z (EngineCore pid=130) Loading safetensors checkpoint shards:   3% Completed | 6/206 [00:12<07:07,  2.14s/it]
+2026-09-20T19:12:47.404524004Z (EngineCore pid=130) Loading safetensors checkpoint shards:   3% Completed | 7/206 [00:14<07:12,  2.17s/it]
+2026-09-20T19:12:49.681294009Z (EngineCore pid=130) Loading safetensors checkpoint shards:   4% Completed | 8/206 [00:16<07:16,  2.21s/it]
+2026-09-20T19:12:51.909086636Z (EngineCore pid=130) Loading safetensors checkpoint shards:   4% Completed | 9/206 [00:19<07:16,  2.21s/it]
+2026-09-20T19:12:54.165934575Z (EngineCore pid=130) Loading safetensors checkpoint shards:   5% Completed | 10/206 [00:21<07:16,  2.23s/it]
+2026-09-20T19:12:56.436402556Z (EngineCore pid=130) Loading safetensors checkpoint shards:   5% Completed | 11/206 [00:23<07:16,  2.24s/it]
+2026-09-20T19:12:58.702024885Z (EngineCore pid=130) Loading safetensors checkpoint shards:   6% Completed | 12/206 [00:25<07:16,  2.25s/it]
+2026-09-20T19:13:00.941512099Z (EngineCore pid=130) Loading safetensors checkpoint shards:   6% Completed | 13/206 [00:28<07:13,  2.25s/it]
+2026-09-20T19:13:03.308987769Z (EngineCore pid=130) Loading safetensors checkpoint shards:   7% Completed | 14/206 [00:30<07:18,  2.28s/it]
+2026-09-20T19:13:05.615193497Z (EngineCore pid=130) Loading safetensors checkpoint shards:   7% Completed | 15/206 [00:32<07:17,  2.29s/it]
+2026-09-20T19:13:07.917174000Z (EngineCore pid=130) Loading safetensors checkpoint shards:   8% Completed | 16/206 [00:35<07:15,  2.29s/it]
+2026-09-20T19:13:10.083158292Z (EngineCore pid=130) Loading safetensors checkpoint shards:   8% Completed | 17/206 [00:37<07:06,  2.26s/it]
+2026-09-20T19:13:12.256651327Z (EngineCore pid=130) Loading safetensors checkpoint shards:   9% Completed | 18/206 [00:39<06:59,  2.23s/it]
+2026-09-20T19:13:14.537191981Z (EngineCore pid=130) Loading safetensors checkpoint shards:   9% Completed | 19/206 [00:41<06:59,  2.25s/it]
+2026-09-20T19:13:16.772408221Z (EngineCore pid=130) Loading safetensors checkpoint shards:  10% Completed | 20/206 [00:44<06:57,  2.24s/it]
+2026-09-20T19:13:18.931173182Z (EngineCore pid=130) Loading safetensors checkpoint shards:  10% Completed | 21/206 [00:46<06:50,  2.22s/it]
+2026-09-20T19:13:21.133601423Z (EngineCore pid=130) Loading safetensors checkpoint shards:  11% Completed | 22/206 [00:48<06:47,  2.21s/it]
+2026-09-20T19:13:23.252857983Z (EngineCore pid=130) Loading safetensors checkpoint shards:  11% Completed | 23/206 [00:50<06:39,  2.18s/it]
+2026-09-20T19:13:25.480911037Z (EngineCore pid=130) Loading safetensors checkpoint shards:  12% Completed | 24/206 [00:52<06:39,  2.20s/it]
+2026-09-20T19:13:27.671615194Z (EngineCore pid=130) Loading safetensors checkpoint shards:  12% Completed | 25/206 [00:54<06:37,  2.20s/it]
+2026-09-20T19:13:29.902306198Z (EngineCore pid=130) Loading safetensors checkpoint shards:  13% Completed | 26/206 [00:57<06:37,  2.21s/it]
+2026-09-20T19:13:32.031491684Z (EngineCore pid=130) Loading safetensors checkpoint shards:  13% Completed | 27/206 [00:59<06:30,  2.18s/it]
+2026-09-20T19:13:34.188215121Z (EngineCore pid=130) Loading safetensors checkpoint shards:  14% Completed | 28/206 [01:01<06:27,  2.18s/it]
+2026-09-20T19:13:36.283059821Z (EngineCore pid=130) Loading safetensors checkpoint shards:  14% Completed | 29/206 [01:03<06:20,  2.15s/it]
+2026-09-20T19:13:38.415695545Z (EngineCore pid=130) Loading safetensors checkpoint shards:  15% Completed | 30/206 [01:05<06:17,  2.15s/it]
+2026-09-20T19:13:40.536896263Z (EngineCore pid=130) Loading safetensors checkpoint shards:  15% Completed | 31/206 [01:07<06:14,  2.14s/it]
+2026-09-20T19:13:42.653185237Z (EngineCore pid=130) Loading safetensors checkpoint shards:  16% Completed | 32/206 [01:09<06:10,  2.13s/it]
+2026-09-20T19:13:44.751917729Z (EngineCore pid=130) Loading safetensors checkpoint shards:  16% Completed | 33/206 [01:12<06:07,  2.12s/it]
+2026-09-20T19:13:46.912929418Z (EngineCore pid=130) Loading safetensors checkpoint shards:  17% Completed | 34/206 [01:14<06:06,  2.13s/it]
+2026-09-20T19:13:49.214496271Z (EngineCore pid=130) Loading safetensors checkpoint shards:  17% Completed | 35/206 [01:16<06:13,  2.18s/it]
+2026-09-20T19:13:51.335728363Z (EngineCore pid=130) Loading safetensors checkpoint shards:  17% Completed | 36/206 [01:18<06:08,  2.17s/it]
+2026-09-20T19:13:53.444942410Z (EngineCore pid=130) Loading safetensors checkpoint shards:  18% Completed | 37/206 [01:20<06:03,  2.15s/it]
+2026-09-20T19:13:55.721915107Z (EngineCore pid=130) Loading safetensors checkpoint shards:  18% Completed | 38/206 [01:22<06:07,  2.19s/it]
+2026-09-20T19:13:58.055430432Z (EngineCore pid=130) Loading safetensors checkpoint shards:  19% Completed | 39/206 [01:25<06:12,  2.23s/it]
+2026-09-20T19:14:00.394896805Z (EngineCore pid=130) Loading safetensors checkpoint shards:  19% Completed | 40/206 [01:27<06:15,  2.26s/it]
+2026-09-20T19:14:02.737700229Z (EngineCore pid=130) Loading safetensors checkpoint shards:  20% Completed | 41/206 [01:29<06:17,  2.29s/it]
+2026-09-20T19:14:04.889290019Z (EngineCore pid=130) Loading safetensors checkpoint shards:  20% Completed | 42/206 [01:32<06:08,  2.25s/it]
+2026-09-20T19:14:07.042426881Z (EngineCore pid=130) Loading safetensors checkpoint shards:  21% Completed | 43/206 [01:34<06:01,  2.22s/it]
+2026-09-20T19:14:09.204435404Z (EngineCore pid=130) Loading safetensors checkpoint shards:  21% Completed | 44/206 [01:36<05:56,  2.20s/it]
+2026-09-20T19:14:11.336970245Z (EngineCore pid=130) Loading safetensors checkpoint shards:  22% Completed | 45/206 [01:38<05:51,  2.18s/it]
+2026-09-20T19:14:13.472898927Z (EngineCore pid=130) Loading safetensors checkpoint shards:  22% Completed | 46/206 [01:40<05:46,  2.17s/it]
+2026-09-20T19:14:15.603443802Z (EngineCore pid=130) Loading safetensors checkpoint shards:  23% Completed | 47/206 [01:42<05:42,  2.16s/it]
+2026-09-20T19:14:17.729401102Z (EngineCore pid=130) Loading safetensors checkpoint shards:  23% Completed | 48/206 [01:44<05:39,  2.15s/it]
+2026-09-20T19:14:19.879338545Z (EngineCore pid=130) Loading safetensors checkpoint shards:  24% Completed | 49/206 [01:47<05:37,  2.15s/it]
+2026-09-20T19:14:21.996939475Z (EngineCore pid=130) Loading safetensors checkpoint shards:  24% Completed | 50/206 [01:49<05:33,  2.14s/it]
+2026-09-20T19:14:24.143267155Z (EngineCore pid=130) Loading safetensors checkpoint shards:  25% Completed | 51/206 [01:51<05:31,  2.14s/it]
+2026-09-20T19:14:26.270224485Z (EngineCore pid=130) Loading safetensors checkpoint shards:  25% Completed | 52/206 [01:53<05:29,  2.14s/it]
+2026-09-20T19:14:28.461994343Z (EngineCore pid=130) Loading safetensors checkpoint shards:  26% Completed | 53/206 [01:55<05:29,  2.15s/it]
+2026-09-20T19:14:30.599270898Z (EngineCore pid=130) Loading safetensors checkpoint shards:  26% Completed | 54/206 [01:57<05:26,  2.15s/it]
+2026-09-20T19:14:32.727217335Z (EngineCore pid=130) Loading safetensors checkpoint shards:  27% Completed | 55/206 [01:59<05:23,  2.14s/it]
+2026-09-20T19:14:34.864170373Z (EngineCore pid=130) Loading safetensors checkpoint shards:  27% Completed | 56/206 [02:02<05:21,  2.14s/it]
+2026-09-20T19:14:37.023124017Z (EngineCore pid=130) Loading safetensors checkpoint shards:  28% Completed | 57/206 [02:04<05:19,  2.15s/it]
+2026-09-20T19:14:39.204267054Z (EngineCore pid=130) Loading safetensors checkpoint shards:  28% Completed | 58/206 [02:06<05:19,  2.16s/it]
+2026-09-20T19:14:41.390216658Z (EngineCore pid=130) Loading safetensors checkpoint shards:  29% Completed | 59/206 [02:08<05:18,  2.17s/it]
+2026-09-20T19:14:43.552134037Z (EngineCore pid=130) Loading safetensors checkpoint shards:  29% Completed | 60/206 [02:10<05:16,  2.16s/it]
+2026-09-20T19:14:45.694427912Z (EngineCore pid=130) Loading safetensors checkpoint shards:  30% Completed | 61/206 [02:12<05:12,  2.16s/it]
+2026-09-20T19:14:47.919676087Z (EngineCore pid=130) Loading safetensors checkpoint shards:  30% Completed | 62/206 [02:15<05:13,  2.18s/it]
+2026-09-20T19:14:50.123070920Z (EngineCore pid=130) Loading safetensors checkpoint shards:  31% Completed | 63/206 [02:17<05:12,  2.19s/it]
+2026-09-20T19:14:52.366397809Z (EngineCore pid=130) Loading safetensors checkpoint shards:  31% Completed | 64/206 [02:19<05:12,  2.20s/it]
+2026-09-20T19:14:54.626278756Z (EngineCore pid=130) Loading safetensors checkpoint shards:  32% Completed | 65/206 [02:21<05:13,  2.22s/it]
+2026-09-20T19:14:56.901356634Z (EngineCore pid=130) Loading safetensors checkpoint shards:  32% Completed | 66/206 [02:24<05:13,  2.24s/it]
+2026-09-20T19:14:59.213639937Z (EngineCore pid=130) Loading safetensors checkpoint shards:  33% Completed | 67/206 [02:26<05:14,  2.26s/it]
+2026-09-20T19:15:01.495873487Z (EngineCore pid=130) Loading safetensors checkpoint shards:  33% Completed | 68/206 [02:28<05:12,  2.27s/it]
+2026-09-20T19:15:03.834053375Z (EngineCore pid=130) Loading safetensors checkpoint shards:  33% Completed | 69/206 [02:31<05:13,  2.29s/it]
+2026-09-20T19:15:06.017190350Z (EngineCore pid=130) Loading safetensors checkpoint shards:  34% Completed | 70/206 [02:33<05:06,  2.26s/it]
+2026-09-20T19:15:08.229178773Z (EngineCore pid=130) Loading safetensors checkpoint shards:  34% Completed | 71/206 [02:35<05:02,  2.24s/it]
+2026-09-20T19:15:10.415198625Z (EngineCore pid=130) Loading safetensors checkpoint shards:  35% Completed | 72/206 [02:37<04:58,  2.23s/it]
+2026-09-20T19:15:12.531967521Z (EngineCore pid=130) Loading safetensors checkpoint shards:  35% Completed | 73/206 [02:39<04:51,  2.19s/it]
+2026-09-20T19:15:14.726996829Z (EngineCore pid=130) Loading safetensors checkpoint shards:  36% Completed | 74/206 [02:41<04:49,  2.19s/it]
+2026-09-20T19:15:17.010430934Z (EngineCore pid=130) Loading safetensors checkpoint shards:  36% Completed | 75/206 [02:44<04:50,  2.22s/it]
+2026-09-20T19:15:19.254044898Z (EngineCore pid=130) Loading safetensors checkpoint shards:  37% Completed | 76/206 [02:46<04:49,  2.23s/it]
+2026-09-20T19:15:21.540256509Z (EngineCore pid=130) Loading safetensors checkpoint shards:  37% Completed | 77/206 [02:48<04:49,  2.25s/it]
+2026-09-20T19:15:23.695224801Z (EngineCore pid=130) Loading safetensors checkpoint shards:  38% Completed | 78/206 [02:50<04:43,  2.22s/it]
+2026-09-20T19:15:25.706002443Z (EngineCore pid=130) Loading safetensors checkpoint shards:  38% Completed | 79/206 [02:52<04:33,  2.16s/it]
+2026-09-20T19:15:27.865424425Z (EngineCore pid=130) Loading safetensors checkpoint shards:  39% Completed | 80/206 [02:55<04:31,  2.16s/it]
+2026-09-20T19:15:30.143216359Z (EngineCore pid=130) Loading safetensors checkpoint shards:  39% Completed | 81/206 [02:57<04:34,  2.19s/it]
+2026-09-20T19:15:32.320561149Z (EngineCore pid=130) Loading safetensors checkpoint shards:  40% Completed | 82/206 [02:59<04:31,  2.19s/it]
+2026-09-20T19:15:34.406606648Z (EngineCore pid=130) Loading safetensors checkpoint shards:  40% Completed | 83/206 [03:01<04:25,  2.16s/it]
+2026-09-20T19:15:36.582349456Z (EngineCore pid=130) Loading safetensors checkpoint shards:  41% Completed | 84/206 [03:03<04:23,  2.16s/it]
+2026-09-20T19:15:38.673781598Z (EngineCore pid=130) Loading safetensors checkpoint shards:  41% Completed | 85/206 [03:05<04:19,  2.14s/it]
+2026-09-20T19:15:40.893594002Z (EngineCore pid=130) Loading safetensors checkpoint shards:  42% Completed | 86/206 [03:08<04:19,  2.16s/it]
+2026-09-20T19:15:43.052950289Z (EngineCore pid=130) Loading safetensors checkpoint shards:  42% Completed | 87/206 [03:10<04:17,  2.16s/it]
+2026-09-20T19:15:45.224708565Z (EngineCore pid=130) Loading safetensors checkpoint shards:  43% Completed | 88/206 [03:12<04:15,  2.17s/it]
+2026-09-20T19:15:47.303936300Z (EngineCore pid=130) Loading safetensors checkpoint shards:  43% Completed | 89/206 [03:14<04:10,  2.14s/it]
+2026-09-20T19:15:49.472838872Z (EngineCore pid=130) Loading safetensors checkpoint shards:  44% Completed | 90/206 [03:16<04:09,  2.15s/it]
+2026-09-20T19:15:51.634090601Z (EngineCore pid=130) Loading safetensors checkpoint shards:  44% Completed | 91/206 [03:18<04:07,  2.15s/it]
+2026-09-20T19:15:53.770978135Z (EngineCore pid=130) Loading safetensors checkpoint shards:  45% Completed | 92/206 [03:21<04:04,  2.15s/it]
+2026-09-20T19:15:56.038342686Z (EngineCore pid=130) Loading safetensors checkpoint shards:  45% Completed | 93/206 [03:23<04:06,  2.18s/it]
+2026-09-20T19:15:58.131785893Z (EngineCore pid=130) Loading safetensors checkpoint shards:  46% Completed | 94/206 [03:25<04:01,  2.16s/it]
+2026-09-20T19:16:00.262242533Z (EngineCore pid=130) Loading safetensors checkpoint shards:  46% Completed | 95/206 [03:27<03:58,  2.15s/it]
+2026-09-20T19:16:02.494979908Z (EngineCore pid=130) Loading safetensors checkpoint shards:  47% Completed | 96/206 [03:29<03:59,  2.17s/it]
+2026-09-20T19:16:04.749048018Z (EngineCore pid=130) Loading safetensors checkpoint shards:  47% Completed | 97/206 [03:32<03:59,  2.20s/it]
+2026-09-20T19:16:06.855038738Z (EngineCore pid=130) Loading safetensors checkpoint shards:  48% Completed | 98/206 [03:34<03:54,  2.17s/it]
+2026-09-20T19:16:09.058611346Z (EngineCore pid=130) Loading safetensors checkpoint shards:  48% Completed | 99/206 [03:36<03:53,  2.18s/it]
+2026-09-20T19:16:11.143723159Z (EngineCore pid=130) Loading safetensors checkpoint shards:  49% Completed | 100/206 [03:38<03:48,  2.15s/it]
+2026-09-20T19:16:13.425172170Z (EngineCore pid=130) Loading safetensors checkpoint shards:  49% Completed | 101/206 [03:40<03:50,  2.19s/it]
+2026-09-20T19:16:15.452951443Z (EngineCore pid=130) Loading safetensors checkpoint shards:  50% Completed | 102/206 [03:42<03:42,  2.14s/it]
+2026-09-20T19:16:17.621152968Z (EngineCore pid=130) Loading safetensors checkpoint shards:  50% Completed | 103/206 [03:44<03:41,  2.15s/it]
+2026-09-20T19:16:19.768123025Z (EngineCore pid=130) Loading safetensors checkpoint shards:  50% Completed | 104/206 [03:47<03:39,  2.15s/it]
+2026-09-20T19:16:22.029815178Z (EngineCore pid=130) Loading safetensors checkpoint shards:  51% Completed | 105/206 [03:49<03:40,  2.18s/it]
+2026-09-20T19:16:24.291084108Z (EngineCore pid=130) Loading safetensors checkpoint shards:  51% Completed | 106/206 [03:51<03:40,  2.21s/it]
+2026-09-20T19:16:26.499796803Z (EngineCore pid=130) Loading safetensors checkpoint shards:  52% Completed | 107/206 [03:53<03:38,  2.21s/it]
+2026-09-20T19:16:28.777530471Z (EngineCore pid=130) Loading safetensors checkpoint shards:  52% Completed | 108/206 [03:56<03:38,  2.23s/it]
+2026-09-20T19:16:31.025362981Z (EngineCore pid=130) Loading safetensors checkpoint shards:  53% Completed | 109/206 [03:58<03:36,  2.23s/it]
+2026-09-20T19:16:33.233969221Z (EngineCore pid=130) Loading safetensors checkpoint shards:  53% Completed | 110/206 [04:00<03:33,  2.23s/it]
+2026-09-20T19:16:35.463263994Z (EngineCore pid=130) Loading safetensors checkpoint shards:  54% Completed | 111/206 [04:02<03:31,  2.23s/it]
+2026-09-20T19:16:37.769129555Z (EngineCore pid=130) Loading safetensors checkpoint shards:  54% Completed | 112/206 [04:05<03:31,  2.25s/it]
+2026-09-20T19:16:40.020433545Z (EngineCore pid=130) Loading safetensors checkpoint shards:  55% Completed | 113/206 [04:07<03:29,  2.25s/it]
+2026-09-20T19:16:42.238713945Z (EngineCore pid=130) Loading safetensors checkpoint shards:  55% Completed | 114/206 [04:09<03:26,  2.24s/it]
+2026-09-20T19:16:44.426117842Z (EngineCore pid=130) Loading safetensors checkpoint shards:  56% Completed | 115/206 [04:11<03:22,  2.23s/it]
+2026-09-20T19:16:46.729155419Z (EngineCore pid=130) Loading safetensors checkpoint shards:  56% Completed | 116/206 [04:13<03:22,  2.25s/it]
+2026-09-20T19:16:49.014911357Z (EngineCore pid=130) Loading safetensors checkpoint shards:  57% Completed | 117/206 [04:16<03:21,  2.26s/it]
+2026-09-20T19:16:51.341682961Z (EngineCore pid=130) Loading safetensors checkpoint shards:  57% Completed | 118/206 [04:18<03:20,  2.28s/it]
+2026-09-20T19:16:53.626096868Z (EngineCore pid=130) Loading safetensors checkpoint shards:  58% Completed | 119/206 [04:20<03:18,  2.28s/it]
+2026-09-20T19:16:55.944431520Z (EngineCore pid=130) Loading safetensors checkpoint shards:  58% Completed | 120/206 [04:23<03:17,  2.29s/it]
+2026-09-20T19:16:58.224291476Z (EngineCore pid=130) Loading safetensors checkpoint shards:  59% Completed | 121/206 [04:25<03:14,  2.29s/it]
+2026-09-20T19:17:00.518063624Z (EngineCore pid=130) Loading safetensors checkpoint shards:  59% Completed | 122/206 [04:27<03:12,  2.29s/it]
+2026-09-20T19:17:02.825913580Z (EngineCore pid=130) Loading safetensors checkpoint shards:  60% Completed | 123/206 [04:30<03:10,  2.30s/it]
+2026-09-20T19:17:05.117665202Z (EngineCore pid=130) Loading safetensors checkpoint shards:  60% Completed | 124/206 [04:32<03:08,  2.29s/it]
+2026-09-20T19:17:07.438240611Z (EngineCore pid=130) Loading safetensors checkpoint shards:  61% Completed | 125/206 [04:34<03:06,  2.30s/it]
+2026-09-20T19:17:09.732602526Z (EngineCore pid=130) Loading safetensors checkpoint shards:  61% Completed | 126/206 [04:36<03:03,  2.30s/it]
+2026-09-20T19:17:12.046567498Z (EngineCore pid=130) Loading safetensors checkpoint shards:  62% Completed | 127/206 [04:39<03:02,  2.30s/it]
+2026-09-20T19:17:14.349292042Z (EngineCore pid=130) Loading safetensors checkpoint shards:  62% Completed | 128/206 [04:41<02:59,  2.30s/it]
+2026-09-20T19:17:16.635759162Z (EngineCore pid=130) Loading safetensors checkpoint shards:  63% Completed | 129/206 [04:43<02:56,  2.30s/it]
+2026-09-20T19:17:18.970136294Z (EngineCore pid=130) Loading safetensors checkpoint shards:  63% Completed | 130/206 [04:46<02:55,  2.31s/it]
+2026-09-20T19:17:21.284323627Z (EngineCore pid=130) Loading safetensors checkpoint shards:  64% Completed | 131/206 [04:48<02:53,  2.31s/it]
+2026-09-20T19:17:23.630906568Z (EngineCore pid=130) Loading safetensors checkpoint shards:  64% Completed | 132/206 [04:50<02:51,  2.32s/it]
+2026-09-20T19:17:25.916100565Z (EngineCore pid=130) Loading safetensors checkpoint shards:  65% Completed | 133/206 [04:53<02:48,  2.31s/it]
+2026-09-20T19:17:28.211695625Z (EngineCore pid=130) Loading safetensors checkpoint shards:  65% Completed | 134/206 [04:55<02:46,  2.31s/it]
+2026-09-20T19:17:30.534265861Z (EngineCore pid=130) Loading safetensors checkpoint shards:  66% Completed | 135/206 [04:57<02:44,  2.31s/it]
+2026-09-20T19:17:32.907409203Z (EngineCore pid=130) Loading safetensors checkpoint shards:  66% Completed | 136/206 [05:00<02:43,  2.33s/it]
+2026-09-20T19:17:35.246702948Z (EngineCore pid=130) Loading safetensors checkpoint shards:  67% Completed | 137/206 [05:02<02:40,  2.33s/it]
+2026-09-20T19:17:37.576863482Z (EngineCore pid=130) Loading safetensors checkpoint shards:  67% Completed | 138/206 [05:04<02:38,  2.33s/it]
+2026-09-20T19:17:39.961067281Z (EngineCore pid=130) Loading safetensors checkpoint shards:  67% Completed | 139/206 [05:07<02:37,  2.35s/it]
+2026-09-20T19:17:42.359867898Z (EngineCore pid=130) Loading safetensors checkpoint shards:  68% Completed | 140/206 [05:09<02:35,  2.36s/it]
+2026-09-20T19:17:44.616385489Z (EngineCore pid=130) Loading safetensors checkpoint shards:  68% Completed | 141/206 [05:11<02:31,  2.33s/it]
+2026-09-20T19:17:46.912843992Z (EngineCore pid=130) Loading safetensors checkpoint shards:  69% Completed | 142/206 [05:14<02:28,  2.32s/it]
+2026-09-20T19:17:49.174045443Z (EngineCore pid=130) Loading safetensors checkpoint shards:  69% Completed | 143/206 [05:16<02:25,  2.30s/it]
+2026-09-20T19:17:51.467263323Z (EngineCore pid=130) Loading safetensors checkpoint shards:  70% Completed | 144/206 [05:18<02:22,  2.30s/it]
+2026-09-20T19:17:53.742293928Z (EngineCore pid=130) Loading safetensors checkpoint shards:  70% Completed | 145/206 [05:21<02:19,  2.29s/it]
+2026-09-20T19:17:56.006096272Z (EngineCore pid=130) Loading safetensors checkpoint shards:  71% Completed | 146/206 [05:23<02:17,  2.28s/it]
+2026-09-20T19:17:58.258891365Z (EngineCore pid=130) Loading safetensors checkpoint shards:  71% Completed | 147/206 [05:25<02:14,  2.27s/it]
+2026-09-20T19:18:00.531791673Z (EngineCore pid=130) Loading safetensors checkpoint shards:  72% Completed | 148/206 [05:27<02:11,  2.27s/it]
+2026-09-20T19:18:02.850567583Z (EngineCore pid=130) Loading safetensors checkpoint shards:  72% Completed | 149/206 [05:30<02:10,  2.29s/it]
+2026-09-20T19:18:05.138316783Z (EngineCore pid=130) Loading safetensors checkpoint shards:  73% Completed | 150/206 [05:32<02:08,  2.29s/it]
+2026-09-20T19:18:07.478399136Z (EngineCore pid=130) Loading safetensors checkpoint shards:  73% Completed | 151/206 [05:34<02:06,  2.30s/it]
+2026-09-20T19:18:09.778028140Z (EngineCore pid=130) Loading safetensors checkpoint shards:  74% Completed | 152/206 [05:37<02:04,  2.30s/it]
+2026-09-20T19:18:12.032912474Z (EngineCore pid=130) Loading safetensors checkpoint shards:  74% Completed | 153/206 [05:39<02:01,  2.29s/it]
+2026-09-20T19:18:14.309188418Z (EngineCore pid=130) Loading safetensors checkpoint shards:  75% Completed | 154/206 [05:41<01:58,  2.28s/it]
+2026-09-20T19:18:16.587818330Z (EngineCore pid=130) Loading safetensors checkpoint shards:  75% Completed | 155/206 [05:43<01:56,  2.28s/it]
+2026-09-20T19:18:18.873195436Z (EngineCore pid=130) Loading safetensors checkpoint shards:  76% Completed | 156/206 [05:46<01:54,  2.28s/it]
+2026-09-20T19:18:21.185090396Z (EngineCore pid=130) Loading safetensors checkpoint shards:  76% Completed | 157/206 [05:48<01:52,  2.29s/it]
+2026-09-20T19:18:23.415116194Z (EngineCore pid=130) Loading safetensors checkpoint shards:  77% Completed | 158/206 [05:50<01:49,  2.27s/it]
+2026-09-20T19:18:25.656821254Z (EngineCore pid=130) Loading safetensors checkpoint shards:  77% Completed | 159/206 [05:52<01:46,  2.26s/it]
+2026-09-20T19:18:27.863286369Z (EngineCore pid=130) Loading safetensors checkpoint shards:  78% Completed | 160/206 [05:55<01:43,  2.25s/it]
+2026-09-20T19:18:30.069604137Z (EngineCore pid=130) Loading safetensors checkpoint shards:  78% Completed | 161/206 [05:57<01:40,  2.23s/it]
+2026-09-20T19:18:32.273338729Z (EngineCore pid=130) Loading safetensors checkpoint shards:  79% Completed | 162/206 [05:59<01:37,  2.23s/it]
+2026-09-20T19:18:34.406746938Z (EngineCore pid=130) Loading safetensors checkpoint shards:  79% Completed | 163/206 [06:01<01:34,  2.20s/it]
+2026-09-20T19:18:36.651506246Z (EngineCore pid=130) Loading safetensors checkpoint shards:  80% Completed | 164/206 [06:03<01:32,  2.21s/it]
+2026-09-20T19:18:38.857434858Z (EngineCore pid=130) Loading safetensors checkpoint shards:  80% Completed | 165/206 [06:06<01:30,  2.21s/it]
+2026-09-20T19:18:41.068040560Z (EngineCore pid=130) Loading safetensors checkpoint shards:  81% Completed | 166/206 [06:08<01:28,  2.21s/it]
+2026-09-20T19:18:43.320852820Z (EngineCore pid=130) Loading safetensors checkpoint shards:  81% Completed | 167/206 [06:10<01:26,  2.22s/it]
+2026-09-20T19:18:45.473241377Z (EngineCore pid=130) Loading safetensors checkpoint shards:  82% Completed | 168/206 [06:12<01:23,  2.20s/it]
+2026-09-20T19:18:47.687819554Z (EngineCore pid=130) Loading safetensors checkpoint shards:  82% Completed | 169/206 [06:14<01:21,  2.21s/it]
+2026-09-20T19:18:49.902437164Z (EngineCore pid=130) Loading safetensors checkpoint shards:  83% Completed | 170/206 [06:17<01:19,  2.21s/it]
+2026-09-20T19:18:52.088586758Z (EngineCore pid=130) Loading safetensors checkpoint shards:  83% Completed | 171/206 [06:19<01:17,  2.20s/it]
+2026-09-20T19:18:54.227950476Z (EngineCore pid=130) Loading safetensors checkpoint shards:  83% Completed | 172/206 [06:21<01:14,  2.18s/it]
+2026-09-20T19:18:56.429454536Z (EngineCore pid=130) Loading safetensors checkpoint shards:  84% Completed | 173/206 [06:23<01:12,  2.19s/it]
+2026-09-20T19:18:58.551063866Z (EngineCore pid=130) Loading safetensors checkpoint shards:  84% Completed | 174/206 [06:25<01:09,  2.17s/it]
+2026-09-20T19:19:00.808982597Z (EngineCore pid=130) Loading safetensors checkpoint shards:  85% Completed | 175/206 [06:28<01:08,  2.20s/it]
+2026-09-20T19:19:03.057959272Z (EngineCore pid=130) Loading safetensors checkpoint shards:  85% Completed | 176/206 [06:30<01:06,  2.21s/it]
+2026-09-20T19:19:05.213561670Z (EngineCore pid=130) Loading safetensors checkpoint shards:  86% Completed | 177/206 [06:32<01:03,  2.19s/it]
+2026-09-20T19:19:07.441906390Z (EngineCore pid=130) Loading safetensors checkpoint shards:  86% Completed | 178/206 [06:34<01:01,  2.20s/it]
+2026-09-20T19:19:09.557398226Z (EngineCore pid=130) Loading safetensors checkpoint shards:  87% Completed | 179/206 [06:36<00:58,  2.18s/it]
+2026-09-20T19:19:11.764402177Z (EngineCore pid=130) Loading safetensors checkpoint shards:  87% Completed | 180/206 [06:39<00:56,  2.19s/it]
+2026-09-20T19:19:13.920643356Z (EngineCore pid=130) Loading safetensors checkpoint shards:  88% Completed | 181/206 [06:41<00:54,  2.18s/it]
+2026-09-20T19:19:16.062124521Z (EngineCore pid=130) Loading safetensors checkpoint shards:  88% Completed | 182/206 [06:43<00:52,  2.17s/it]
+2026-09-20T19:19:18.250130850Z (EngineCore pid=130) Loading safetensors checkpoint shards:  89% Completed | 183/206 [06:45<00:49,  2.17s/it]
+2026-09-20T19:19:20.428112182Z (EngineCore pid=130) Loading safetensors checkpoint shards:  89% Completed | 184/206 [06:47<00:47,  2.17s/it]
+2026-09-20T19:19:22.563929223Z (EngineCore pid=130) Loading safetensors checkpoint shards:  90% Completed | 185/206 [06:49<00:45,  2.16s/it]
+2026-09-20T19:19:24.678511033Z (EngineCore pid=130) Loading safetensors checkpoint shards:  90% Completed | 186/206 [06:51<00:42,  2.15s/it]
+2026-09-20T19:19:26.861788200Z (EngineCore pid=130) Loading safetensors checkpoint shards:  91% Completed | 187/206 [06:54<00:41,  2.16s/it]
+2026-09-20T19:19:29.029337117Z (EngineCore pid=130) Loading safetensors checkpoint shards:  91% Completed | 188/206 [06:56<00:38,  2.16s/it]
+2026-09-20T19:19:31.124672516Z (EngineCore pid=130) Loading safetensors checkpoint shards:  92% Completed | 189/206 [06:58<00:36,  2.14s/it]
+2026-09-20T19:19:33.234084682Z (EngineCore pid=130) Loading safetensors checkpoint shards:  92% Completed | 190/206 [07:00<00:34,  2.13s/it]
+2026-09-20T19:19:35.343567046Z (EngineCore pid=130) Loading safetensors checkpoint shards:  93% Completed | 191/206 [07:02<00:31,  2.13s/it]
+2026-09-20T19:19:37.509061520Z (EngineCore pid=130) Loading safetensors checkpoint shards:  93% Completed | 192/206 [07:04<00:29,  2.14s/it]
+2026-09-20T19:19:39.786344470Z (EngineCore pid=130) INFO 09-20 19:19:39 [vllm_ple_mmap.py:805] PLE mmap: layer 1, 128 shards, 320001536 rows x 160 B (47.7 GiB on disk), dtype F8_E4M3, 32 workers
+2026-09-20T19:19:44.575283127Z (EngineCore pid=130) Loading safetensors checkpoint shards:  94% Completed | 193/206 [07:11<00:47,  3.62s/it]
+2026-09-20T19:19:46.429737024Z (EngineCore pid=130) Loading safetensors checkpoint shards:  94% Completed | 194/206 [07:13<00:37,  3.09s/it]
+2026-09-20T19:20:16.142330036Z (EngineCore pid=130) Loading safetensors checkpoint shards:  95% Completed | 195/206 [07:43<02:01, 11.08s/it]
+2026-09-20T19:20:36.834982364Z (EngineCore pid=130) Loading safetensors checkpoint shards:  95% Completed | 196/206 [08:04<02:19, 13.96s/it]
+2026-09-20T19:20:36.984684267Z (EngineCore pid=130) Loading safetensors checkpoint shards:  96% Completed | 197/206 [08:04<01:28,  9.82s/it]
+2026-09-20T19:20:37.017542081Z (EngineCore pid=130) Loading safetensors checkpoint shards: 100% Completed | 206/206 [08:04<00:00,  2.35s/it]
+2026-09-20T19:20:37.017562193Z (EngineCore pid=130) 
+2026-09-20T19:20:37.018365581Z (EngineCore pid=130) INFO 09-20 19:20:37 [default_loader.py:430] Loading weights took 484.28 seconds
+2026-09-20T19:20:37.159250310Z (EngineCore pid=130) INFO 09-20 19:20:37 [nvfp4.py:564] Using MoEPrepareAndFinalizeNoDPEPModular
+2026-09-20T19:20:38.546647725Z (EngineCore pid=130) WARNING 09-20 19:20:38 [modelopt.py:1011] Detected ModelOpt NVFP4 checkpoint (quant_algo=NVFP4). Please note that the format is experimental and could change in future.
+2026-09-20T19:20:38.552651425Z (EngineCore pid=130) INFO 09-20 19:20:38 [kernel.py:308] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'])
+2026-09-20T19:20:38.552740929Z (EngineCore pid=130) INFO 09-20 19:20:38 [compilation.py:329] Enabled custom fusions: act_quant, rope_kvcache_cat_mla
+2026-09-20T19:20:38.565821555Z (EngineCore pid=130) INFO 09-20 19:20:38 [unquantized.py:319] Using FlashInfer CUTLASS Unquantized MoE backend out of potential backends: ['FlashInfer TRTLLM', 'FlashInfer CUTLASS', 'TRITON', 'BATCHED_TRITON'].
+2026-09-20T19:20:39.162068547Z (EngineCore pid=130) INFO 09-20 19:20:39 [weight_utils.py:866] Filesystem type for checkpoints: EXT4. Checkpoint size: 125.91 GiB. Available RAM: 28.12 GiB.
+2026-09-20T19:20:39.162092787Z (EngineCore pid=130) INFO 09-20 19:20:39 [weight_utils.py:896] Auto-prefetch is disabled because the filesystem (EXT4) is not a recognized network FS (NFS/Lustre) and the checkpoint size (125.91 GiB) exceeds 90% of available RAM (28.12 GiB).
+2026-09-20T19:20:39.162549201Z (EngineCore pid=130) Loading safetensors checkpoint shards:   0% Completed | 0/206 [00:00<?, ?it/s]
+2026-09-20T19:20:39.371219901Z (EngineCore pid=130) Loading safetensors checkpoint shards:   0% Completed | 1/206 [00:00<00:42,  4.80it/s]
+2026-09-20T19:20:39.556855062Z (EngineCore pid=130) Loading safetensors checkpoint shards:   1% Completed | 2/206 [00:00<00:39,  5.13it/s]
+2026-09-20T19:20:39.748968848Z (EngineCore pid=130) Loading safetensors checkpoint shards:   1% Completed | 3/206 [00:00<00:39,  5.17it/s]
+2026-09-20T19:20:39.943324208Z (EngineCore pid=130) Loading safetensors checkpoint shards:   2% Completed | 4/206 [00:00<00:39,  5.15it/s]
+2026-09-20T19:20:40.124166096Z (EngineCore pid=130) Loading safetensors checkpoint shards:   2% Completed | 5/206 [00:00<00:38,  5.28it/s]
+2026-09-20T19:20:40.317679253Z (EngineCore pid=130) Loading safetensors checkpoint shards:   3% Completed | 6/206 [00:01<00:38,  5.24it/s]
+2026-09-20T19:20:40.503762988Z (EngineCore pid=130) Loading safetensors checkpoint shards:   3% Completed | 7/206 [00:01<00:37,  5.29it/s]
+2026-09-20T19:20:40.681682026Z (EngineCore pid=130) Loading safetensors checkpoint shards:   4% Completed | 8/206 [00:01<00:36,  5.39it/s]
+2026-09-20T19:20:40.866740870Z (EngineCore pid=130) Loading safetensors checkpoint shards:   4% Completed | 9/206 [00:01<00:36,  5.39it/s]
+2026-09-20T19:20:41.049750908Z (EngineCore pid=130) Loading safetensors checkpoint shards:   5% Completed | 10/206 [00:01<00:36,  5.41it/s]
+2026-09-20T19:20:41.257969405Z (EngineCore pid=130) Loading safetensors checkpoint shards:   5% Completed | 11/206 [00:02<00:37,  5.21it/s]
+2026-09-20T19:20:41.446805496Z (EngineCore pid=130) Loading safetensors checkpoint shards:   6% Completed | 12/206 [00:02<00:37,  5.24it/s]
+2026-09-20T19:20:41.625457011Z (EngineCore pid=130) Loading safetensors checkpoint shards:   6% Completed | 13/206 [00:02<00:36,  5.34it/s]
+2026-09-20T19:20:41.794314492Z (EngineCore pid=130) Loading safetensors checkpoint shards:   7% Completed | 14/206 [00:02<00:34,  5.50it/s]
+2026-09-20T19:20:41.995589581Z (EngineCore pid=130) Loading safetensors checkpoint shards:   7% Completed | 15/206 [00:02<00:35,  5.33it/s]
+2026-09-20T19:20:42.177874376Z (EngineCore pid=130) Loading safetensors checkpoint shards:   8% Completed | 16/206 [00:03<00:35,  5.38it/s]
+2026-09-20T19:20:42.371137983Z (EngineCore pid=130) Loading safetensors checkpoint shards:   8% Completed | 17/206 [00:03<00:35,  5.32it/s]
+2026-09-20T19:20:42.536581001Z (EngineCore pid=130) Loading safetensors checkpoint shards:   9% Completed | 18/206 [00:03<00:34,  5.51it/s]
+2026-09-20T19:20:42.710492939Z (EngineCore pid=130) Loading safetensors checkpoint shards:   9% Completed | 19/206 [00:03<00:33,  5.59it/s]
+2026-09-20T19:20:42.914870191Z (EngineCore pid=130) Loading safetensors checkpoint shards:  10% Completed | 20/206 [00:03<00:34,  5.36it/s]
+2026-09-20T19:20:43.125867524Z (EngineCore pid=130) Loading safetensors checkpoint shards:  10% Completed | 21/206 [00:03<00:35,  5.15it/s]
+2026-09-20T19:20:43.300431411Z (EngineCore pid=130) Loading safetensors checkpoint shards:  11% Completed | 22/206 [00:04<00:34,  5.31it/s]
+2026-09-20T19:20:43.487343273Z (EngineCore pid=130) Loading safetensors checkpoint shards:  11% Completed | 23/206 [00:04<00:34,  5.32it/s]
+2026-09-20T19:20:43.675101883Z (EngineCore pid=130) Loading safetensors checkpoint shards:  12% Completed | 24/206 [00:04<00:34,  5.33it/s]
+2026-09-20T19:20:43.846000860Z (EngineCore pid=130) Loading safetensors checkpoint shards:  12% Completed | 25/206 [00:04<00:33,  5.47it/s]
+2026-09-20T19:20:44.028945397Z (EngineCore pid=130) Loading safetensors checkpoint shards:  13% Completed | 26/206 [00:04<00:32,  5.47it/s]
+2026-09-20T19:20:44.270796859Z (EngineCore pid=130) Loading safetensors checkpoint shards:  13% Completed | 27/206 [00:05<00:35,  4.99it/s]
+2026-09-20T19:20:44.502059106Z (EngineCore pid=130) Loading safetensors checkpoint shards:  14% Completed | 28/206 [00:05<00:37,  4.77it/s]
+2026-09-20T19:20:44.727511685Z (EngineCore pid=130) Loading safetensors checkpoint shards:  14% Completed | 29/206 [00:05<00:37,  4.66it/s]
+2026-09-20T19:20:44.955923706Z (EngineCore pid=130) Loading safetensors checkpoint shards:  15% Completed | 30/206 [00:05<00:38,  4.57it/s]
+2026-09-20T19:20:45.180553393Z (EngineCore pid=130) Loading safetensors checkpoint shards:  15% Completed | 31/206 [00:06<00:38,  4.54it/s]
+2026-09-20T19:20:45.404058702Z (EngineCore pid=130) Loading safetensors checkpoint shards:  16% Completed | 32/206 [00:06<00:38,  4.52it/s]
+2026-09-20T19:20:45.631425801Z (EngineCore pid=130) Loading safetensors checkpoint shards:  16% Completed | 33/206 [00:06<00:38,  4.48it/s]
+2026-09-20T19:20:45.864761080Z (EngineCore pid=130) Loading safetensors checkpoint shards:  17% Completed | 34/206 [00:06<00:38,  4.42it/s]
+2026-09-20T19:20:46.097884616Z (EngineCore pid=130) Loading safetensors checkpoint shards:  17% Completed | 35/206 [00:06<00:39,  4.38it/s]
+2026-09-20T19:20:46.323194141Z (EngineCore pid=130) Loading safetensors checkpoint shards:  17% Completed | 36/206 [00:07<00:38,  4.40it/s]
+2026-09-20T19:20:46.562221395Z (EngineCore pid=130) Loading safetensors checkpoint shards:  18% Completed | 37/206 [00:07<00:39,  4.33it/s]
+2026-09-20T19:20:46.780708536Z (EngineCore pid=130) Loading safetensors checkpoint shards:  18% Completed | 38/206 [00:07<00:38,  4.40it/s]
+2026-09-20T19:20:47.013615530Z (EngineCore pid=130) Loading safetensors checkpoint shards:  19% Completed | 39/206 [00:07<00:38,  4.37it/s]
+2026-09-20T19:20:47.250245387Z (EngineCore pid=130) Loading safetensors checkpoint shards:  19% Completed | 40/206 [00:08<00:38,  4.33it/s]
+2026-09-20T19:20:47.479004097Z (EngineCore pid=130) Loading safetensors checkpoint shards:  20% Completed | 41/206 [00:08<00:38,  4.34it/s]
+2026-09-20T19:20:47.711384983Z (EngineCore pid=130) Loading safetensors checkpoint shards:  20% Completed | 42/206 [00:08<00:37,  4.33it/s]
+2026-09-20T19:20:47.939979805Z (EngineCore pid=130) Loading safetensors checkpoint shards:  21% Completed | 43/206 [00:08<00:37,  4.34it/s]
+2026-09-20T19:20:48.170050414Z (EngineCore pid=130) Loading safetensors checkpoint shards:  21% Completed | 44/206 [00:09<00:37,  4.34it/s]
+2026-09-20T19:20:48.393459294Z (EngineCore pid=130) Loading safetensors checkpoint shards:  22% Completed | 45/206 [00:09<00:36,  4.38it/s]
+2026-09-20T19:20:48.645606585Z (EngineCore pid=130) Loading safetensors checkpoint shards:  22% Completed | 46/206 [00:09<00:37,  4.25it/s]
+2026-09-20T19:20:48.895444238Z (EngineCore pid=130) Loading safetensors checkpoint shards:  23% Completed | 47/206 [00:09<00:38,  4.17it/s]
+2026-09-20T19:20:49.121822736Z (EngineCore pid=130) Loading safetensors checkpoint shards:  23% Completed | 48/206 [00:09<00:37,  4.24it/s]
+2026-09-20T19:20:49.345116386Z (EngineCore pid=130) Loading safetensors checkpoint shards:  24% Completed | 49/206 [00:10<00:36,  4.31it/s]
+2026-09-20T19:20:49.573489404Z (EngineCore pid=130) Loading safetensors checkpoint shards:  24% Completed | 50/206 [00:10<00:36,  4.33it/s]
+2026-09-20T19:20:49.818946310Z (EngineCore pid=130) Loading safetensors checkpoint shards:  25% Completed | 51/206 [00:10<00:36,  4.25it/s]
+2026-09-20T19:20:50.034329149Z (EngineCore pid=130) Loading safetensors checkpoint shards:  25% Completed | 52/206 [00:10<00:35,  4.36it/s]
+2026-09-20T19:20:50.197808485Z (EngineCore pid=130) Loading safetensors checkpoint shards:  26% Completed | 53/206 [00:11<00:32,  4.77it/s]
+2026-09-20T19:20:50.363518435Z (EngineCore pid=130) Loading safetensors checkpoint shards:  26% Completed | 54/206 [00:11<00:29,  5.09it/s]
+2026-09-20T19:20:50.525717330Z (EngineCore pid=130) Loading safetensors checkpoint shards:  27% Completed | 55/206 [00:11<00:28,  5.37it/s]
+2026-09-20T19:20:50.722521615Z (EngineCore pid=130) Loading safetensors checkpoint shards:  27% Completed | 56/206 [00:11<00:28,  5.28it/s]
+2026-09-20T19:20:50.918401457Z (EngineCore pid=130) Loading safetensors checkpoint shards:  28% Completed | 57/206 [00:11<00:28,  5.23it/s]
+2026-09-20T19:20:51.097181667Z (EngineCore pid=130) Loading safetensors checkpoint shards:  28% Completed | 58/206 [00:11<00:27,  5.33it/s]
+2026-09-20T19:20:51.278006699Z (EngineCore pid=130) Loading safetensors checkpoint shards:  29% Completed | 59/206 [00:12<00:27,  5.39it/s]
+2026-09-20T19:20:51.462190868Z (EngineCore pid=130) Loading safetensors checkpoint shards:  29% Completed | 60/206 [00:12<00:27,  5.40it/s]
+2026-09-20T19:20:51.646035423Z (EngineCore pid=130) Loading safetensors checkpoint shards:  30% Completed | 61/206 [00:12<00:26,  5.41it/s]
+2026-09-20T19:20:51.840928918Z (EngineCore pid=130) Loading safetensors checkpoint shards:  30% Completed | 62/206 [00:12<00:27,  5.32it/s]
+2026-09-20T19:20:52.017839777Z (EngineCore pid=130) Loading safetensors checkpoint shards:  31% Completed | 63/206 [00:12<00:26,  5.42it/s]
+2026-09-20T19:20:52.207201939Z (EngineCore pid=130) Loading safetensors checkpoint shards:  31% Completed | 64/206 [00:13<00:26,  5.38it/s]
+2026-09-20T19:20:52.390039507Z (EngineCore pid=130) Loading safetensors checkpoint shards:  32% Completed | 65/206 [00:13<00:26,  5.40it/s]
+2026-09-20T19:20:52.547679399Z (EngineCore pid=130) Loading safetensors checkpoint shards:  32% Completed | 66/206 [00:13<00:24,  5.66it/s]
+2026-09-20T19:20:52.693420611Z (EngineCore pid=130) Loading safetensors checkpoint shards:  33% Completed | 67/206 [00:13<00:23,  5.97it/s]
+2026-09-20T19:20:52.861720151Z (EngineCore pid=130) Loading safetensors checkpoint shards:  33% Completed | 68/206 [00:13<00:23,  5.97it/s]
+2026-09-20T19:20:53.016554377Z (EngineCore pid=130) Loading safetensors checkpoint shards:  33% Completed | 69/206 [00:13<00:22,  6.10it/s]
+2026-09-20T19:20:53.207203829Z (EngineCore pid=130) Loading safetensors checkpoint shards:  34% Completed | 70/206 [00:14<00:23,  5.82it/s]
+2026-09-20T19:20:53.402173918Z (EngineCore pid=130) Loading safetensors checkpoint shards:  34% Completed | 71/206 [00:14<00:24,  5.59it/s]
+2026-09-20T19:20:53.581965293Z (EngineCore pid=130) Loading safetensors checkpoint shards:  35% Completed | 72/206 [00:14<00:23,  5.58it/s]
+2026-09-20T19:20:53.760834064Z (EngineCore pid=130) Loading safetensors checkpoint shards:  35% Completed | 73/206 [00:14<00:23,  5.58it/s]
+2026-09-20T19:20:53.954279968Z (EngineCore pid=130) Loading safetensors checkpoint shards:  36% Completed | 74/206 [00:14<00:24,  5.46it/s]
+2026-09-20T19:20:54.162411292Z (EngineCore pid=130) Loading safetensors checkpoint shards:  36% Completed | 75/206 [00:14<00:24,  5.24it/s]
+2026-09-20T19:20:54.356487241Z (EngineCore pid=130) Loading safetensors checkpoint shards:  37% Completed | 76/206 [00:15<00:24,  5.22it/s]
+2026-09-20T19:20:54.544074613Z (EngineCore pid=130) Loading safetensors checkpoint shards:  37% Completed | 77/206 [00:15<00:24,  5.25it/s]
+2026-09-20T19:20:54.745361249Z (EngineCore pid=130) Loading safetensors checkpoint shards:  38% Completed | 78/206 [00:15<00:24,  5.16it/s]
+2026-09-20T19:20:54.951754741Z (EngineCore pid=130) Loading safetensors checkpoint shards:  38% Completed | 79/206 [00:15<00:25,  5.06it/s]
+2026-09-20T19:20:55.142240532Z (EngineCore pid=130) Loading safetensors checkpoint shards:  39% Completed | 80/206 [00:15<00:24,  5.12it/s]
+2026-09-20T19:20:55.357579632Z (EngineCore pid=130) Loading safetensors checkpoint shards:  39% Completed | 81/206 [00:16<00:25,  4.97it/s]
+2026-09-20T19:20:55.519719842Z (EngineCore pid=130) Loading safetensors checkpoint shards:  40% Completed | 82/206 [00:16<00:23,  5.27it/s]
+2026-09-20T19:20:55.707477134Z (EngineCore pid=130) Loading safetensors checkpoint shards:  40% Completed | 83/206 [00:16<00:23,  5.29it/s]
+2026-09-20T19:20:55.898517690Z (EngineCore pid=130) Loading safetensors checkpoint shards:  41% Completed | 84/206 [00:16<00:23,  5.27it/s]
+2026-09-20T19:20:56.071523498Z (EngineCore pid=130) Loading safetensors checkpoint shards:  41% Completed | 85/206 [00:16<00:22,  5.41it/s]
+2026-09-20T19:20:56.243497823Z (EngineCore pid=130) Loading safetensors checkpoint shards:  42% Completed | 86/206 [00:17<00:21,  5.53it/s]
+2026-09-20T19:20:56.426679377Z (EngineCore pid=130) Loading safetensors checkpoint shards:  42% Completed | 87/206 [00:17<00:21,  5.51it/s]
+2026-09-20T19:20:56.620524417Z (EngineCore pid=130) Loading safetensors checkpoint shards:  43% Completed | 88/206 [00:17<00:21,  5.40it/s]
+2026-09-20T19:20:56.798478362Z (EngineCore pid=130) Loading safetensors checkpoint shards:  43% Completed | 89/206 [00:17<00:21,  5.46it/s]
+2026-09-20T19:20:56.965422023Z (EngineCore pid=130) Loading safetensors checkpoint shards:  44% Completed | 90/206 [00:17<00:20,  5.61it/s]
+2026-09-20T19:20:57.141649641Z (EngineCore pid=130) Loading safetensors checkpoint shards:  44% Completed | 91/206 [00:17<00:20,  5.63it/s]
+2026-09-20T19:20:57.325690679Z (EngineCore pid=130) Loading safetensors checkpoint shards:  45% Completed | 92/206 [00:18<00:20,  5.57it/s]
+2026-09-20T19:20:57.516736725Z (EngineCore pid=130) Loading safetensors checkpoint shards:  45% Completed | 93/206 [00:18<00:20,  5.47it/s]
+2026-09-20T19:20:57.712175167Z (EngineCore pid=130) Loading safetensors checkpoint shards:  46% Completed | 94/206 [00:18<00:20,  5.35it/s]
+2026-09-20T19:20:57.914682936Z (EngineCore pid=130) Loading safetensors checkpoint shards:  46% Completed | 95/206 [00:18<00:21,  5.22it/s]
+2026-09-20T19:20:58.108372890Z (EngineCore pid=130) Loading safetensors checkpoint shards:  47% Completed | 96/206 [00:18<00:21,  5.20it/s]
+2026-09-20T19:20:58.295867849Z (EngineCore pid=130) Loading safetensors checkpoint shards:  47% Completed | 97/206 [00:19<00:20,  5.24it/s]
+2026-09-20T19:20:58.473945732Z (EngineCore pid=130) Loading safetensors checkpoint shards:  48% Completed | 98/206 [00:19<00:20,  5.35it/s]
+2026-09-20T19:20:58.674352455Z (EngineCore pid=130) Loading safetensors checkpoint shards:  48% Completed | 99/206 [00:19<00:20,  5.24it/s]
+2026-09-20T19:20:58.887353153Z (EngineCore pid=130) Loading safetensors checkpoint shards:  49% Completed | 100/206 [00:19<00:20,  5.06it/s]
+2026-09-20T19:20:59.107100635Z (EngineCore pid=130) Loading safetensors checkpoint shards:  49% Completed | 101/206 [00:19<00:21,  4.90it/s]
+2026-09-20T19:20:59.322291532Z (EngineCore pid=130) Loading safetensors checkpoint shards:  50% Completed | 102/206 [00:20<00:21,  4.82it/s]
+2026-09-20T19:20:59.549655540Z (EngineCore pid=130) Loading safetensors checkpoint shards:  50% Completed | 103/206 [00:20<00:21,  4.68it/s]
+2026-09-20T19:20:59.775486163Z (EngineCore pid=130) Loading safetensors checkpoint shards:  50% Completed | 104/206 [00:20<00:22,  4.60it/s]
+2026-09-20T19:21:00.004021622Z (EngineCore pid=130) Loading safetensors checkpoint shards:  51% Completed | 105/206 [00:20<00:22,  4.53it/s]
+2026-09-20T19:21:00.229444983Z (EngineCore pid=130) Loading safetensors checkpoint shards:  51% Completed | 106/206 [00:21<00:22,  4.50it/s]
+2026-09-20T19:21:00.457757644Z (EngineCore pid=130) Loading safetensors checkpoint shards:  52% Completed | 107/206 [00:21<00:22,  4.47it/s]
+2026-09-20T19:21:00.681464422Z (EngineCore pid=130) Loading safetensors checkpoint shards:  52% Completed | 108/206 [00:21<00:21,  4.47it/s]
+2026-09-20T19:21:00.916922906Z (EngineCore pid=130) Loading safetensors checkpoint shards:  53% Completed | 109/206 [00:21<00:22,  4.40it/s]
+2026-09-20T19:21:01.130785777Z (EngineCore pid=130) Loading safetensors checkpoint shards:  53% Completed | 110/206 [00:21<00:21,  4.48it/s]
+2026-09-20T19:21:01.362069977Z (EngineCore pid=130) Loading safetensors checkpoint shards:  54% Completed | 111/206 [00:22<00:21,  4.43it/s]
+2026-09-20T19:21:01.588880822Z (EngineCore pid=130) Loading safetensors checkpoint shards:  54% Completed | 112/206 [00:22<00:21,  4.42it/s]
+2026-09-20T19:21:01.807886342Z (EngineCore pid=130) Loading safetensors checkpoint shards:  55% Completed | 113/206 [00:22<00:20,  4.47it/s]
+2026-09-20T19:21:02.047231289Z (EngineCore pid=130) Loading safetensors checkpoint shards:  55% Completed | 114/206 [00:22<00:21,  4.38it/s]
+2026-09-20T19:21:02.270752374Z (EngineCore pid=130) Loading safetensors checkpoint shards:  56% Completed | 115/206 [00:23<00:20,  4.41it/s]
+2026-09-20T19:21:02.490597843Z (EngineCore pid=130) Loading safetensors checkpoint shards:  56% Completed | 116/206 [00:23<00:20,  4.45it/s]
+2026-09-20T19:21:02.717898783Z (EngineCore pid=130) Loading safetensors checkpoint shards:  57% Completed | 117/206 [00:23<00:20,  4.43it/s]
+2026-09-20T19:21:02.933090226Z (EngineCore pid=130) Loading safetensors checkpoint shards:  57% Completed | 118/206 [00:23<00:19,  4.49it/s]
+2026-09-20T19:21:03.152149219Z (EngineCore pid=130) Loading safetensors checkpoint shards:  58% Completed | 119/206 [00:23<00:19,  4.51it/s]
+2026-09-20T19:21:03.373098301Z (EngineCore pid=130) Loading safetensors checkpoint shards:  58% Completed | 120/206 [00:24<00:19,  4.52it/s]
+2026-09-20T19:21:03.614689287Z (EngineCore pid=130) Loading safetensors checkpoint shards:  59% Completed | 121/206 [00:24<00:19,  4.40it/s]
+2026-09-20T19:21:03.843767019Z (EngineCore pid=130) Loading safetensors checkpoint shards:  59% Completed | 122/206 [00:24<00:19,  4.39it/s]
+2026-09-20T19:21:04.054846514Z (EngineCore pid=130) Loading safetensors checkpoint shards:  60% Completed | 123/206 [00:24<00:18,  4.49it/s]
+2026-09-20T19:21:04.275125375Z (EngineCore pid=130) Loading safetensors checkpoint shards:  60% Completed | 124/206 [00:25<00:18,  4.50it/s]
+2026-09-20T19:21:04.494366689Z (EngineCore pid=130) Loading safetensors checkpoint shards:  61% Completed | 125/206 [00:25<00:17,  4.52it/s]
+2026-09-20T19:21:04.723178408Z (EngineCore pid=130) Loading safetensors checkpoint shards:  61% Completed | 126/206 [00:25<00:17,  4.47it/s]
+2026-09-20T19:21:04.979865150Z (EngineCore pid=130) Loading safetensors checkpoint shards:  62% Completed | 127/206 [00:25<00:18,  4.28it/s]
+2026-09-20T19:21:05.190937798Z (EngineCore pid=130) Loading safetensors checkpoint shards:  62% Completed | 128/206 [00:26<00:17,  4.41it/s]
+2026-09-20T19:21:05.425381859Z (EngineCore pid=130) Loading safetensors checkpoint shards:  63% Completed | 129/206 [00:26<00:17,  4.37it/s]
+2026-09-20T19:21:05.649903102Z (EngineCore pid=130) Loading safetensors checkpoint shards:  63% Completed | 130/206 [00:26<00:17,  4.39it/s]
+2026-09-20T19:21:05.880743212Z (EngineCore pid=130) Loading safetensors checkpoint shards:  64% Completed | 131/206 [00:26<00:17,  4.37it/s]
+2026-09-20T19:21:06.101618936Z (EngineCore pid=130) Loading safetensors checkpoint shards:  64% Completed | 132/206 [00:26<00:16,  4.42it/s]
+2026-09-20T19:21:06.341137487Z (EngineCore pid=130) Loading safetensors checkpoint shards:  65% Completed | 133/206 [00:27<00:16,  4.34it/s]
+2026-09-20T19:21:06.569388010Z (EngineCore pid=130) Loading safetensors checkpoint shards:  65% Completed | 134/206 [00:27<00:16,  4.35it/s]
+2026-09-20T19:21:06.731485139Z (EngineCore pid=130) Loading safetensors checkpoint shards:  66% Completed | 135/206 [00:27<00:14,  4.77it/s]
+2026-09-20T19:21:06.866589800Z (EngineCore pid=130) Loading safetensors checkpoint shards:  66% Completed | 136/206 [00:27<00:13,  5.35it/s]
+2026-09-20T19:21:07.084560738Z (EngineCore pid=130) Loading safetensors checkpoint shards:  67% Completed | 137/206 [00:27<00:13,  5.09it/s]
+2026-09-20T19:21:07.287703297Z (EngineCore pid=130) Loading safetensors checkpoint shards:  67% Completed | 138/206 [00:28<00:13,  5.04it/s]
+2026-09-20T19:21:07.514951969Z (EngineCore pid=130) Loading safetensors checkpoint shards:  67% Completed | 139/206 [00:28<00:13,  4.83it/s]
+2026-09-20T19:21:07.693319777Z (EngineCore pid=130) Loading safetensors checkpoint shards:  68% Completed | 140/206 [00:28<00:13,  5.04it/s]
+2026-09-20T19:21:07.887366889Z (EngineCore pid=130) Loading safetensors checkpoint shards:  68% Completed | 141/206 [00:28<00:12,  5.07it/s]
+2026-09-20T19:21:08.098101573Z (EngineCore pid=130) Loading safetensors checkpoint shards:  69% Completed | 142/206 [00:28<00:12,  4.97it/s]
+2026-09-20T19:21:08.263145442Z (EngineCore pid=130) Loading safetensors checkpoint shards:  69% Completed | 143/206 [00:29<00:11,  5.25it/s]
+2026-09-20T19:21:08.445709408Z (EngineCore pid=130) Loading safetensors checkpoint shards:  70% Completed | 144/206 [00:29<00:11,  5.32it/s]
+2026-09-20T19:21:08.647163559Z (EngineCore pid=130) Loading safetensors checkpoint shards:  70% Completed | 145/206 [00:29<00:11,  5.21it/s]
+2026-09-20T19:21:08.812206692Z (EngineCore pid=130) Loading safetensors checkpoint shards:  71% Completed | 146/206 [00:29<00:11,  5.44it/s]
+2026-09-20T19:21:08.985544171Z (EngineCore pid=130) Loading safetensors checkpoint shards:  71% Completed | 147/206 [00:29<00:10,  5.53it/s]
+2026-09-20T19:21:09.155156565Z (EngineCore pid=130) Loading safetensors checkpoint shards:  72% Completed | 148/206 [00:29<00:10,  5.64it/s]
+2026-09-20T19:21:09.343311257Z (EngineCore pid=130) Loading safetensors checkpoint shards:  72% Completed | 149/206 [00:30<00:10,  5.53it/s]
+2026-09-20T19:21:09.525115883Z (EngineCore pid=130) Loading safetensors checkpoint shards:  73% Completed | 150/206 [00:30<00:10,  5.53it/s]
+2026-09-20T19:21:09.754782258Z (EngineCore pid=130) Loading safetensors checkpoint shards:  73% Completed | 151/206 [00:30<00:10,  5.11it/s]
+2026-09-20T19:21:09.948832827Z (EngineCore pid=130) Loading safetensors checkpoint shards:  74% Completed | 152/206 [00:30<00:10,  5.13it/s]
+2026-09-20T19:21:10.159893144Z (EngineCore pid=130) Loading safetensors checkpoint shards:  74% Completed | 153/206 [00:30<00:10,  5.00it/s]
+2026-09-20T19:21:10.330740316Z (EngineCore pid=130) Loading safetensors checkpoint shards:  75% Completed | 154/206 [00:31<00:09,  5.23it/s]
+2026-09-20T19:21:10.509050750Z (EngineCore pid=130) Loading safetensors checkpoint shards:  75% Completed | 155/206 [00:31<00:09,  5.34it/s]
+2026-09-20T19:21:10.716599227Z (EngineCore pid=130) Loading safetensors checkpoint shards:  76% Completed | 156/206 [00:31<00:09,  5.17it/s]
+2026-09-20T19:21:10.954070351Z (EngineCore pid=130) Loading safetensors checkpoint shards:  76% Completed | 157/206 [00:31<00:10,  4.84it/s]
+2026-09-20T19:21:11.169435529Z (EngineCore pid=130) Loading safetensors checkpoint shards:  77% Completed | 158/206 [00:32<00:10,  4.78it/s]
+2026-09-20T19:21:11.364496784Z (EngineCore pid=130) Loading safetensors checkpoint shards:  77% Completed | 159/206 [00:32<00:09,  4.88it/s]
+2026-09-20T19:21:11.564168225Z (EngineCore pid=130) Loading safetensors checkpoint shards:  78% Completed | 160/206 [00:32<00:09,  4.92it/s]
+2026-09-20T19:21:11.736129841Z (EngineCore pid=130) Loading safetensors checkpoint shards:  78% Completed | 161/206 [00:32<00:08,  5.16it/s]
+2026-09-20T19:21:11.907978817Z (EngineCore pid=130) Loading safetensors checkpoint shards:  79% Completed | 162/206 [00:32<00:08,  5.34it/s]
+2026-09-20T19:21:12.091428621Z (EngineCore pid=130) Loading safetensors checkpoint shards:  79% Completed | 163/206 [00:32<00:08,  5.37it/s]
+2026-09-20T19:21:12.278067931Z (EngineCore pid=130) Loading safetensors checkpoint shards:  80% Completed | 164/206 [00:33<00:07,  5.37it/s]
+2026-09-20T19:21:12.500556918Z (EngineCore pid=130) Loading safetensors checkpoint shards:  80% Completed | 165/206 [00:33<00:08,  5.07it/s]
+2026-09-20T19:21:12.681209375Z (EngineCore pid=130) Loading safetensors checkpoint shards:  81% Completed | 166/206 [00:33<00:07,  5.20it/s]
+2026-09-20T19:21:12.883010551Z (EngineCore pid=130) Loading safetensors checkpoint shards:  81% Completed | 167/206 [00:33<00:07,  5.12it/s]
+2026-09-20T19:21:13.077664385Z (EngineCore pid=130) Loading safetensors checkpoint shards:  82% Completed | 168/206 [00:33<00:07,  5.13it/s]
+2026-09-20T19:21:13.295186467Z (EngineCore pid=130) Loading safetensors checkpoint shards:  82% Completed | 169/206 [00:34<00:07,  4.96it/s]
+2026-09-20T19:21:13.494950245Z (EngineCore pid=130) Loading safetensors checkpoint shards:  83% Completed | 170/206 [00:34<00:07,  4.97it/s]
+2026-09-20T19:21:13.723251734Z (EngineCore pid=130) Loading safetensors checkpoint shards:  83% Completed | 171/206 [00:34<00:07,  4.78it/s]
+2026-09-20T19:21:13.932938540Z (EngineCore pid=130) Loading safetensors checkpoint shards:  83% Completed | 172/206 [00:34<00:07,  4.78it/s]
+2026-09-20T19:21:14.162215193Z (EngineCore pid=130) Loading safetensors checkpoint shards:  84% Completed | 173/206 [00:34<00:07,  4.64it/s]
+2026-09-20T19:21:14.382755150Z (EngineCore pid=130) Loading safetensors checkpoint shards:  84% Completed | 174/206 [00:35<00:06,  4.61it/s]
+2026-09-20T19:21:14.624471843Z (EngineCore pid=130) Loading safetensors checkpoint shards:  85% Completed | 175/206 [00:35<00:06,  4.46it/s]
+2026-09-20T19:21:14.816618265Z (EngineCore pid=130) Loading safetensors checkpoint shards:  85% Completed | 176/206 [00:35<00:06,  4.66it/s]
+2026-09-20T19:21:15.002185565Z (EngineCore pid=130) Loading safetensors checkpoint shards:  86% Completed | 177/206 [00:35<00:05,  4.86it/s]
+2026-09-20T19:21:15.167104192Z (EngineCore pid=130) Loading safetensors checkpoint shards:  86% Completed | 178/206 [00:36<00:05,  5.16it/s]
+2026-09-20T19:21:15.373073896Z (EngineCore pid=130) Loading safetensors checkpoint shards:  87% Completed | 179/206 [00:36<00:05,  5.07it/s]
+2026-09-20T19:21:15.558933723Z (EngineCore pid=130) Loading safetensors checkpoint shards:  87% Completed | 180/206 [00:36<00:05,  5.16it/s]
+2026-09-20T19:21:15.716173361Z (EngineCore pid=130) Loading safetensors checkpoint shards:  88% Completed | 181/206 [00:36<00:04,  5.47it/s]
+2026-09-20T19:21:15.880970548Z (EngineCore pid=130) Loading safetensors checkpoint shards:  88% Completed | 182/206 [00:36<00:04,  5.64it/s]
+2026-09-20T19:21:16.051668253Z (EngineCore pid=130) Loading safetensors checkpoint shards:  89% Completed | 183/206 [00:36<00:04,  5.70it/s]
+2026-09-20T19:21:16.235733305Z (EngineCore pid=130) Loading safetensors checkpoint shards:  89% Completed | 184/206 [00:37<00:03,  5.62it/s]
+2026-09-20T19:21:16.393387229Z (EngineCore pid=130) Loading safetensors checkpoint shards:  90% Completed | 185/206 [00:37<00:03,  5.82it/s]
+2026-09-20T19:21:16.525252967Z (EngineCore pid=130) Loading safetensors checkpoint shards:  90% Completed | 186/206 [00:37<00:03,  6.26it/s]
+2026-09-20T19:21:16.712350309Z (EngineCore pid=130) Loading safetensors checkpoint shards:  91% Completed | 187/206 [00:37<00:03,  5.95it/s]
+2026-09-20T19:21:16.897960491Z (EngineCore pid=130) Loading safetensors checkpoint shards:  91% Completed | 188/206 [00:37<00:03,  5.77it/s]
+2026-09-20T19:21:17.046160282Z (EngineCore pid=130) Loading safetensors checkpoint shards:  92% Completed | 189/206 [00:37<00:02,  6.03it/s]
+2026-09-20T19:21:17.227908498Z (EngineCore pid=130) Loading safetensors checkpoint shards:  92% Completed | 190/206 [00:38<00:02,  5.86it/s]
+2026-09-20T19:21:17.411790880Z (EngineCore pid=130) Loading safetensors checkpoint shards:  93% Completed | 191/206 [00:38<00:02,  5.73it/s]
+2026-09-20T19:21:17.592968058Z (EngineCore pid=130) Loading safetensors checkpoint shards:  93% Completed | 192/206 [00:38<00:02,  5.67it/s]
+2026-09-20T19:21:37.955657999Z (EngineCore pid=130) Loading safetensors checkpoint shards:  95% Completed | 195/206 [00:58<00:42,  3.90s/it]
+2026-09-20T19:21:53.386922692Z (EngineCore pid=130) Loading safetensors checkpoint shards:  95% Completed | 196/206 [01:14<01:03,  6.33s/it]
+2026-09-20T19:21:53.421028798Z (EngineCore pid=130) Loading safetensors checkpoint shards: 100% Completed | 206/206 [01:14<00:00,  2.77it/s]
+2026-09-20T19:21:53.421058718Z (EngineCore pid=130) 
+2026-09-20T19:21:53.517224599Z (EngineCore pid=130) INFO 09-20 19:21:53 [default_loader.py:430] Loading weights took 74.37 seconds
+2026-09-20T19:21:53.735264984Z (EngineCore pid=130) INFO 09-20 19:21:53 [unquantized.py:399] Using MoEPrepareAndFinalizeNoDPEPModular
+2026-09-20T19:21:53.735358664Z (EngineCore pid=130) INFO 09-20 19:21:53 [unquantized.py:400] Using FlashInferExperts MoE backend
+2026-09-20T19:21:53.743468788Z (EngineCore pid=130) WARNING 09-20 19:21:53 [speculator.py:178] Draft model Qwen3_8FlashNextMTP does not support external multimodal embeddings. Embeddings from the target model will not be passed to the drafter; using text-only draft inputs instead.
+2026-09-20T19:21:54.295927465Z (EngineCore pid=130) INFO 09-20 19:21:54 [model_runner.py:407] Model loading took 79.42 GiB memory and 565.168239 seconds
+2026-09-20T19:21:54.350588328Z (EngineCore pid=130) INFO 09-20 19:21:54 [topk_topp_sampler.py:62] Using FlashInfer for top-p & top-k sampling.
+2026-09-20T19:21:54.353399388Z (EngineCore pid=130) INFO 09-20 19:21:54 [interface.py:915] Setting attention block size to 1600 tokens to ensure that attention page size is >= mamba page size.
+2026-09-20T19:21:54.353420796Z (EngineCore pid=130) INFO 09-20 19:21:54 [interface.py:939] Padding mamba page size by 0.25% to ensure that mamba page size and attention page size are exactly equal.
+2026-09-20T19:21:54.357757033Z (EngineCore pid=130) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:21:54.357838073Z (EngineCore pid=130) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:21:55.831676321Z (EngineCore pid=130) [transformers] The `use_fast` parameter is deprecated and will be removed in a future version. Use `backend="torchvision"` instead of `use_fast=True`, or `backend="pil"` instead of `use_fast=False`.
+2026-09-20T19:21:56.955580192Z (EngineCore pid=130) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:21:56.955838399Z (EngineCore pid=130) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:21:58.764532252Z (EngineCore pid=130) INFO 09-20 19:21:58 [encoder_runner.py:120] Encoder cache will be initialized with a budget of 16384 tokens, and profiled with 1 image items of the maximum feature size.
+2026-09-20T19:22:13.985094102Z [19:22:13.985][281336035996032][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:22:13.985122502Z [19:22:13.985][281336035996032][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:22:13.997399537Z [19:22:13.997][281335901778304][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:22:13.997417249Z [19:22:13.997][281335901778304][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:22:14.002309660Z [19:22:14.002][281336061358464][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:22:14.002328780Z [19:22:14.002][281336061358464][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:22:14.013089581Z [19:22:14.013][281336019087744][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:22:14.013106573Z [19:22:14.013][281336019087744][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:22:14.024456732Z [19:22:14.024][281335884870016][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:22:14.024468828Z [19:22:14.024][281335884870016][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:22:14.025162857Z [19:22:14.024][281336027541888][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:22:14.025194985Z [19:22:14.024][281336027541888][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:22:14.052418675Z [19:22:14.052][281336147276160][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:22:14.052443747Z [19:22:14.052][281336147276160][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:22:14.057715964Z [19:22:14.057][281336591741312][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:22:14.057742044Z [19:22:14.057][281336591741312][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:22:14.096400597Z (EngineCore pid=130) INFO 09-20 19:22:14 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=19 num_submods=51
+2026-09-20T19:22:14.109473469Z (EngineCore pid=130) INFO 09-20 19:22:14 [decorators.py:311] Directly load AOT compilation from path /compile-cache/vllm/torch_compile_cache/torch_aot_compile/3a52d89d6ece1a3fba7fdf4412a174560c9fd7022801680bfe0eba99df0b748d/rank_0_0/model
+2026-09-20T19:22:14.109499325Z (EngineCore pid=130) INFO 09-20 19:22:14 [monitor.py:53] torch.compile took 0.39 s in total
+2026-09-20T19:22:14.059292422Z [19:22:14.059][281335876415872][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:22:14.059301110Z [19:22:14.059][281335876415872][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:22:14.063393972Z [19:22:14.063][281336052904320][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:22:14.063410228Z [19:22:14.063][281336052904320][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:22:14.066806661Z [19:22:14.066][281336044450176][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:22:14.066823941Z [19:22:14.066][281336044450176][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:22:14.072018831Z [19:22:14.071][281336155730304][CUDA][E] No CUDA context is current to the calling thread
+2026-09-20T19:22:14.072039167Z [19:22:14.071][281336155730304][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+2026-09-20T19:22:14.650579563Z (EngineCore pid=130) INFO 09-20 19:22:14 [vllm_ple_mmap.py:468] PLE mmap: PROMETHEUS_MULTIPROC_DIR is unset, so the vllm:ple_mmap_* counters stay in this process and will not appear on /metrics while the engine runs in its own process. scripts/serve.sh exports them with PROM_MULTIPROC=1.
+2026-09-20T19:22:14.650612955Z (EngineCore pid=130) INFO 09-20 19:22:14 [vllm_ple_mmap.py:512] PLE mmap: Prometheus counters registered
+2026-09-20T19:22:14.651722566Z (EngineCore pid=130) INFO 09-20 19:22:14 [vllm_ple_mmap.py:546] PLE mmap stats (last 30s): 1 ops, op 43 ms total (42.93 ms/op), gather 4 ms total (4.38 ms/op), 40 rows, 0.0 MiB read, gpu-wait 0.04 ms/op, host 42.89 ms/op (dedup 4.99, gather 4.38, stage 0.77)
+2026-09-20T19:22:17.224589865Z (EngineCore pid=130) INFO 09-20 19:22:17 [monitor.py:81] Initial profiling/warmup run took 3.11 s
+2026-09-20T19:22:17.474678003Z (EngineCore pid=130) INFO 09-20 19:22:17 [backends.py:1094] Using cache directory: /compile-cache/vllm/torch_compile_cache/fa7e399409/rank_0_0/eagle_head for vLLM's torch.compile
+2026-09-20T19:22:17.474911602Z (EngineCore pid=130) INFO 09-20 19:22:17 [backends.py:1155] Dynamo bytecode transform time: 0.24 s
+2026-09-20T19:22:18.181993388Z (EngineCore pid=130) [rank0]:W0920 19:22:18.181000 130 torch/_inductor/utils.py:1953] Not enough SMs to use max_autotune_gemm mode
+2026-09-20T19:22:20.211066609Z (EngineCore pid=130) INFO 09-20 19:22:20 [backends.py:393] Compiling a graph for compile range (1, 8192) takes 2.58 s
+2026-09-20T19:22:20.606963963Z (EngineCore pid=130) INFO 09-20 19:22:20 [backends.py:920] collected artifacts: 2 entries, 2 artifacts, 2414815 bytes total
+2026-09-20T19:22:20.612736498Z (EngineCore pid=130) INFO 09-20 19:22:20 [decorators.py:708] saved AOT compiled function to /compile-cache/vllm/torch_compile_cache/torch_aot_compile/9281bf9897316a781b7ed059e7932d9d878db58a0006e8d3262086c244fcd74d/rank_0_0/model
+2026-09-20T19:22:20.612761538Z (EngineCore pid=130) INFO 09-20 19:22:20 [monitor.py:53] torch.compile took 3.37 s in total
+2026-09-20T19:22:20.685910072Z (EngineCore pid=130) INFO 09-20 19:22:20 [monitor.py:81] Initial profiling/warmup run took 0.07 s
+2026-09-20T19:22:20.709520578Z (EngineCore pid=130) INFO 09-20 19:22:20 [mtp.py:469] MTP reduced draft vocabulary: 65536 of 248320 rows (1212 -> 320 MiB per draft step)
+2026-09-20T19:22:21.011468768Z (EngineCore pid=130) INFO 09-20 19:22:21 [gpu_worker.py:621] Initial free memory 112.69 GiB, reserved 12.0 GiB memory for KV Cache as specified by kv_cache_memory_bytes config and skipped memory profiling. This does not respect the gpu_memory_utilization config. Only use kv_cache_memory_bytes config when you want manual control of KV cache memory size. If OOM'ed, check the difference of initial free memory between the current run and the previous run where kv_cache_memory_bytes is suggested and update it correspondingly.
+2026-09-20T19:22:21.013130857Z (EngineCore pid=130) INFO 09-20 19:22:21 [kv_cache_utils.py:2258] GPU KV cache size: 415,179 tokens, Maximum concurrency for 262,144 tokens per request: 1.58x
+2026-09-20T19:22:21.015752574Z (EngineCore pid=130) INFO 09-20 19:22:21 [speculator.py:117] Fused multi-step draft decode is not supported by attention backend(s) QWEN38_FLASH_NEXT_EXP_QSA_STATE; falling back to rebuilding attention metadata between draft steps.
+2026-09-20T19:22:22.293495055Z (EngineCore pid=130) INFO 09-20 19:22:22 [kernel_warmup.py:170] Skipping FlashInfer autotune because it is disabled.
+2026-09-20T19:22:22.674872314Z (EngineCore pid=130) QSADET active: /opt/llm/kernel-det/_C_det.so
+2026-09-20T19:22:26.163945925Z (EngineCore pid=130) INFO 09-20 19:22:26 [speculator.py:148] Capturing model for speculator...
+2026-09-20T19:22:26.302664403Z (EngineCore pid=130) INFO 09-20 19:22:26 [model_runner.py:953] Graph capturing finished in 4 secs, took 0.47 GiB
+2026-09-20T19:22:26.163819221Z (EngineCore pid=130) Capturing CUDA graphs (PIECEWISE):   0%|          | 0/11 [00:00<?, ?it/s]Capturing CUDA graphs (PIECEWISE):   9%|▉         | 1/11 [00:00<00:05,  1.80it/s]Capturing CUDA graphs (PIECEWISE):  18%|█▊        | 2/11 [00:00<00:04,  2.15it/s]Capturing CUDA graphs (PIECEWISE):  27%|██▋       | 3/11 [00:01<00:03,  2.35it/s]Capturing CUDA graphs (PIECEWISE):  36%|███▋      | 4/11 [00:01<00:02,  2.46it/s]Capturing CUDA graphs (PIECEWISE):  45%|████▌     | 5/11 [00:02<00:02,  2.52it/s]Capturing CUDA graphs (PIECEWISE):  55%|█████▍    | 6/11 [00:02<00:01,  2.56it/s]Capturing CUDA graphs (PIECEWISE):  64%|██████▎   | 7/11 [00:02<00:01,  2.62it/s]Capturing CUDA graphs (PIECEWISE):  73%|███████▎  | 8/11 [00:02<00:00,  3.23it/s]Capturing CUDA graphs (PIECEWISE):  82%|████████▏ | 9/11 [00:03<00:00,  3.91it/s]Capturing CUDA graphs (PIECEWISE):  91%|█████████ | 10/11 [00:03<00:00,  4.53it/s]Capturing CUDA graphs (PIECEWISE): 100%|██████████| 11/11 [00:03<00:00,  3.92it/s]Capturing CUDA graphs (PIECEWISE): 100%|██████████| 11/11 [00:03<00:00,  3.05it/s]
+2026-09-20T19:22:26.302555716Z (EngineCore pid=130) Capturing prefill CUDA graphs (PIECEWISE):   0%|          | 0/11 [00:00<?, ?it/s]Capturing prefill CUDA graphs (PIECEWISE):  73%|███████▎  | 8/11 [00:00<00:00, 74.94it/s]Capturing prefill CUDA graphs (PIECEWISE): 100%|██████████| 11/11 [00:00<00:00, 79.83it/s]
+2026-09-20T19:22:26.513347310Z (EngineCore pid=130) INFO 09-20 19:22:26 [warmup.py:232] Completed finite top-k/top-p sampler startup coverage
+2026-09-20T19:22:28.007293339Z (EngineCore pid=130) INFO 09-20 19:22:28 [jit_monitor.py:85] Kernel JIT monitor activated; monitored JIT compilations during inference will use mode=warn.
+2026-09-20T19:22:28.279936639Z (EngineCore pid=130) INFO 09-20 19:22:28 [torch_utils.py:262] Reducing Torch threads from 20 to 1 for serving. Set OMP_NUM_THREADS in the external environment to override.
+2026-09-20T19:22:28.279970527Z (EngineCore pid=130) INFO 09-20 19:22:28 [core.py:347] init engine (profile, create kv cache, warmup model) took 33.93 s (compilation: 3.76 s)
+2026-09-20T19:22:28.533515604Z (EngineCore pid=130) INFO 09-20 19:22:28 [kernel.py:308] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'])
+2026-09-20T19:22:28.609046722Z (APIServer pid=7) INFO 09-20 19:22:28 [api_server.py:653] Supported tasks: ['generate']
+2026-09-20T19:22:28.741969034Z (APIServer pid=7) INFO 09-20 19:22:28 [parser_manager.py:58] "auto" tool choice has been enabled.
+2026-09-20T19:22:28.743312244Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:22:28.743403348Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:22:29.086837306Z (APIServer pid=7) INFO 09-20 19:22:29 [hf.py:551] Detected the chat template content format to be 'openai'. You can set `--chat-template-content-format` to override this.
+2026-09-20T19:22:36.197450050Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:22:36.197650113Z (APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+2026-09-20T19:22:42.496550633Z (APIServer pid=7) INFO 09-20 19:22:42 [base.py:235] Multi-modal warmup completed in 13.398s
+2026-09-20T19:22:43.323012873Z (APIServer pid=7) INFO 09-20 19:22:43 [base.py:235] Readonly multi-modal warmup completed in 0.823s
+2026-09-20T19:22:43.330749704Z (APIServer pid=7) WARNING 09-20 19:22:43 [model.py:1713] Default vLLM sampling parameters have been overridden by the model's `generation_config.json`: `{'temperature': 1.0, 'top_k': 20, 'top_p': 0.95}`. If this is not intended, please relaunch vLLM instance with `--generation-config vllm`.
+2026-09-20T19:22:43.344915357Z (APIServer pid=7) INFO 09-20 19:22:43 [api_server.py:657] Starting vLLM server on http://0.0.0.0:8000
+2026-09-20T19:22:43.344936252Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:51] Available routes are:
+2026-09-20T19:22:43.344937900Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /openapi.json, Methods: GET, HEAD
+2026-09-20T19:22:43.344939196Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /docs, Methods: GET, HEAD
+2026-09-20T19:22:43.344940524Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /docs/oauth2-redirect, Methods: GET, HEAD
+2026-09-20T19:22:43.344941596Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /redoc, Methods: GET, HEAD
+2026-09-20T19:22:43.344942588Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /load, Methods: GET
+2026-09-20T19:22:43.344943644Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /version, Methods: GET
+2026-09-20T19:22:43.344944892Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /health, Methods: GET
+2026-09-20T19:22:43.344945852Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /metrics, Methods: GET
+2026-09-20T19:22:43.344947036Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /tokenize, Methods: POST
+2026-09-20T19:22:43.344948188Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /detokenize, Methods: POST
+2026-09-20T19:22:43.344949340Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/models, Methods: GET
+2026-09-20T19:22:43.344950508Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /ping, Methods: GET
+2026-09-20T19:22:43.344951724Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /ping, Methods: POST
+2026-09-20T19:22:43.344952668Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /invocations, Methods: POST
+2026-09-20T19:22:43.345072204Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/chat/completions, Methods: POST
+2026-09-20T19:22:43.345087228Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/chat/completions/batch, Methods: POST
+2026-09-20T19:22:43.345088988Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/responses, Methods: POST
+2026-09-20T19:22:43.345090252Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/responses/{response_id}, Methods: GET
+2026-09-20T19:22:43.345091356Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/responses/{response_id}/cancel, Methods: POST
+2026-09-20T19:22:43.345092492Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/completions, Methods: POST
+2026-09-20T19:22:43.345093596Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/messages, Methods: POST
+2026-09-20T19:22:43.345094892Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/messages/count_tokens, Methods: POST
+2026-09-20T19:22:43.345105980Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /generative_scoring, Methods: POST
+2026-09-20T19:22:43.345107036Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /scale_elastic_ep, Methods: POST
+2026-09-20T19:22:43.345108076Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /is_scaling_elastic_ep, Methods: POST
+2026-09-20T19:22:43.345109004Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/chat/completions/render, Methods: POST
+2026-09-20T19:22:43.345110044Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/completions/render, Methods: POST
+2026-09-20T19:22:43.345110972Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/chat/completions/derender, Methods: POST
+2026-09-20T19:22:43.345112012Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /v1/completions/derender, Methods: POST
+2026-09-20T19:22:43.345113004Z (APIServer pid=7) INFO 09-20 19:22:43 [launcher.py:60] Route: /inference/v1/generate, Methods: POST
+2026-09-20T19:22:43.515194158Z (APIServer pid=7) INFO:     Started server process [7]
+2026-09-20T19:22:43.515212430Z (APIServer pid=7) INFO:     Waiting for application startup.
+2026-09-20T19:22:43.746901885Z (APIServer pid=7) INFO:     Application startup complete.
+2026-09-20T19:22:43.785360122Z (APIServer pid=7) INFO:     172.18.0.1:53526 - "GET /health HTTP/1.1" 200 OK
+2026-09-20T19:22:43.786975284Z (APIServer pid=7) INFO:     172.18.0.1:53530 - "GET /v1/models HTTP/1.1" 200 OK
+2026-09-20T19:22:43.915793124Z (APIServer pid=7) INFO:     172.18.0.1:53532 - "POST /v1/completions HTTP/1.1" 200 OK
+2026-09-20T19:22:43.932008592Z (APIServer pid=7) INFO:     172.18.0.1:53544 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:22:43.953376454Z (EngineCore pid=130) WARNING 09-20 19:22:43 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _qsa_mqa_paged_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.
+2026-09-20T19:22:43.955549500Z (EngineCore pid=130) WARNING 09-20 19:22:43 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _expand_qsa_indices_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.
+2026-09-20T19:22:43.959233277Z (EngineCore pid=130) WARNING 09-20 19:22:43 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _qsa_sparse_paged_gqa_splitk_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.
+2026-09-20T19:22:44.077449738Z (EngineCore pid=130) WARNING 09-20 19:22:44 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _compute_local_logits_stats_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.
+2026-09-20T19:22:44.128944257Z (EngineCore pid=130) WARNING 09-20 19:22:44 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _rejection_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.
+2026-09-20T19:22:44.131973860Z (EngineCore pid=130) WARNING 09-20 19:22:44 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _resample_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.
+2026-09-20T19:22:44.174504977Z (APIServer pid=7) INFO:     172.18.0.1:53554 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:22:44.853404259Z (EngineCore pid=130) INFO 09-20 19:22:44 [vllm_ple_mmap.py:546] PLE mmap stats (last 30s): 34 ops, op 257 ms total (7.56 ms/op), gather 112 ms total (3.28 ms/op), 5528 rows, 0.8 MiB read, gpu-wait 2.86 ms/op, host 4.70 ms/op (dedup 0.22, gather 3.28, stage 0.11)
+2026-09-20T19:22:51.446326627Z (APIServer pid=7) INFO:     172.18.0.1:46748 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:22:51.465296116Z (APIServer pid=7) INFO:     172.18.0.1:46754 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:22:52.379938411Z (EngineCore pid=130) WARNING 09-20 19:22:52 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _qsa_pre_indexer_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.
+2026-09-20T19:22:53.746888159Z (APIServer pid=7) INFO 09-20 19:22:53 [loggers.py:310] Engine 000: Avg prompt throughput: 11.7 tokens/s, Avg generation throughput: 1.2 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.0%
+2026-09-20T19:22:53.746992303Z (APIServer pid=7) INFO 09-20 19:22:53 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 3.62, Accepted throughput: 0.83 tokens/s, Drafted throughput: 0.95 tokens/s, Accepted: 21 tokens, Drafted: 24 tokens, Per-position acceptance rate: 0.875, 0.875, 0.875, Avg Draft acceptance rate: 87.5%
+2026-09-20T19:23:03.748283575Z (APIServer pid=7) INFO 09-20 19:23:03 [loggers.py:310] Engine 000: Avg prompt throughput: 2107.1 tokens/s, Avg generation throughput: 10.7 tokens/s, Running: 2 reqs, Waiting: 0 reqs, GPU KV cache usage: 19.5%, Prefix cache hit rate: 0.0%
+2026-09-20T19:23:03.748335287Z (APIServer pid=7) INFO 09-20 19:23:03 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.62, Accepted throughput: 6.50 tokens/s, Drafted throughput: 12.00 tokens/s, Accepted: 65 tokens, Drafted: 120 tokens, Per-position acceptance rate: 0.675, 0.550, 0.400, Avg Draft acceptance rate: 54.2%
+2026-09-20T19:23:07.418298504Z (APIServer pid=7) INFO:     172.18.0.1:58186 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:07.419321875Z (APIServer pid=7) INFO:     172.18.0.1:58188 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:07.419660770Z (APIServer pid=7) INFO:     172.18.0.1:58210 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:07.434660660Z (APIServer pid=7) INFO:     172.18.0.1:58220 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:08.414286174Z (EngineCore pid=130) WARNING 09-20 19:23:08 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _gumbel_sample_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.
+2026-09-20T19:23:13.748635672Z (APIServer pid=7) INFO 09-20 19:23:13 [loggers.py:310] Engine 000: Avg prompt throughput: 194.9 tokens/s, Avg generation throughput: 57.4 tokens/s, Running: 4 reqs, Waiting: 0 reqs, GPU KV cache usage: 29.1%, Prefix cache hit rate: 45.2%
+2026-09-20T19:23:13.748664360Z (APIServer pid=7) INFO 09-20 19:23:13 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.58, Accepted throughput: 34.90 tokens/s, Drafted throughput: 66.30 tokens/s, Accepted: 349 tokens, Drafted: 663 tokens, Per-position acceptance rate: 0.710, 0.525, 0.344, Avg Draft acceptance rate: 52.6%
+2026-09-20T19:23:14.873721823Z (EngineCore pid=130) INFO 09-20 19:23:14 [vllm_ple_mmap.py:546] PLE mmap stats (last 30s): 121 ops, op 1209 ms total (9.99 ms/op), gather 796 ms total (6.57 ms/op), 22088 rows, 3.4 MiB read, gpu-wait 2.37 ms/op, host 7.63 ms/op (dedup 0.15, gather 6.57, stage 0.16)
+2026-09-20T19:23:15.080770139Z (APIServer pid=7) INFO:     172.18.0.1:34938 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:15.084129565Z (APIServer pid=7) INFO:     172.18.0.1:34952 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:15.085661975Z (APIServer pid=7) INFO:     172.18.0.1:34970 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:15.085852182Z (APIServer pid=7) INFO:     172.18.0.1:34964 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:15.682892350Z (EngineCore pid=130) WARNING 09-20 19:23:15 [jit_monitor.py:141] Triton kernel JIT compilation during inference: _qsa_merge_splitk_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.
+2026-09-20T19:23:21.151579357Z (APIServer pid=7) INFO:     172.18.0.1:34984 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:21.687268699Z (APIServer pid=7) INFO:     172.18.0.1:35000 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:21.828920135Z (APIServer pid=7) INFO:     172.18.0.1:35016 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:22.703031278Z (APIServer pid=7) INFO:     172.18.0.1:35032 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:23.750318531Z (APIServer pid=7) INFO 09-20 19:23:23 [loggers.py:310] Engine 000: Avg prompt throughput: 209.7 tokens/s, Avg generation throughput: 66.8 tokens/s, Running: 4 reqs, Waiting: 0 reqs, GPU KV cache usage: 29.1%, Prefix cache hit rate: 60.2%
+2026-09-20T19:23:23.750389378Z (APIServer pid=7) INFO 09-20 19:23:23 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.72, Accepted throughput: 42.19 tokens/s, Drafted throughput: 73.79 tokens/s, Accepted: 422 tokens, Drafted: 738 tokens, Per-position acceptance rate: 0.776, 0.545, 0.394, Avg Draft acceptance rate: 57.2%
+2026-09-20T19:23:29.367269361Z (APIServer pid=7) INFO:     172.18.0.1:47768 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:29.627648813Z (APIServer pid=7) INFO:     172.18.0.1:47774 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:29.905487122Z (APIServer pid=7) INFO:     172.18.0.1:47790 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:30.977201243Z (APIServer pid=7) INFO:     172.18.0.1:47806 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:31.608269462Z (APIServer pid=7) INFO:     172.18.0.1:47810 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:33.305166827Z (APIServer pid=7) INFO:     172.18.0.1:47822 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:23:33.750820538Z (APIServer pid=7) INFO 09-20 19:23:33 [loggers.py:310] Engine 000: Avg prompt throughput: 77.2 tokens/s, Avg generation throughput: 53.4 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 59.5%
+2026-09-20T19:23:33.750838538Z (APIServer pid=7) INFO 09-20 19:23:33 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.75, Accepted throughput: 34.30 tokens/s, Drafted throughput: 58.80 tokens/s, Accepted: 343 tokens, Drafted: 588 tokens, Per-position acceptance rate: 0.801, 0.566, 0.383, Avg Draft acceptance rate: 58.3%
+2026-09-20T19:23:43.751022086Z (APIServer pid=7) INFO 09-20 19:23:43 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 14.0%, Prefix cache hit rate: 11.8%
+2026-09-20T19:23:47.007619340Z (EngineCore pid=130) INFO 09-20 19:23:47 [vllm_ple_mmap.py:546] PLE mmap stats (last 32s): 145 ops, op 4561 ms total (31.46 ms/op), gather 862 ms total (5.94 ms/op), 40824 rows, 6.2 MiB read, gpu-wait 23.34 ms/op, host 8.12 ms/op (dedup 0.34, gather 5.94, stage 0.17)
+2026-09-20T19:24:18.858960041Z (EngineCore pid=130) INFO 09-20 19:24:18 [vllm_ple_mmap.py:546] PLE mmap stats (last 32s): 9 ops, op 8210 ms total (912.26 ms/op), gather 52 ms total (5.80 ms/op), 432 rows, 0.1 MiB read, gpu-wait 852.26 ms/op, host 60.00 ms/op (dedup 2.86, gather 5.80, stage 0.21)
+2026-09-20T19:24:31.967989501Z (APIServer pid=7) INFO:     172.18.0.1:32974 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:24:49.919971697Z (EngineCore pid=130) INFO 09-20 19:24:49 [vllm_ple_mmap.py:546] PLE mmap stats (last 31s): 8 ops, op 8176 ms total (1021.94 ms/op), gather 17 ms total (2.17 ms/op), 384 rows, 0.1 MiB read, gpu-wait 947.89 ms/op, host 74.05 ms/op (dedup 2.79, gather 2.17, stage 0.26)
+2026-09-20T19:25:23.373336526Z (EngineCore pid=130) INFO 09-20 19:25:23 [vllm_ple_mmap.py:546] PLE mmap stats (last 33s): 8 ops, op 8910 ms total (1113.69 ms/op), gather 19 ms total (2.31 ms/op), 384 rows, 0.1 MiB read, gpu-wait 1025.11 ms/op, host 88.59 ms/op (dedup 2.80, gather 2.31, stage 0.16)
+2026-09-20T19:25:48.872596867Z (APIServer pid=7) INFO:     172.18.0.1:56246 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:25:53.756437641Z (APIServer pid=7) INFO 09-20 19:25:53 [loggers.py:310] Engine 000: Avg prompt throughput: 26101.3 tokens/s, Avg generation throughput: 0.1 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 68.8%, Prefix cache hit rate: 11.1%
+2026-09-20T19:25:55.779741188Z (EngineCore pid=130) INFO 09-20 19:25:55 [vllm_ple_mmap.py:546] PLE mmap stats (last 32s): 8 ops, op 5729 ms total (716.18 ms/op), gather 976 ms total (121.94 ms/op), 201765 rows, 30.8 MiB read, gpu-wait 535.50 ms/op, host 180.68 ms/op (dedup 6.46, gather 121.94, stage 0.79)
+2026-09-20T19:26:03.757055303Z (APIServer pid=7) INFO 09-20 19:26:03 [loggers.py:310] Engine 000: Avg prompt throughput: 1199.4 tokens/s, Avg generation throughput: 5.9 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 13.0%
+2026-09-20T19:26:03.757151382Z (APIServer pid=7) INFO 09-20 19:26:03 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.70, Accepted throughput: 0.26 tokens/s, Drafted throughput: 0.46 tokens/s, Accepted: 39 tokens, Drafted: 69 tokens, Per-position acceptance rate: 0.826, 0.522, 0.348, Avg Draft acceptance rate: 56.5%
+2026-09-20T19:26:13.757685243Z (APIServer pid=7) INFO 09-20 19:26:13 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 13.0%
+2026-09-20T19:27:06.133247047Z (APIServer pid=7) INFO:     172.18.0.1:36724 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:27:06.177584667Z (EngineCore pid=130) INFO 09-20 19:27:06 [vllm_ple_mmap.py:546] PLE mmap stats (last 70s): 23 ops, op 363 ms total (15.79 ms/op), gather 284 ms total (12.33 ms/op), 62962 rows, 9.6 MiB read, gpu-wait 2.22 ms/op, host 13.57 ms/op (dedup 0.34, gather 12.33, stage 0.20)
+2026-09-20T19:27:13.760867373Z (APIServer pid=7) INFO 09-20 19:27:13 [loggers.py:310] Engine 000: Avg prompt throughput: 239.5 tokens/s, Avg generation throughput: 4.4 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 17.2%
+2026-09-20T19:27:13.760890525Z (APIServer pid=7) INFO 09-20 19:27:13 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.14, Accepted throughput: 0.34 tokens/s, Drafted throughput: 0.90 tokens/s, Accepted: 24 tokens, Drafted: 63 tokens, Per-position acceptance rate: 0.571, 0.333, 0.238, Avg Draft acceptance rate: 38.1%
+2026-09-20T19:27:17.669927015Z (APIServer pid=7) INFO:     172.18.0.1:53310 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:27:23.761987415Z (APIServer pid=7) INFO 09-20 19:27:23 [loggers.py:310] Engine 000: Avg prompt throughput: 239.5 tokens/s, Avg generation throughput: 7.4 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 21.0%
+2026-09-20T19:27:23.762029351Z (APIServer pid=7) INFO 09-20 19:27:23 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.50, Accepted throughput: 4.50 tokens/s, Drafted throughput: 9.00 tokens/s, Accepted: 45 tokens, Drafted: 90 tokens, Per-position acceptance rate: 0.700, 0.500, 0.300, Avg Draft acceptance rate: 50.0%
+2026-09-20T19:27:25.798467209Z (APIServer pid=7) INFO:     172.18.0.1:45838 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:27:33.762829350Z (APIServer pid=7) INFO 09-20 19:27:33 [loggers.py:310] Engine 000: Avg prompt throughput: 7.1 tokens/s, Avg generation throughput: 27.7 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 6.2%, Prefix cache hit rate: 21.0%
+2026-09-20T19:27:33.762855510Z (APIServer pid=7) INFO 09-20 19:27:33 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.88, Accepted throughput: 18.00 tokens/s, Drafted throughput: 28.80 tokens/s, Accepted: 180 tokens, Drafted: 288 tokens, Per-position acceptance rate: 0.802, 0.635, 0.438, Avg Draft acceptance rate: 62.5%
+2026-09-20T19:27:36.212466567Z (EngineCore pid=130) INFO 09-20 19:27:36 [vllm_ple_mmap.py:546] PLE mmap stats (last 30s): 184 ops, op 1072 ms total (5.83 ms/op), gather 754 ms total (4.10 ms/op), 43525 rows, 6.6 MiB read, gpu-wait 0.86 ms/op, host 4.96 ms/op (dedup 0.07, gather 4.10, stage 0.16)
+2026-09-20T19:27:39.295263733Z (APIServer pid=7) INFO:     172.18.0.1:39648 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:27:43.763743012Z (APIServer pid=7) INFO 09-20 19:27:43 [loggers.py:310] Engine 000: Avg prompt throughput: 7.1 tokens/s, Avg generation throughput: 38.7 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 6.2%, Prefix cache hit rate: 21.0%
+2026-09-20T19:27:43.763822020Z (APIServer pid=7) INFO 09-20 19:27:43 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 3.12, Accepted throughput: 26.30 tokens/s, Drafted throughput: 37.20 tokens/s, Accepted: 263 tokens, Drafted: 372 tokens, Per-position acceptance rate: 0.831, 0.710, 0.581, Avg Draft acceptance rate: 70.7%
+2026-09-20T19:27:52.396089498Z (APIServer pid=7) INFO:     172.18.0.1:59574 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:27:53.764366591Z (APIServer pid=7) INFO 09-20 19:27:53 [loggers.py:310] Engine 000: Avg prompt throughput: 7.1 tokens/s, Avg generation throughput: 40.5 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 6.2%, Prefix cache hit rate: 21.0%
+2026-09-20T19:27:53.764561359Z (APIServer pid=7) INFO 09-20 19:27:53 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 3.21, Accepted throughput: 27.90 tokens/s, Drafted throughput: 37.80 tokens/s, Accepted: 279 tokens, Drafted: 378 tokens, Per-position acceptance rate: 0.857, 0.738, 0.619, Avg Draft acceptance rate: 73.8%
+2026-09-20T19:28:03.766078447Z (APIServer pid=7) INFO 09-20 19:28:03 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 38.9 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 6.2%, Prefix cache hit rate: 21.0%
+2026-09-20T19:28:03.766207406Z (APIServer pid=7) INFO 09-20 19:28:03 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 3.02, Accepted throughput: 26.00 tokens/s, Drafted throughput: 38.69 tokens/s, Accepted: 260 tokens, Drafted: 387 tokens, Per-position acceptance rate: 0.814, 0.682, 0.519, Avg Draft acceptance rate: 67.2%
+2026-09-20T19:28:05.542977407Z (APIServer pid=7) INFO:     172.18.0.1:41266 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:28:06.227378257Z (EngineCore pid=130) INFO 09-20 19:28:06 [vllm_ple_mmap.py:546] PLE mmap stats (last 30s): 382 ops, op 1453 ms total (3.80 ms/op), gather 819 ms total (2.15 ms/op), 27544 rows, 4.2 MiB read, gpu-wait 0.99 ms/op, host 2.82 ms/op (dedup 0.05, gather 2.15, stage 0.11)
+2026-09-20T19:28:13.766529784Z (APIServer pid=7) INFO 09-20 19:28:13 [loggers.py:310] Engine 000: Avg prompt throughput: 7.1 tokens/s, Avg generation throughput: 37.6 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 6.2%, Prefix cache hit rate: 21.0%
+2026-09-20T19:28:13.766613335Z (APIServer pid=7) INFO 09-20 19:28:13 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 3.01, Accepted throughput: 25.10 tokens/s, Drafted throughput: 37.50 tokens/s, Accepted: 251 tokens, Drafted: 375 tokens, Per-position acceptance rate: 0.832, 0.672, 0.504, Avg Draft acceptance rate: 66.9%
+2026-09-20T19:28:18.713762538Z (APIServer pid=7) INFO:     172.18.0.1:39496 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:28:23.767888174Z (APIServer pid=7) INFO 09-20 19:28:23 [loggers.py:310] Engine 000: Avg prompt throughput: 6.7 tokens/s, Avg generation throughput: 35.4 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 6.2%, Prefix cache hit rate: 21.0%
+2026-09-20T19:28:23.768208845Z (APIServer pid=7) INFO 09-20 19:28:23 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.88, Accepted throughput: 23.10 tokens/s, Drafted throughput: 36.89 tokens/s, Accepted: 231 tokens, Drafted: 369 tokens, Per-position acceptance rate: 0.772, 0.593, 0.512, Avg Draft acceptance rate: 62.6%
+2026-09-20T19:28:33.768979155Z (APIServer pid=7) INFO 09-20 19:28:33 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 31.6 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 6.2%, Prefix cache hit rate: 21.0%
+2026-09-20T19:28:33.769127283Z (APIServer pid=7) INFO 09-20 19:28:33 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.53, Accepted throughput: 19.10 tokens/s, Drafted throughput: 37.50 tokens/s, Accepted: 191 tokens, Drafted: 375 tokens, Per-position acceptance rate: 0.688, 0.496, 0.344, Avg Draft acceptance rate: 50.9%
+2026-09-20T19:28:35.536128961Z (APIServer pid=7) INFO:     172.18.0.1:57276 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:28:36.232336783Z (EngineCore pid=130) INFO 09-20 19:28:36 [vllm_ple_mmap.py:546] PLE mmap stats (last 30s): 376 ops, op 1882 ms total (5.01 ms/op), gather 1263 ms total (3.36 ms/op), 25992 rows, 4.0 MiB read, gpu-wait 0.79 ms/op, host 4.22 ms/op (dedup 0.06, gather 3.36, stage 0.15)
+2026-09-20T19:28:43.769467941Z (APIServer pid=7) INFO 09-20 19:28:43 [loggers.py:310] Engine 000: Avg prompt throughput: 6.7 tokens/s, Avg generation throughput: 29.8 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 6.2%, Prefix cache hit rate: 20.9%
+2026-09-20T19:28:43.769497413Z (APIServer pid=7) INFO 09-20 19:28:43 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.40, Accepted throughput: 17.30 tokens/s, Drafted throughput: 37.20 tokens/s, Accepted: 173 tokens, Drafted: 372 tokens, Per-position acceptance rate: 0.685, 0.427, 0.282, Avg Draft acceptance rate: 46.5%
+2026-09-20T19:28:51.775239968Z (APIServer pid=7) INFO:     172.18.0.1:52948 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:28:53.770600012Z (APIServer pid=7) INFO 09-20 19:28:53 [loggers.py:310] Engine 000: Avg prompt throughput: 6.7 tokens/s, Avg generation throughput: 32.0 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 6.2%, Prefix cache hit rate: 20.9%
+2026-09-20T19:28:53.770735116Z (APIServer pid=7) INFO 09-20 19:28:53 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.53, Accepted throughput: 19.30 tokens/s, Drafted throughput: 37.80 tokens/s, Accepted: 193 tokens, Drafted: 378 tokens, Per-position acceptance rate: 0.722, 0.476, 0.333, Avg Draft acceptance rate: 51.1%
+2026-09-20T19:29:03.772495542Z (APIServer pid=7) INFO 09-20 19:29:03 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 32.6 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 6.2%, Prefix cache hit rate: 20.9%
+2026-09-20T19:29:03.772563653Z (APIServer pid=7) INFO 09-20 19:29:03 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.53, Accepted throughput: 19.70 tokens/s, Drafted throughput: 38.70 tokens/s, Accepted: 197 tokens, Drafted: 387 tokens, Per-position acceptance rate: 0.698, 0.481, 0.349, Avg Draft acceptance rate: 50.9%
+2026-09-20T19:29:06.268399232Z (EngineCore pid=130) INFO 09-20 19:29:06 [vllm_ple_mmap.py:546] PLE mmap stats (last 30s): 386 ops, op 1367 ms total (3.54 ms/op), gather 745 ms total (1.93 ms/op), 25656 rows, 3.9 MiB read, gpu-wait 0.90 ms/op, host 2.64 ms/op (dedup 0.05, gather 1.93, stage 0.11)
+2026-09-20T19:29:08.002995752Z (APIServer pid=7) INFO:     172.18.0.1:54564 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:29:13.772958148Z (APIServer pid=7) INFO 09-20 19:29:13 [loggers.py:310] Engine 000: Avg prompt throughput: 6.7 tokens/s, Avg generation throughput: 29.8 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 6.2%, Prefix cache hit rate: 20.9%
+2026-09-20T19:29:13.773037044Z (APIServer pid=7) INFO 09-20 19:29:13 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.38, Accepted throughput: 17.20 tokens/s, Drafted throughput: 37.50 tokens/s, Accepted: 172 tokens, Drafted: 375 tokens, Per-position acceptance rate: 0.696, 0.408, 0.272, Avg Draft acceptance rate: 45.9%
+2026-09-20T19:29:23.774365644Z (APIServer pid=7) INFO 09-20 19:29:23 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 33.8 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 6.2%, Prefix cache hit rate: 20.9%
+2026-09-20T19:29:23.774477020Z (APIServer pid=7) INFO 09-20 19:29:23 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.60, Accepted throughput: 20.80 tokens/s, Drafted throughput: 38.99 tokens/s, Accepted: 208 tokens, Drafted: 390 tokens, Per-position acceptance rate: 0.723, 0.515, 0.362, Avg Draft acceptance rate: 53.3%
+2026-09-20T19:29:24.334535103Z (APIServer pid=7) INFO:     172.18.0.1:36468 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:29:33.775288177Z (APIServer pid=7) INFO 09-20 19:29:33 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 1.2 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 14.0%, Prefix cache hit rate: 19.4%
+2026-09-20T19:29:33.775359857Z (APIServer pid=7) INFO 09-20 19:29:33 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.00, Accepted throughput: 0.60 tokens/s, Drafted throughput: 1.80 tokens/s, Accepted: 6 tokens, Drafted: 18 tokens, Per-position acceptance rate: 0.500, 0.333, 0.167, Avg Draft acceptance rate: 33.3%
+2026-09-20T19:29:37.518522686Z (EngineCore pid=130) INFO 09-20 19:29:37 [vllm_ple_mmap.py:546] PLE mmap stats (last 31s): 236 ops, op 3120 ms total (13.22 ms/op), gather 493 ms total (2.09 ms/op), 16800 rows, 2.6 MiB read, gpu-wait 9.98 ms/op, host 3.24 ms/op (dedup 0.10, gather 2.09, stage 0.11)
+2026-09-20T19:29:37.830096198Z (APIServer pid=7) INFO:     172.18.0.1:59780 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:29:39.603577717Z (APIServer pid=7) INFO:     172.18.0.1:59786 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:29:43.775763999Z (APIServer pid=7) INFO 09-20 19:29:43 [loggers.py:310] Engine 000: Avg prompt throughput: 3489.9 tokens/s, Avg generation throughput: 2.6 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 24.2%
+2026-09-20T19:29:43.775787727Z (APIServer pid=7) INFO 09-20 19:29:43 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 4.00, Accepted throughput: 1.80 tokens/s, Drafted throughput: 1.80 tokens/s, Accepted: 18 tokens, Drafted: 18 tokens, Per-position acceptance rate: 1.000, 1.000, 1.000, Avg Draft acceptance rate: 100.0%
+2026-09-20T19:29:53.776616737Z (APIServer pid=7) INFO 09-20 19:29:53 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 17.1%, Prefix cache hit rate: 19.1%
+2026-09-20T19:30:09.583908909Z (EngineCore pid=130) INFO 09-20 19:30:09 [vllm_ple_mmap.py:546] PLE mmap stats (last 32s): 18 ops, op 7742 ms total (430.11 ms/op), gather 45 ms total (2.50 ms/op), 1808 rows, 0.3 MiB read, gpu-wait 404.37 ms/op, host 25.74 ms/op (dedup 1.94, gather 2.50, stage 0.20)
+2026-09-20T19:30:36.224202293Z (APIServer pid=7) INFO:     172.18.0.1:34248 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:30:38.418250528Z (APIServer pid=7) INFO:     172.18.0.1:34250 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:30:41.715996535Z (EngineCore pid=130) INFO 09-20 19:30:41 [vllm_ple_mmap.py:546] PLE mmap stats (last 32s): 20 ops, op 7382 ms total (369.08 ms/op), gather 54 ms total (2.72 ms/op), 2312 rows, 0.4 MiB read, gpu-wait 342.95 ms/op, host 26.13 ms/op (dedup 1.18, gather 2.72, stage 0.16)
+2026-09-20T19:30:43.778529842Z (APIServer pid=7) INFO 09-20 19:30:43 [loggers.py:310] Engine 000: Avg prompt throughput: 13090.0 tokens/s, Avg generation throughput: 2.8 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 32.8%
+2026-09-20T19:30:43.778594226Z (APIServer pid=7) INFO 09-20 19:30:43 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 4.00, Accepted throughput: 0.40 tokens/s, Drafted throughput: 0.40 tokens/s, Accepted: 24 tokens, Drafted: 24 tokens, Per-position acceptance rate: 1.000, 1.000, 1.000, Avg Draft acceptance rate: 100.0%
+2026-09-20T19:30:53.778528344Z (APIServer pid=7) INFO 09-20 19:30:53 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 20.2%, Prefix cache hit rate: 24.7%
+2026-09-20T19:31:11.997553673Z (EngineCore pid=130) INFO 09-20 19:31:11 [vllm_ple_mmap.py:546] PLE mmap stats (last 30s): 9 ops, op 7747 ms total (860.74 ms/op), gather 19 ms total (2.12 ms/op), 432 rows, 0.1 MiB read, gpu-wait 811.81 ms/op, host 48.93 ms/op (dedup 2.71, gather 2.12, stage 0.13)
+2026-09-20T19:31:42.196015768Z (EngineCore pid=130) INFO 09-20 19:31:42 [vllm_ple_mmap.py:546] PLE mmap stats (last 30s): 8 ops, op 7898 ms total (987.20 ms/op), gather 15 ms total (1.85 ms/op), 384 rows, 0.1 MiB read, gpu-wait 918.61 ms/op, host 68.59 ms/op (dedup 2.70, gather 1.85, stage 0.17)
+2026-09-20T19:32:14.868274415Z (EngineCore pid=130) INFO 09-20 19:32:14 [vllm_ple_mmap.py:546] PLE mmap stats (last 33s): 8 ops, op 8654 ms total (1081.81 ms/op), gather 16 ms total (1.94 ms/op), 384 rows, 0.1 MiB read, gpu-wait 998.44 ms/op, host 83.37 ms/op (dedup 2.69, gather 1.94, stage 0.15)
+2026-09-20T19:32:33.166406412Z (APIServer pid=7) INFO:     172.18.0.1:50098 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:32:33.781729697Z (APIServer pid=7) INFO 09-20 19:32:33 [loggers.py:310] Engine 000: Avg prompt throughput: 23944.8 tokens/s, Avg generation throughput: 1.4 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 24.7%
+2026-09-20T19:32:33.781837024Z (APIServer pid=7) INFO 09-20 19:32:33 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 4.00, Accepted throughput: 0.11 tokens/s, Drafted throughput: 0.11 tokens/s, Accepted: 12 tokens, Drafted: 12 tokens, Per-position acceptance rate: 1.000, 1.000, 1.000, Avg Draft acceptance rate: 100.0%
+2026-09-20T19:32:35.387073882Z (APIServer pid=7) INFO:     172.18.0.1:33064 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:32:43.782187524Z (APIServer pid=7) INFO 09-20 19:32:43 [loggers.py:310] Engine 000: Avg prompt throughput: 265.3 tokens/s, Avg generation throughput: 1.4 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 11.0%, Prefix cache hit rate: 32.4%
+2026-09-20T19:32:43.782226628Z (APIServer pid=7) INFO 09-20 19:32:43 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 4.00, Accepted throughput: 1.20 tokens/s, Drafted throughput: 1.20 tokens/s, Accepted: 12 tokens, Drafted: 12 tokens, Per-position acceptance rate: 1.000, 1.000, 1.000, Avg Draft acceptance rate: 100.0%
+2026-09-20T19:32:45.126244580Z (EngineCore pid=130) INFO 09-20 19:32:45 [vllm_ple_mmap.py:546] PLE mmap stats (last 30s): 19 ops, op 6731 ms total (354.29 ms/op), gather 62 ms total (3.26 ms/op), 2272 rows, 0.3 MiB read, gpu-wait 328.00 ms/op, host 26.29 ms/op (dedup 1.09, gather 3.26, stage 0.16)
+2026-09-20T19:32:53.783901149Z (APIServer pid=7) INFO 09-20 19:32:53 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 20.2%, Prefix cache hit rate: 32.4%
+2026-09-20T19:33:16.347864929Z (EngineCore pid=130) INFO 09-20 19:33:16 [vllm_ple_mmap.py:546] PLE mmap stats (last 31s): 9 ops, op 8044 ms total (893.78 ms/op), gather 19 ms total (2.07 ms/op), 432 rows, 0.1 MiB read, gpu-wait 839.77 ms/op, host 54.00 ms/op (dedup 2.72, gather 2.07, stage 0.13)
+2026-09-20T19:33:47.233816764Z (EngineCore pid=130) INFO 09-20 19:33:47 [vllm_ple_mmap.py:546] PLE mmap stats (last 31s): 8 ops, op 8095 ms total (1011.84 ms/op), gather 16 ms total (2.04 ms/op), 384 rows, 0.1 MiB read, gpu-wait 939.70 ms/op, host 72.14 ms/op (dedup 2.72, gather 2.04, stage 0.23)
+2026-09-20T19:34:20.573710515Z (EngineCore pid=130) INFO 09-20 19:34:20 [vllm_ple_mmap.py:546] PLE mmap stats (last 33s): 8 ops, op 8848 ms total (1106.03 ms/op), gather 16 ms total (2.00 ms/op), 384 rows, 0.1 MiB read, gpu-wait 1018.93 ms/op, host 87.10 ms/op (dedup 2.72, gather 2.00, stage 0.18)
+2026-09-20T19:34:46.422769737Z (APIServer pid=7) INFO:     172.18.0.1:56968 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:34:50.733675759Z (APIServer pid=7) INFO:     172.18.0.1:56978 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:34:50.822971222Z (EngineCore pid=130) INFO 09-20 19:34:50 [vllm_ple_mmap.py:546] PLE mmap stats (last 30s): 18 ops, op 5590 ms total (310.57 ms/op), gather 54 ms total (3.01 ms/op), 2208 rows, 0.3 MiB read, gpu-wait 285.57 ms/op, host 24.99 ms/op (dedup 0.93, gather 3.01, stage 0.17)
+2026-09-20T19:34:51.092763449Z (APIServer pid=7) INFO:     172.18.0.1:56994 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:34:53.789081601Z (APIServer pid=7) INFO 09-20 19:34:53 [loggers.py:310] Engine 000: Avg prompt throughput: 26289.0 tokens/s, Avg generation throughput: 2.8 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 42.5%
+2026-09-20T19:34:53.789183031Z (APIServer pid=7) INFO 09-20 19:34:53 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 4.00, Accepted throughput: 0.18 tokens/s, Drafted throughput: 0.18 tokens/s, Accepted: 24 tokens, Drafted: 24 tokens, Per-position acceptance rate: 1.000, 1.000, 1.000, Avg Draft acceptance rate: 100.0%
+2026-09-20T19:35:03.790462297Z (APIServer pid=7) INFO 09-20 19:35:03 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 1 reqs, Waiting: 1 reqs, GPU KV cache usage: 17.1%, Prefix cache hit rate: 41.0%
+2026-09-20T19:35:23.476693208Z (EngineCore pid=130) INFO 09-20 19:35:23 [vllm_ple_mmap.py:546] PLE mmap stats (last 33s): 10 ops, op 6800 ms total (680.01 ms/op), gather 34 ms total (3.44 ms/op), 1424 rows, 0.2 MiB read, gpu-wait 642.96 ms/op, host 37.05 ms/op (dedup 2.88, gather 3.44, stage 0.21)
+2026-09-20T19:35:23.791468367Z (APIServer pid=7) INFO 09-20 19:35:23 [loggers.py:310] Engine 000: Avg prompt throughput: 6304.7 tokens/s, Avg generation throughput: 0.1 tokens/s, Running: 2 reqs, Waiting: 0 reqs, GPU KV cache usage: 42.8%, Prefix cache hit rate: 39.6%
+2026-09-20T19:35:32.994533156Z (APIServer pid=7) INFO:     172.18.0.1:43258 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:35:33.793700391Z (APIServer pid=7) INFO 09-20 19:35:33 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 1.2 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 21.6%, Prefix cache hit rate: 39.6%
+2026-09-20T19:35:33.793841998Z (APIServer pid=7) INFO 09-20 19:35:33 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 4.00, Accepted throughput: 0.22 tokens/s, Drafted throughput: 0.22 tokens/s, Accepted: 9 tokens, Drafted: 9 tokens, Per-position acceptance rate: 1.000, 1.000, 1.000, Avg Draft acceptance rate: 100.0%
+2026-09-20T19:35:43.794280003Z (APIServer pid=7) INFO 09-20 19:35:43 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 2 reqs, Waiting: 0 reqs, GPU KV cache usage: 51.0%, Prefix cache hit rate: 41.5%
+2026-09-20T19:35:45.139325121Z (APIServer pid=7) INFO:     172.18.0.1:42914 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:35:46.644072897Z (APIServer pid=7) INFO:     172.18.0.1:42916 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:35:53.795243173Z (APIServer pid=7) INFO 09-20 19:35:53 [loggers.py:310] Engine 000: Avg prompt throughput: 6754.4 tokens/s, Avg generation throughput: 3.9 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 11.0%, Prefix cache hit rate: 42.5%
+2026-09-20T19:35:53.795291799Z (APIServer pid=7) INFO 09-20 19:35:53 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 4.00, Accepted throughput: 1.35 tokens/s, Drafted throughput: 1.35 tokens/s, Accepted: 27 tokens, Drafted: 27 tokens, Per-position acceptance rate: 1.000, 1.000, 1.000, Avg Draft acceptance rate: 100.0%
+2026-09-20T19:35:56.279479138Z (EngineCore pid=130) INFO 09-20 19:35:56 [vllm_ple_mmap.py:546] PLE mmap stats (last 33s): 19 ops, op 5145 ms total (270.78 ms/op), gather 62 ms total (3.26 ms/op), 2976 rows, 0.5 MiB read, gpu-wait 253.28 ms/op, host 17.50 ms/op (dedup 1.70, gather 3.26, stage 0.19)
+2026-09-20T19:36:00.116892603Z (APIServer pid=7) INFO:     172.18.0.1:57774 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:36:01.979006260Z (APIServer pid=7) INFO:     172.18.0.1:57782 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:36:03.796191310Z (APIServer pid=7) INFO 09-20 19:36:03 [loggers.py:310] Engine 000: Avg prompt throughput: 3489.6 tokens/s, Avg generation throughput: 2.6 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 43.3%
+2026-09-20T19:36:03.796246961Z (APIServer pid=7) INFO 09-20 19:36:03 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 4.00, Accepted throughput: 1.80 tokens/s, Drafted throughput: 1.80 tokens/s, Accepted: 18 tokens, Drafted: 18 tokens, Per-position acceptance rate: 1.000, 1.000, 1.000, Avg Draft acceptance rate: 100.0%
+2026-09-20T19:36:13.797123731Z (APIServer pid=7) INFO 09-20 19:36:13 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 16.4%, Prefix cache hit rate: 42.6%
+2026-09-20T19:36:15.431193178Z (APIServer pid=7) INFO:     172.18.0.1:36124 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:36:17.247556755Z (APIServer pid=7) INFO:     172.18.0.1:36128 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:36:23.797604049Z (APIServer pid=7) INFO 09-20 19:36:23 [loggers.py:310] Engine 000: Avg prompt throughput: 3489.3 tokens/s, Avg generation throughput: 2.2 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 18.5%, Prefix cache hit rate: 42.1%
+2026-09-20T19:36:23.797640866Z (APIServer pid=7) INFO 09-20 19:36:23 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 4.00, Accepted throughput: 0.90 tokens/s, Drafted throughput: 0.90 tokens/s, Accepted: 18 tokens, Drafted: 18 tokens, Per-position acceptance rate: 1.000, 1.000, 1.000, Avg Draft acceptance rate: 100.0%
+2026-09-20T19:36:27.332448105Z (EngineCore pid=130) INFO 09-20 19:36:27 [vllm_ple_mmap.py:546] PLE mmap stats (last 31s): 28 ops, op 6354 ms total (226.93 ms/op), gather 115 ms total (4.11 ms/op), 3480 rows, 0.5 MiB read, gpu-wait 210.40 ms/op, host 16.54 ms/op (dedup 0.94, gather 4.11, stage 0.16)
+2026-09-20T19:36:33.799572651Z (APIServer pid=7) INFO 09-20 19:36:33 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 27.7%, Prefix cache hit rate: 42.1%
+2026-09-20T19:37:00.223321415Z (EngineCore pid=130) INFO 09-20 19:37:00 [vllm_ple_mmap.py:546] PLE mmap stats (last 33s): 9 ops, op 8510 ms total (945.55 ms/op), gather 19 ms total (2.12 ms/op), 800 rows, 0.1 MiB read, gpu-wait 883.13 ms/op, host 62.42 ms/op (dedup 2.61, gather 2.12, stage 0.22)
+2026-09-20T19:37:03.467346814Z (APIServer pid=7) INFO:     172.18.0.1:40662 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:37:03.801603749Z (APIServer pid=7) INFO 09-20 19:37:03 [loggers.py:310] Engine 000: Avg prompt throughput: 9904.2 tokens/s, Avg generation throughput: 1.1 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 42.1%
+2026-09-20T19:37:03.801691016Z (APIServer pid=7) INFO 09-20 19:37:03 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 4.00, Accepted throughput: 0.22 tokens/s, Drafted throughput: 0.22 tokens/s, Accepted: 9 tokens, Drafted: 9 tokens, Per-position acceptance rate: 1.000, 1.000, 1.000, Avg Draft acceptance rate: 100.0%
+2026-09-20T19:37:05.399854190Z (APIServer pid=7) INFO:     172.18.0.1:50608 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:37:05.755816546Z (APIServer pid=7) INFO:     172.18.0.1:50620 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:37:13.800957075Z (APIServer pid=7) INFO 09-20 19:37:13 [loggers.py:310] Engine 000: Avg prompt throughput: 308.3 tokens/s, Avg generation throughput: 1.7 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 45.1%
+2026-09-20T19:37:13.800995605Z (APIServer pid=7) INFO 09-20 19:37:13 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 3.00, Accepted throughput: 1.20 tokens/s, Drafted throughput: 1.80 tokens/s, Accepted: 12 tokens, Drafted: 18 tokens, Per-position acceptance rate: 0.667, 0.667, 0.667, Avg Draft acceptance rate: 66.7%
+2026-09-20T19:37:23.801636076Z (APIServer pid=7) INFO 09-20 19:37:23 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 45.1%
+2026-09-20T19:37:58.231618244Z (APIServer pid=7) INFO:     172.18.0.1:47994 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:37:58.245627452Z (EngineCore pid=130) INFO 09-20 19:37:58 [vllm_ple_mmap.py:546] PLE mmap stats (last 58s): 18 ops, op 187 ms total (10.37 ms/op), gather 73 ms total (4.05 ms/op), 2392 rows, 0.4 MiB read, gpu-wait 5.32 ms/op, host 5.05 ms/op (dedup 0.12, gather 4.05, stage 0.19)
+2026-09-20T19:37:58.495514129Z (APIServer pid=7) INFO:     172.18.0.1:48010 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:37:58.769861455Z (APIServer pid=7) INFO:     172.18.0.1:48024 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:37:59.843674039Z (APIServer pid=7) INFO:     172.18.0.1:48036 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:38:00.516112960Z (APIServer pid=7) INFO:     172.18.0.1:48048 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-09-20T19:38:03.803815597Z (APIServer pid=7) INFO 09-20 19:38:03 [loggers.py:310] Engine 000: Avg prompt throughput: 77.2 tokens/s, Avg generation throughput: 8.9 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 45.1%
+2026-09-20T19:38:03.803878160Z (APIServer pid=7) INFO 09-20 19:38:03 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 3.75, Accepted throughput: 1.32 tokens/s, Drafted throughput: 1.44 tokens/s, Accepted: 66 tokens, Drafted: 72 tokens, Per-position acceptance rate: 0.917, 0.917, 0.917, Avg Draft acceptance rate: 91.7%
+2026-09-20T19:38:13.804859702Z (APIServer pid=7) INFO 09-20 19:38:13 [loggers.py:310] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 45.1%

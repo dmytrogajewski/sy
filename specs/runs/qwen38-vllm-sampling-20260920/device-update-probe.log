@@ -1,0 +1,14 @@
+{"explicit_devices": false, "container": "3057d6a7865ed6a9c435c1f5d0b6d8e064a8080fd4a698709eb9caea4b76a327"}
+{"nvml_exit": 255, "nvml_output": "Failed to initialize NVML: Unknown Error\n"}
+{"fresh_cuda_exit": 1, "fresh_cuda_output": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"/usr/local/lib/python3.12/dist-packages/torch/cuda/__init__.py\", line 529, in _lazy_init\n    torch._C._cuda_init()\nRuntimeError: No CUDA GPUs are available\n"}
+READY-FOR-UPDATE
+PASS-AFTER-UPDATE
+
+{"explicit_devices": false, "pid": "2980109", "existing_cuda_context_passed": true, "expected_result_observed": true}
+{"explicit_devices": true, "container": "b8a5a594c375b028fa3f87a4d571669aa0354c52fe95837d50a00f83b6ffa40c"}
+{"nvml_exit": 0, "nvml_output": "GPU 0: NVIDIA GB10 (UUID: GPU-14f061ec-1fbb-b9a7-713c-fe23683c880b)\n"}
+{"fresh_cuda_exit": 0, "fresh_cuda_output": "tensor([1.], device='cuda:0')\n"}
+READY-FOR-UPDATE
+PASS-AFTER-UPDATE
+
+{"explicit_devices": true, "pid": "2980644", "existing_cuda_context_passed": true, "expected_result_observed": true}
