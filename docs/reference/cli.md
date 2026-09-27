@@ -84,7 +84,7 @@ diff without applying. Honoured by:
   the default; `--apply` opts in).
 - `sy stack push` (`--dry-run` prints the planned push).
 - `sy spark <host> install` (inspect without installing).
-- `sy spark <host> serve` / `download` / `stop` / `rm` / `token` /
+- `sy spark <host> qualify` / `serve` / `download` / `stop` / `rm` / `token` /
   `operations cancel` (admission or mutation preview; no Docker or
   GPU side effects on serve dry-run).
 
@@ -995,130 +995,29 @@ sy stack toggle
 
 ## `sy spark`
 
-Inspect, install, and drive one configured DGX Spark appliance.
-`<HOST>` is passed to OpenSSH as a single argument; there is no
-arbitrary-command escape hatch. OpenSSH owns `known_hosts`, agents,
-hardware tokens, and password prompts. Credentials are never accepted
-as `sy` arguments and are never stored by `sy`.
+Forward raw arguments to the independently installed Sparkplane client:
 
-Source: `src/spark/cli.rs`. Hidden unit entrypoints (`run-agent`,
-`run-executor`, `activate`, `inspect`) are not part of the laptop
-CLI.
-
-### Synopsis
-
-```text
-sy spark <HOST> <COMMAND>
+```sh
+sy spark <HOST> <COMMAND> [ARGS...]
 ```
 
-### Subcommands
+Source: `src/sparkplane_bridge.rs`. This command verifies the pinned executable
+and bridge protocol before replacing itself with Sparkplane. It preserves stdio,
+signals and exit status, and does not initialize the AMD runtime or fetch software.
+Canonical `SPARKPLANE_*` variables take precedence over translated `SY_SPARK_*` values.
 
-| Subcommand | Purpose |
-|------------|---------|
-| `install` | Inspect the appliance (`--dry-run`) or apply the signed ARM64 install (`--yes`). |
-| `upgrade` | Stage and verify a signed side-by-side release, preserve engines, and automatically roll back failed semantic health. |
-| `rollback` | SSH-only exact rollback to the verified preceding control-plane release. |
-| `status` | Compact authenticated agent/executor health over pinned HTTPS. |
-| `doctor` | Authenticated, read-only compatibility and security checks. |
-| `operations` | Inspect, `--follow`, or `cancel` durable operations. |
-| `token` | `create` / `list` / `revoke` scoped bearer tokens. Create returns the secret once on stdout. |
-| `download` | Acquire and verify one immutable Hugging Face model snapshot. |
-| `serve` | Start a verified model with the root-configured engine after fail-closed admission. |
-| `launch` | Run Codex, Claude Code, or OpenCode locally against an exact managed Spark model. |
-| `ps` | Compact active model-process table. Absent and failed historical instances are omitted from human and JSON output. |
-| `logs` | Bounded, redacted logs for one instance. |
-| `stop` | Persist stopped intent, drain, and remove one instance. An already-absent instance is an idempotent success. |
-| `ls` | Compact table of verified local models available to run; `--json` returns the complete inventory document. |
-| `show` | Immutable identity, provenance, aliases, and references for one model. |
-| `rm` | Preview or remove only unreferenced native-cache model data. |
-| `client-config` | Render a user-level Codex or Claude Code projection. Names the token env var; does not read or write it. |
-| `cert status` | Authenticated leaf-certificate identity. |
-| `cert rotate` | SSH-only leaf rotation with overlap; `--ca` rotates and atomically re-pins the local CA. |
+For a coding session that needs internet access, forward Sparkplane's explicit
+per-launch opt-in. It leaves filesystem sandboxing and approval policy intact:
 
-### Options (`install`)
-
-| Name | Type | Default | Env | Description |
-|------|------|---------|-----|-------------|
-| `--dry-run` | bool | `false` | `SY_SPARK_DRY_RUN` | Upload a content-addressed probe, run `spark bootstrap inspect`, verify the hash, remove the probe. No install. |
-| `--yes` | bool | `false` | `SY_SPARK_YES` | Apply the reviewed manifest. Requires `--release-signature` and `--release-public-key`. |
-| `--json` | bool | `false` | `SY_SPARK_JSON` | Emit `sy.spark.install-manifest/v1`. |
-| `--probe` | path | `$XDG_DATA_HOME/sy/spark-release/sy-aarch64` | `SY_SPARK_PROBE` | ARM64 feature-minimal probe artefact. |
-| `--release-manifest` | path | `SHA256SUMS` beside `--probe` | `SY_SPARK_RELEASE_MANIFEST` | Signed inventory for the binary and separate catalog TOMLs. |
-| `--listen-address` | IP | none | `SY_SPARK_LISTEN_ADDRESS` | Explicit LAN address for the HTTPS listener. |
-| `--listen-port` | u16 | `9843` | `SY_SPARK_LISTEN_PORT` | HTTPS listener port. |
-| `--release-signature` | path | none | `SY_SPARK_RELEASE_SIGNATURE` | Minisign signature for `SHA256SUMS` (required with `--yes`). |
-| `--release-public-key` | path | none | `SY_SPARK_RELEASE_PUBLIC_KEY` | Pinned minisign public key (required with `--yes`). |
-| `--config-dir` | path | Spark config root | `SY_SPARK_CONFIG_DIR` | Local Spark configuration root. |
-
-`upgrade` accepts the same options. `rollback` and `cert rotate` accept
-`--dry-run`, `--yes`, `--json`, and `--config-dir`; exactly one of `--dry-run`
-and `--yes` is required. `cert rotate --ca` explicitly replaces the local CA.
-
-### Options (`launch`)
-
-```text
-sy spark <HOST> launch <codex|claude|opencode> [OPTIONS] [-- <AGENT_ARGS>...]
+```sh
+sy spark dgx-spark launch codex --allow-network -- --sandbox workspace-write
 ```
 
-| Name | Type | Env | Description |
-|------|------|-----|-------------|
-| `--model` | string | `SY_SPARK_LAUNCH_MODEL` | Exact installed model identity or alias. |
-| `--config` | bool | `SY_SPARK_LAUNCH_CONFIG` | Configure launch-owned state and exit. |
-| `--restore` | bool | `SY_SPARK_LAUNCH_RESTORE` | Remove only sy-owned Codex launch files. |
-| `-y`, `--yes` | bool | `SY_SPARK_YES` | Approve a fixed missing-client installer. |
-| `--dry-run` | bool | `SY_SPARK_DRY_RUN` | Resolve/reuse/admit without mutation. |
-| `--json` | bool | `SY_SPARK_JSON` | Emit `sy.spark.launch-plan/v1`; requires `--dry-run` or `--config`. |
-| `--config-dir` | path | `SY_SPARK_CONFIG_DIR` | Protected Spark configuration root. |
+The equivalent environment variable is
+`SPARKPLANE_LAUNCH_ALLOW_NETWORK=true`.
 
-Arguments are accepted only after `--` and are passed directly without a
-shell. The agent runs in the current directory with inherited terminal I/O and
-receives a separate inference-only token. The Spark administrator credential is
-never exposed. Exit codes `1..125` from the child are propagated.
-
-### Token scopes (`token create --scope`)
-
-`models:read`, `models:write`, `instances:read`, `instances:write`,
-`inference`, `logs:read`, `operations:read`, `operations:cancel`,
-`benchmarks:read`, `benchmarks:write`. Repeat `--scope` for each. The benchmark
-scopes remain wire-compatible for pre-policy clients; the normal CLI has no
-recipe, benchmark, or tuning commands.
-
-### Exit codes
-
-- `0` — success.
-- `1` — unexpected failure.
-- `2` — usage or local configuration.
-- `3` — remote policy or state rejection (admission denied, invalid model
-  intent, and similar).
-- `4` — OpenSSH/SFTP/agent unreachable, TLS identity mismatch, or
-  authentication failure.
-
-### Examples
-
-```bash
-sy spark dgx-spark install --dry-run --json
-sy spark dgx-spark install --yes --release-signature sy-aarch64.minisig \
-  --release-public-key sy-release.pub
-sy spark dgx-spark upgrade --dry-run --json
-sy spark dgx-spark rollback --dry-run --json
-sy spark dgx-spark cert rotate --dry-run --json
-sy spark dgx-spark status --json
-sy spark dgx-spark doctor --json
-sy spark dgx-spark serve ornith-1.5:9b --dry-run --json
-sy spark dgx-spark ps --json
-sy spark dgx-spark token create --name reader --scope models:read \
-  --scope operations:read --detach --json
-sy spark dgx-spark client-config ornith --client codex
-sy spark dgx-spark launch codex --model ornith-1.5:9b
-sy spark dgx-spark launch claude --model ornith-1.5:9b -- --permission-mode plan
-sy spark dgx-spark launch opencode --model ornith-1.5:9b
-```
-
-### See also
-
-- [How to install the Spark agent](../how-to/install-spark.md)
-- [How to serve a model on Spark](../how-to/serve-a-model-on-spark.md)
-- [Spark reference](spark.md)
+See [installation and release pins](../how-to/install-spark.md) and the
+[Sparkplane CLI reference](https://github.com/Sumatoshi-tech/sparkplane/blob/main/docs/reference/cli.md).
 
 ---
 

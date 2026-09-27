@@ -126,17 +126,18 @@ is that scheduler.
 
 ### The Spark plane is a remote appliance
 
-Spark is not a user unit on the laptop. It is the same `sy` binary
-in three roles:
+Spark is not a user unit on the laptop. The independently released
+[Sparkplane project](https://github.com/Sumatoshi-tech/sparkplane) owns the
+client and appliance; sy provides a pinned-client bridge:
 
-- On the laptop, `sy spark <host> …` talks to OpenSSH for install
+- On the laptop, `sy spark <host> …` delegates to Sparkplane, which uses OpenSSH for install
   and to pinned HTTPS for everything after. The laptop process
   never holds Docker authority.
-- On the Spark, `sy-spark-agent.service` runs as unprivileged
-  `User=sy-spark`. It owns the HTTPS listener (default port 9843),
+- On the Spark, `sparkplane-agent.service` runs as unprivileged
+  `User=sparkplane`. It owns the HTTPS listener (default port 9843),
   desired state, admission, and the public OpenAI / Anthropic
   gateways.
-- On the Spark, `sy-spark-executor.service` runs as root. It owns
+- On the Spark, `sparkplane-executor.service` runs as root. It owns
   Docker. Its address families are Unix sockets only, on a private
   network. The agent reaches it over that socket; nothing on the
   LAN does.

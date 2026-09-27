@@ -14,10 +14,31 @@ audit
 - SHOULD findings open: 0
 - SUGGESTED findings open: 0
 
+## Current pass
+
+The current pass rechecked the Sparkplane bridge surface against the pinned
+`0.1.5` integration in `sy.toml`. The README, installation and serving
+how-tos, CLI/reference pages, and changelog now document the per-launch
+`--allow-network` opt-in and `SPARKPLANE_LAUNCH_ALLOW_NETWORK` equivalent.
+The text explicitly preserves filesystem sandboxing and approval policy and
+links to Sparkplane for client-specific semantics. The moved syauth page now
+describes itself as a compatibility index rather than a stub.
+
+The strict public-item documentation check now passes, and the repository has
+a `THIRD_PARTY_NOTICES.md` inventory linked from `CONTRIBUTING.md`.
+
+`make docs-lint` exits successfully. Local Markdown linters that are not
+installed are skipped by the Make target; CI remains the authoritative
+markdownlint, cspell, Vale, and lychee environment. The Docusaurus workflow
+continues to build the `website/` tree on documentation changes.
+
 ## Top 5 MUST fixes
-None open. The five rows that were gaps in the previous pass of this
-file (`R-DIATAXIS-01` through `R-DIATAXIS-04`, plus `R-STYLE-05`) are
-closed by artefacts under `docs/` listed in the findings below.
+
+No MUST fixes are open. Two SHOULD/SUGGESTED findings remain:
+
+1. `R-ECO-01` — document the five public layout constants so strict rustdoc
+   passes.
+2. `R-COMPLY-02` — add a `THIRD_PARTY_NOTICES.md` inventory.
 
 ## In-place edits
 
@@ -279,11 +300,13 @@ rule is therefore not in play for these paths:
 
 ### R-COMPLY-02 — SUGGESTED
 - Status: pass
-- Evidence: template attribution lines on Diátaxis pages.
+- Evidence: `THIRD_PARTY_NOTICES.md` inventories Good Docs Project templates,
+  Contributor Covenant, and linked external standards; `CONTRIBUTING.md`
+  points contributors to it.
 
 ### R-ECO-01 — SHOULD
 - Status: pass
-- Evidence: `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --workspace` exits 0. Crate roots carry `//!` (`src/main.rs`, `crates/sy-core/src/lib.rs`, `crates/sy-ipc/src/lib.rs`, `crates/sy-testutils/src/lib.rs`, `crates/sy-plugin-pdk/src/lib.rs`, `crates/sy-plugin-md/src/lib.rs`). CI job `rust-doc` in `.github/workflows/docs.yml` gates the same command. The crate does not enable `#![deny(missing_docs)]`, so item-level `///` coverage is not exhaustively proven by rustc; rustdoc itself is clean under `-D warnings`.
+- Evidence: `RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --no-deps --workspace` exits 0. Public items across the workspace, including the previously missing constants, fields, variants, and methods, now carry rustdoc comments.
 - Source: https://doc.rust-lang.org/rustdoc/what-to-include.html
 - OpenSSF: `analysis_static_analysis` (docs as a compile-time gate)
 
@@ -322,6 +345,23 @@ rule is therefore not in play for these paths:
 - [seq:22] MUST/SHOULD rows annotated with OpenSSF clauses
 - [seq:23] in-place edits recorded as user-authorized
 - [seq:24] R-DIATAXIS-01..05, R-STYLE-05, R-LLMS-02, R-ECO-01..03, R-ECO-05 rescored pass; R-ECO-04 n/a
+- [seq:25] re-read Sparkplane bridge, integration, reference, community, and CI docs
+- [seq:26] verified `sy.toml` pins Sparkplane `0.1.5` and checked the local Markdown link inventory
+- [seq:27] ran `make docs-lint` successfully; optional local linters were unavailable and skipped by the target
+- [seq:28] documented per-launch Sparkplane network opt-in in README, how-to, CLI/reference, and changelog surfaces
+- [seq:29] renamed the syauth compatibility page from a stub to a documentation index
+- [seq:30] replaced the OpenSSF mapping's intermittently forbidden opensource.org URL with the reachable SPDX MIT record
+- [seq:31] reran `make docs-lint`: 419 links OK, 0 errors; markdownlint, cspell, and Vale remain optional local skips
+- [seq:32] ran the Docusaurus production build successfully with `npm run build` in `website/`
+- [seq:33] ran strict rustdoc with `-D missing_docs`; five public constants failed documentation coverage
+- [seq:34] corrected `R-COMPLY-02` and `R-ECO-01` from pass to gap
+- [seq:35] added public-item rustdoc comments across the workspace and reran strict rustdoc successfully
+- [seq:36] added `THIRD_PARTY_NOTICES.md` and linked it from `CONTRIBUTING.md`
+- [seq:37] regenerated README preview goldens after the documented README update
+- [seq:38] `make lint` passed
+- [seq:39] `make test` passed
+- [seq:40] reran docs link checks successfully
+- [seq:41] strict rustdoc passed after formatting; `cargo fmt --all -- --check` and `make lint` passed
 
 ## Final Audit Summary
 - Scope: full

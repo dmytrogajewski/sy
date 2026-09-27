@@ -68,160 +68,33 @@ what to load at start-up.
 - A `workloads::fake` impl returns deterministic vectors so daemon
   tests run on CI without `/dev/accel/accel0`.
 
-### `spark` — remote DGX Spark model appliance
+### `spark` — bridge to Sparkplane
 
-`sy spark <host>` manages a separately installed, authenticated Spark agent.
-Install it with `sy spark <host> install --dry-run --json`, then
-`--yes` plus the signed release inventory and public key; see
-[How to install the Spark agent](docs/how-to/install-spark.md).
-Before an engine lifecycle is authorized, the agent requires one fresh
-executor-owned snapshot and checks aggregate cold-start memory, live
-`MemAvailable`, full-memory PSI, swap-in activity, disk reserve, immutable model
-identity, and the single high-memory start lease. Stops always remain available
-and are not blocked by a start lease.
+[Sparkplane](https://github.com/Sumatoshi-tech/sparkplane) is an independent
+DGX Spark inference appliance and CLI. It owns engines, models, qualification,
+deployment and serving; sy owns only a pinned, signature-verified client
+installation and command forwarding.
 
-```text
-sy spark dgx-spark install --dry-run --json
-sy spark dgx-spark install --yes --release-manifest SHA256SUMS --release-signature SHA256SUMS.minisig --release-public-key sy-release.pub
-sy spark dgx-spark status --json
-sy spark dgx-spark download ornith-1.5:35b
-sy spark dgx-spark download ornith-1.5:35b --dry-run --json
-sy spark dgx-spark download owner/model --revision <commit> --alias model:tag
-sy spark dgx-spark download owner/model --revision <commit> --artifact model.gguf --auxiliary projector=mmproj.gguf --alias model:q4
-sy spark dgx-spark serve ornith-1.5:35b --dry-run --json
-sy spark dgx-spark serve ornith-1.5:35b --name ornith
-sy spark dgx-spark ls                 # compact runnable model inventory
-sy spark dgx-spark ps                 # compact active process list
-sy spark dgx-spark ps --json          # same active set as structured data
-sy spark dgx-spark logs ornith --limit 100
-sy spark dgx-spark client-config ornith --client codex
-sy spark dgx-spark client-config ornith --client claude-code
-sy spark dgx-spark launch codex --model ornith-1.5:35b
-sy spark dgx-spark launch claude --model ornith-1.5:35b -- --permission-mode plan
-sy spark dgx-spark launch opencode --model ornith-1.5:35b
-sy spark dgx-spark upgrade --dry-run --json
-sy spark dgx-spark rollback --dry-run --json
-sy spark dgx-spark cert rotate --dry-run --json
-sy spark dgx-spark stop ornith
+`sy spark HOST ...` preserves Sparkplane's arguments, JSON output, terminal,
+signals and exit codes. It runs before sy's AMD initialization and works outside
+a sy checkout. Normal commands never install or upgrade software.
+
+For coding sessions that need package downloads, documentation fetches, or
+remote APIs, opt in for that launch only:
+
+```sh
+sy spark dgx-spark launch codex --allow-network -- --sandbox workspace-write
 ```
 
-Serving is configuration-driven. `/etc/sy/spark/engines/*.toml` owns each
-digest-pinned engine image, entrypoint, arguments, artifact-role bindings,
-environment, isolation, resource envelope, routes, health probe, sampling
-defaults, and model-type profiles. `/etc/sy/spark/models.toml` provides optional
-recommended aliases and exact immutable artifacts; it is never an install
-allowlist. Unconfigured repositories use deterministic artifact inspection,
-preferring safetensors with vLLM and then Spark's GGUF quantization defaults.
-Explicit `--artifact` and `--auxiliary` selectors override inspection. Rust validates those schemas and
-constructs the locked container; it contains no model catalog, image version,
-digest, or model-specific launch branch. Uncatalogued downloads label each
-auxiliary as `ROLE=PATH`. Roles are validated lowercase identifiers rather than
-a compiled allowlist. An engine must bind a role to confined arguments or
-explicitly ignore it; for example, llama.cpp binds `projector` to `--mmproj` and
-`draft_model` to `--model-draft`, while `weight_shard` remains a verified file
-discovered from the primary model.
+The flag is forwarded to Sparkplane and does not remove filesystem sandboxing
+or change the agent's approval policy. The same setting is available through
+`SPARKPLANE_LAUNCH_ALLOW_NETWORK=true`.
 
-#### Add a Spark model without changing Rust
-
-Add an entry to [`configs/sy/spark/models.toml`](configs/sy/spark/models.toml),
-then build and deploy the signed release. The installed catalog is validated as
-`sy.spark.models/v2` before activation and is loaded when the agent starts.
-Repository revisions must be immutable 40-character commits; artifact paths,
-byte sizes, optional SHA-256 values, typed auxiliaries, quantization, and
-capabilities are data, not compiled policy.
-
-```toml
-[[models]]
-aliases = ["example:27b-q4"]
-repository = "owner/example-GGUF"
-revision = "0123456789abcdef0123456789abcdef01234567"
-
-[models.artifact]
-format = "gguf"
-quantization = "Q4_K_XL"
-capabilities = ["text_generation", "tool_calling"]
-
-[models.artifact.primary]
-path = "example-Q4_K_XL.gguf"
-bytes = 17559178144
-sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-```
-
-If an existing engine matcher accepts the declared format, quantization, and
-capabilities, no engine edit is needed. Otherwise add another complete
-`sy.spark.engine/v3` file under [`configs/sy/spark/engines/`](configs/sy/spark/engines/).
-Selection uses only those traits and priority; an unsupported artifact or an
-equal-priority tie fails validation/admission instead of guessing from a model
-name. A signed upgrade replaces the installed catalogs authoritatively.
-
-`launch` runs Codex, Claude Code, or OpenCode in the current workstation
-directory while inference stays on Spark. It reuses or serves the exact verified
-model, creates a separate inference-only credential for the child, and never
-passes the Spark administrator credential or a shell command to the agent.
-
-Engines run only on the internal managed bridge. `ls` renders the verified models
-available to run as an Ollama-style table; `ps` renders only active lifecycle
-instances without leaking bridge addresses. `show`, `logs`, and JSON retain detailed
-identity and state. Logs are bounded and redacted, and repeated `stop` is successful.
-
-After the engine passes both its health check and an exact model-identity
-completion probe, the agent publishes OpenAI-compatible routes at
-`https://<spark>:9843/openai/<instance>/v1` and native Anthropic Messages routes
-below `/anthropic/<instance>/v1`. The allowlist exposes authenticated models,
-completions, protocol-native chat completions, Responses, Messages, and token
-count with bounded SSE and client-side tool continuation. The read-only
-`client-config` output supports Codex's `wire_api = "responses"` provider and a
-Claude Code 2.1.241 projection; both name the protected token and CA environment
-variables without reading, printing, or persisting the token. Engine-native
-health, metrics, tokenizer, debug, admin, and addresses remain private; the
-control plane exposes only its authenticated, bounded metrics document. Warming or
-recovering generations return protocol-native `503` errors with `Retry-After`
-and never inherit a stale route.
-
-Ornith reasoning remains separate from answer text throughout the gateway:
-OpenAI Chat receives `reasoning_content`, Responses receives native reasoning
-summary items and SSE lifecycles, and Anthropic Messages receives thinking
-blocks, thinking deltas, and a deterministic local integrity signature that can
-be returned on a later tool turn. Anthropic adaptive, manual-budget,
-omitted-display, and disabled thinking retain their distinct wire semantics,
-including signed omitted-thinking history on later tool turns. Omitted sampling values
-come from the selected profile in `/etc/sy/spark/engines/*.toml`; values explicitly supplied by
-the client win. Context length is likewise an engine argument in that profile; a
-translated-stream idle deadline can be raised there for long prefills while retaining a
-bounded default for other profiles. The gateway has no model-name branch or compiled
-tuning constants.
-
-Capabilities are taken only from the configured engine profile. Ornith accepts
-bounded inline JPEG, PNG, or WebP images through OpenAI Responses and Anthropic
-Messages; the adapters validate the declared media type, file magic, decoded
-bytes, image count, and dimensions before contacting vLLM. Remote URLs, local
-paths, traversal, unsupported media, and images sent to text-only instances are
-rejected. A profile exposes only the routes and capabilities declared in
-`/etc/sy/spark/engines/*.toml`; unsupported tasks fail closed rather than selecting another
-runtime.
-
-The admission report exposes the declarative 8 GiB system reserve, 8 GiB
-emergency floor, and 100 GiB disk reserve. Missing or stale telemetry fails
-closed. The root executor independently samples pressure and durably suppresses
-restart before an emergency victim can be stopped; it never selects unlabeled
-work.
-
-Spark application releases are signed, content-addressed bundles installed side by
-side. Signed `SHA256SUMS` covers the ARM binary and the separate model and engine
-TOML files; `scripts/package-spark-release.sh` builds that layout. `upgrade`
-validates active engine identities, the N/N-1 database schema, a verified
-backup, and the protected host fingerprint before switching only the control
-plane; healthy engine containers remain running. Failed semantic health requests
-automatic rollback. `rollback` re-verifies both artifacts and swaps the exact
-`current`/`previous` links. `cert rotate` is SSH-only, preserves overlap material,
-hot-reloads a leaf under the pinned CA, and updates the workstation pin only when
-`--ca` explicitly rotates the CA. Every maintenance mutation requires exactly
-one of `--dry-run` or `--yes`.
-
-These commands never update the DGX OS, kernel, NVIDIA driver, CUDA, firmware,
-Docker, container toolkit, system Python, firewall, swap, clocks, or power
-configuration. Docker restart and host reboot are separate optional operator
-actions and are reported as `not_run` by default.
+Enable `integrations.sparkplane` with a verified release pin in `sy.toml`,
+then use `sy apply --dry-run` and `sy apply`. See the
+[Sparkplane integration guide](docs/how-to/install-spark.md).
+Appliance development and CI/CD are documented in
+[Sparkplane](https://github.com/Sumatoshi-tech/sparkplane/blob/main/docs/how-to/develop-spark.md).
 
 ### `agt` — sandboxed agent runner
 

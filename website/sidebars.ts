@@ -28,6 +28,7 @@ const sidebars: SidebarsConfig = {
         doc('how-to/apply-a-theme', 'Apply a theme'),
         doc('how-to/run-doctor', 'Run sy doctor'),
         doc('how-to/install-spark', 'Install the Spark agent'),
+        doc('how-to/develop-spark', 'Develop and release the Spark plane'),
         doc('how-to/serve-a-model-on-spark', 'Serve a model on Spark'),
         doc('how-to/run-sy-file', 'Run sy file from a shell'),
         doc('how-to/troubleshoot-sy-file', 'Troubleshoot sy file'),

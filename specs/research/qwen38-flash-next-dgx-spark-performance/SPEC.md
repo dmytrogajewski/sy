@@ -2,6 +2,11 @@
 
 Date: 2026-08-28
 
+Update 2026-09-20: see the [vLLM-only optimization follow-up](../qwen38-vllm-optimization-20260920/SPEC.md)
+for newer PLE, draft-head and prefix-cache patches and the current measured
+baseline. This document retains its August evidence; its engine recommendation
+and blanket prefix-cache limitation are not the current vLLM-only proposal.
+
 ## 1. Request
 
 Improve the effective performance of the exact installed
@@ -354,8 +359,12 @@ moving through SGLang pull requests. The candidate therefore cannot track
 Upstream context:
 
 - [Qwen3.8-Flash-Next support PR](https://github.com/sgl-project/sglang/pull/36497)
-- [SGLang attention backend documentation](https://sglang.io/docs/advanced_features/attention_backend)
-- [SGLang speculative decoding documentation](https://sglang.io/docs/advanced_features/speculative_decoding)
+<!-- The deep pages (docs.sglang.io/advanced_features/*.html) redirect from
+docs.sglang.ai and then time out from this network as of 2026-09-27, and the
+`sglang.io/docs/...` shape never resolved; `make docs-lint` gates on
+reachability, so the docs root is cited and the page named in the link text. -->
+- [SGLang documentation — advanced features / attention backend](https://docs.sglang.io/)
+- [SGLang documentation — advanced features / speculative decoding](https://docs.sglang.io/)
 
 ## 8. Proposed sy architecture
 

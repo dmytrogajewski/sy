@@ -73,6 +73,15 @@ You treat tests as the product's survival instinct, not a chore.
 - **No destructive ops without confirmation.** No `git push --force` on
   shared branches, no `systemctl stop` on a live daemon mid-pass, no
   `rm -rf ~/.cache/sy/aiplane/` without an `--yes` flag.
+- **Spark qualification is signed and finite.** Accept exact release-signed,
+  content-addressed manifests only; map operation enums to fixed runners in the
+  root executor. Never expose remote executable/argv injection, reuse managed
+  engine labels, or commit a terminal result before exact-container cleanup.
+- **Sparkplane is independent.** Appliance release and GPU qualification gates
+  live in `Sumatoshi-tech/sparkplane`. Run `make lint-spark` and `make test-spark`
+  for sy's pinned-client bridge alongside desktop gates. Do not add a source
+  dependency on Sparkplane or move engine/model policy back into sy.
+  GUI-only producers must share their consumers' feature boundary.
 - **Unsafe code is denied by default.** Requires a documented
   justification in a comment above the `unsafe` block.
 
