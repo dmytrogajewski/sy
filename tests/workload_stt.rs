@@ -69,13 +69,28 @@ fn read_wav_i16(path: &str) -> (Vec<i16>, u32) {
 
 #[test]
 fn whisper_medium_transcribes_amd_sample() {
-    let encoder = std::env::var_os("HOME")
+    // The loader refuses to run the AIE compile itself (it peaks near 20 GiB,
+    // which the knowledge unit's MemoryHigh cgroup throttles into a permanent
+    // stall — BUG-20260927-0910), so a checkout without the compiled `.rai`
+    // partitions can only skip, not fail.
+    let compiled = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .map(|h| h.join(".cache/sy/aiplane/whisper-medium/amd-src/encoder_model.onnx"));
-    if !encoder.map(|p| p.is_file()).unwrap_or(false) {
+        .map(|h| h.join(".cache/sy/aiplane/whisper-medium/whisper_medium_encoder"));
+    let has_partition = compiled
+        .map(|d| {
+            std::fs::read_dir(d)
+                .map(|rd| {
+                    rd.flatten()
+                        .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("rai"))
+                })
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    if !has_partition {
         eprintln!(
-            "skip: whisper-medium model cache absent; run \
-             prep_npu_workload.py --workload stt"
+            "skip: whisper-medium .rai partition missing; run \
+             source /opt/AMD/ryzenai/venv/bin/activate && \
+             python scripts/prep_npu_workload.py --workload stt"
         );
         return;
     }
@@ -104,15 +119,20 @@ fn whisper_medium_transcribes_amd_sample() {
         .output()
         .expect("spawn sy aiplane run");
 
-    // NOTE: the VitisAI EP segfaults in its session destructor at process
-    // exit (SIGSEGV / code 139) — a pre-existing, harmless teardown bug
-    // shared by every NPU workload (`sy aiplane run --workload embed` does
-    // the same). The transcript is fully written to stdout *before* the
-    // crash, and the production worker is SIGKILLed (no destructors run),
-    // so serving is unaffected. We therefore validate the stdout payload
-    // and tolerate a non-zero exit *as long as* the JSON result is present;
-    // a truly failed run prints nothing.
+    // Exit status is asserted, not tolerated. The VitisAI EP used to fault in
+    // its session destructor on the way out of `main` (SIGSEGV / code 139)
+    // *after* writing the transcript, and this test's tolerance of that hid
+    // the bug class until BUG-20260927-0400: the in-process CLI now leaves
+    // with `_exit` once its answer is flushed, so a clean exit is the
+    // contract. Anything else here is a regression.
     let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "sy aiplane run exited {:?}: {}{}",
+        out.status.code(),
+        stdout.trim(),
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(
         !stdout.trim().is_empty(),
         "sy aiplane run produced no output (exit {:?}): {}",

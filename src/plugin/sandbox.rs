@@ -589,13 +589,31 @@ PATH = "/usr/bin:/bin"
 
     /// [`runtime_dir_for`] precedence: env override beats
     /// `XDG_RUNTIME_DIR` which beats the `/tmp` fallback. The test
-    /// sets + unsets vars under the single-threaded `cargo test`
-    /// harness; concurrent var mutation would race, but the sandbox
-    /// module's tests share no env-sensitive state.
+    /// changes environment only in an exact-test child process, so
+    /// parallel preview tests cannot observe its temporary paths.
     #[test]
     fn runtime_dir_precedence_env_xdg_fallback() {
-        // SAFETY: single-threaded test context; no other thread reads
-        // these vars during this body.
+        const ISOLATED: &str = "SY_PLUGIN_RUNTIME_PROBE_CHILD";
+        if std::env::var_os(ISOLATED).is_none() {
+            let test = format!(
+                "{}::runtime_dir_precedence_env_xdg_fallback",
+                module_path!().split_once("::").unwrap().1
+            );
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &test])
+                .env(ISOLATED, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed;"));
+            return;
+        }
+        // SAFETY: the child runs this test alone, without concurrent
+        // preview launches or other environment-reading tests.
         unsafe {
             std::env::set_var(RUNTIME_DIR_ENV, "/tmp/override-root");
             std::env::set_var("XDG_RUNTIME_DIR", "/run/user/9999");
@@ -603,18 +621,42 @@ PATH = "/usr/bin:/bin"
         let p = runtime_dir_for("sy-plugin-md");
         assert_eq!(p, Path::new("/tmp/override-root/sy-plugin-md"));
 
+        // SAFETY: the same exact-test child isolation applies here.
         unsafe {
             std::env::remove_var(RUNTIME_DIR_ENV);
         }
         let p = runtime_dir_for("sy-plugin-md");
         assert_eq!(p, Path::new("/run/user/9999/sy-plugins/sy-plugin-md"));
 
+        // SAFETY: the same exact-test child isolation applies here.
         unsafe {
             std::env::remove_var("XDG_RUNTIME_DIR");
         }
         let p = runtime_dir_for("sy-plugin-md");
         // Fallback path under FALLBACK_RUNTIME_ROOT.
         assert_eq!(p, Path::new("/tmp/sy-plugins/sy-plugin-md"));
+    }
+
+    #[test]
+    fn runtime_precedence_probe_preserves_the_callers_environment() {
+        const EXPECTED: &str = "/tmp/sy-plugin-env-isolation-fixture";
+        const CHILD: &str = "SY_PLUGIN_ENV_ISOLATION_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            runtime_dir_precedence_env_xdg_fallback();
+            assert_eq!(std::env::var("XDG_RUNTIME_DIR").unwrap(), EXPECTED);
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", std::thread::current().name().unwrap()])
+            .env(CHILD, "1")
+            .env("XDG_RUNTIME_DIR", EXPECTED)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
 
     /// Empty manifest binary path is a misconfiguration the sandbox

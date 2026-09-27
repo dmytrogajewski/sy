@@ -6,23 +6,25 @@
 //! it (CLI commands must work without the bar running — missing
 //! socket = silent no-op).
 
-use std::{
-    env,
-    os::unix::net::UnixStream,
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex,
-    },
-    thread,
-    time::Duration,
+#[cfg(any(feature = "gui-iced", test))]
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc, Mutex,
 };
+#[cfg(feature = "gui-iced")]
+use std::thread;
+use std::{env, os::unix::net::UnixStream, path::PathBuf, time::Duration};
 
-use anyhow::{Context, Result};
+#[cfg(feature = "gui-iced")]
+use anyhow::Context;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sy_core::{ErrorCode, Priority};
+#[cfg(any(feature = "gui-iced", test))]
+use sy_core::ErrorCode;
+use sy_core::Priority;
+use sy_ipc::blocking::{build_request, write_request};
+#[cfg(any(feature = "gui-iced", test))]
 use sy_ipc::{
-    blocking::{build_request, write_request},
     BuildInfo, Capabilities, ErrorBody, Handler, HealthFn, HealthSnapshot, HealthState, Request,
     Response, Server, SystemMethods, SCHEMA_VERSION,
 };
@@ -55,6 +57,7 @@ impl Op {
         }
     }
 
+    #[cfg(any(feature = "gui-iced", test))]
     fn from_method(method: &str) -> Option<Self> {
         match method {
             METHOD_REFRESH => Some(Op::Refresh),
@@ -121,6 +124,7 @@ pub fn send(op: &Op) -> Result<()> {
 /// mpsc; the bar's main loop polls the receiver each tick. Spawns a
 /// tokio runtime in a dedicated thread to host the `sy_ipc::Server`
 /// while the bar itself stays sync (iced has its own event loop).
+#[cfg(feature = "gui-iced")]
 pub fn serve(tx: mpsc::Sender<Op>) -> Result<()> {
     let p = socket_path();
     if p.exists() {
@@ -163,12 +167,14 @@ pub fn serve(tx: mpsc::Sender<Op>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(feature = "gui-iced", test))]
 struct StackBridge {
     tx: Mutex<mpsc::Sender<Op>>,
     system: SystemMethods,
     healthy: Arc<AtomicBool>,
 }
 
+#[cfg(any(feature = "gui-iced", test))]
 impl StackBridge {
     fn new(tx: mpsc::Sender<Op>) -> Self {
         let cancel_registry = Arc::new(sy_ipc::CancelRegistry::new());
@@ -209,6 +215,7 @@ impl StackBridge {
     }
 }
 
+#[cfg(any(feature = "gui-iced", test))]
 impl Handler for StackBridge {
     async fn handle(&self, req: Request) -> Response {
         if let Some(resp) = self.system.try_handle(&req) {
@@ -248,6 +255,7 @@ impl Handler for StackBridge {
     }
 }
 
+#[cfg(any(feature = "gui-iced", test))]
 fn ok(request_id: ulid::Ulid) -> Response {
     Response::Ok {
         schema_version: SCHEMA_VERSION,
@@ -257,6 +265,7 @@ fn ok(request_id: ulid::Ulid) -> Response {
     }
 }
 
+#[cfg(any(feature = "gui-iced", test))]
 fn err(request_id: ulid::Ulid, code: ErrorCode, message: String) -> Response {
     Response::Err {
         schema_version: SCHEMA_VERSION,

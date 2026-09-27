@@ -36,11 +36,9 @@ pub mod ipc;
 // shape).
 pub mod keymap;
 pub mod mcp;
-// Step 27: bridge between the preview pipeline and the plugin runtime.
-// Not `gui-iced`-gated because the bridge is pure data + IPC; the
-// `view::preview` dispatcher (which IS gated) reads from it. CLI / MCP
-// builds can also reach for it (`sy file --headless plugin-preview` is
-// a future MCP affordance — kept compile-clean today).
+// Hover-preview bridge: only the GUI reducer consumes it. Headless
+// CLI/MCP preview dispatch has a separate shared IPC implementation.
+#[cfg(feature = "gui-iced")]
 pub mod plugin_bridge;
 // Step 25 (SPEC §3.3 item 7) — `/` fuzzy filter + `:k` knowledge
 // affordance. Not `gui-iced`-gated so `--ipc search` (CLI/MCP) can

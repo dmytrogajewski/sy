@@ -49,6 +49,7 @@ pub struct GpuAmdSample {
 /// no AMDGPU was found (NVIDIA-only or no discrete GPU).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GpuAmdSnapshot {
+    /// Public struct field in the sy core data model.
     pub cards: Vec<GpuAmdSample>,
 }
 

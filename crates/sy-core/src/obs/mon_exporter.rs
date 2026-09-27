@@ -64,13 +64,20 @@ const RUNTIME_DIR_MODE: u32 = 0o700;
 #[derive(Debug)]
 pub enum InstallError {
     /// Could not create the parent directory of the socket path.
-    CreateDir { path: PathBuf, source: io::Error },
+    CreateDir {
+        /// Directory that could not be created.
+        path: PathBuf,
+        /// Underlying filesystem error.
+        source: io::Error,
+    },
     /// `PrometheusBuilder::build()` failed — typically a bind error
     /// (stale socket the crate could not remove, EACCES on the
     /// runtime dir, ENOENT after a TOCTOU race) or a misconfigured
     /// builder.
     Build {
+        /// Runtime directory used by the exporter.
         path: PathBuf,
+        /// Exporter builder error.
         source: metrics_exporter_prometheus::BuildError,
     },
     /// The process already has a global `metrics` recorder

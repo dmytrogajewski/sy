@@ -36,8 +36,11 @@ use serde::{Deserialize, Serialize};
 /// pins the set of expected tokens.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlaneState {
+    /// Public struct field in the sy core data model.
     pub name: String,
+    /// Public struct field in the sy core data model.
     pub state: String,
+    /// Public struct field in the sy core data model.
     pub restarts: u32,
 }
 
@@ -45,6 +48,7 @@ pub struct PlaneState {
 /// Step 6's `SystemSnapshot` can embed `{ "planes": [...] }` directly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SupervisorSample {
+    /// Public struct field in the sy core data model.
     pub planes: Vec<PlaneState>,
 }
 

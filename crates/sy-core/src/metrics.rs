@@ -49,8 +49,11 @@ use metrics::{describe_counter, describe_gauge, describe_histogram};
 /// `metrics_util::MetricKind` from production code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MetricKind {
+    /// Public variant in the sy core data model.
     Counter,
+    /// Public variant in the sy core data model.
     Gauge,
+    /// Public variant in the sy core data model.
     Histogram,
 }
 
@@ -58,7 +61,9 @@ pub enum MetricKind {
 /// the call site, not the catalogue) and its kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CoreMetric {
+    /// Public struct field in the sy core data model.
     pub name: &'static str,
+    /// Public struct field in the sy core data model.
     pub kind: MetricKind,
 }
 

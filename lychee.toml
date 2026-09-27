@@ -103,6 +103,15 @@ exclude = [
   "^https?://linrunner\\.de/tlp",
   "^https?://biggo\\.com/",
 
+  # OpenAI's Codex docs (developers.openai.com, learn.chatgpt.com) sit behind
+  # a CDN that answers 403 to every non-browser client — verified
+  # 2026-09-27 with `curl -A 'Mozilla/5.0'` → 403 on both hosts, while the
+  # pages load in a browser. The citations are correct; the checker is
+  # blocked, so excluding them keeps `make docs-lint` a real signal instead
+  # of a green-waiting-to-flap one. Same class as the amd.com row above.
+  "^https?://developers\\.openai\\.com/",
+  "^https?://learn\\.chatgpt\\.com/",
+
   # Documentation-template placeholders. The documenter skill renders
   # `@maintainer-handle → https://github.com/maintainer-handle` as a
   # contributor-list example; the URL is intentionally a placeholder.

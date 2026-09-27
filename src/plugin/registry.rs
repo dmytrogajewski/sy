@@ -161,6 +161,7 @@ impl Registry {
     /// discovery fails without burdening the call site with a fallible
     /// `Option<Registry>`. `Registry::select_for` on an empty registry
     /// always returns `None`, surfacing `BridgeError::NoMatch`.
+    #[cfg(any(feature = "gui-iced", test))]
     pub fn empty() -> Self {
         Self {
             manifests: BTreeMap::new(),
@@ -239,6 +240,7 @@ impl Registry {
 /// returns an empty registry that always answers `None` to
 /// `select_for`. Lets the file manager keep starting when discovery
 /// itself blows up.
+#[cfg(any(feature = "gui-iced", test))]
 pub fn discover_empty() -> Registry {
     Registry::empty()
 }
@@ -542,6 +544,17 @@ mod tests {
     //! `set_var` is process-global. The lock is shared with the e2e
     //! binary so `step07_*` and the in-source tests serialise.
     use super::*;
+
+    #[test]
+    fn empty_preview_registry_cannot_dispatch_any_plugin() {
+        for registry in [Registry::empty(), discover_empty()] {
+            assert!(registry.plugin_ids().next().is_none());
+            assert_eq!(
+                registry.select_for(CapKind::Previewer, "text/plain", "note.txt"),
+                None
+            );
+        }
+    }
 
     const SAMPLE_MANIFEST: &str = r#"
 api = "1"

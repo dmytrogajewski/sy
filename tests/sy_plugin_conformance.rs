@@ -266,6 +266,11 @@ async fn preview_roundtrip_under_100ms_warm() {
 #[tokio::test(flavor = "current_thread")]
 async fn crash_then_restart_with_backoff() {
     let tmp = tempfile::tempdir().expect("tmp");
+    let sibling_root = tempfile::tempdir().expect("sibling tmp");
+    let (sibling_opts, _sibling_ctx) = opts_with_host(sibling_root.path());
+    let mut sibling = proc_mod::spawn(fake_manifest(false, 64), sibling_opts)
+        .await
+        .expect("sibling spawn");
     let m = fake_manifest(false, 64);
     let (mut opts, _ctx) = opts_with_host(tmp.path());
     // Lengthen ping so the test only exercises the EOF→restart path.
@@ -274,12 +279,18 @@ async fn crash_then_restart_with_backoff() {
     opts.max_restart_attempts = 3;
     let mut proc = proc_mod::spawn(m, opts).await.expect("spawn");
     assert_eq!(proc.health(), proc_mod::State::Ready);
-    // Find the running fake binary by /proc walk + SIGKILL it. The
+    // Find only this fixture's child by its private cwd, then SIGKILL it. The
     // supervisor's reader loop sees EOF and walks the backoff ladder.
-    let pids = find_children_by_cmdline(b"sy-plugin-fake\0");
-    assert!(!pids.is_empty(), "fake child must be alive before kill");
+    let pids = find_children_by_cmdline(b"sy-plugin-fake\0", tmp.path());
+    let sibling_pids = find_children_by_cmdline(b"sy-plugin-fake\0", sibling_root.path());
+    assert_eq!(sibling_pids.len(), 1);
+    assert!(
+        !pids.contains(&sibling_pids[0]),
+        "another live fixture is not a crash target"
+    );
+    assert_eq!(pids.len(), 1, "only the owned fake child may be selected");
     for pid in &pids {
-        // SAFETY: SIGKILL on a pid we just observed alive is a
+        // SAFETY: SIGKILL selects only the live fake in this fixture's private cwd;
         // single async-signal-safe syscall; ESRCH on a races-to-exit
         // pid still produces the EOF the supervisor needs.
         unsafe { libc::kill(*pid as libc::pid_t, libc::SIGKILL) };
@@ -301,6 +312,14 @@ async fn crash_then_restart_with_backoff() {
         .await
         .expect("preview after restart");
     assert_eq!(v["image"]["w"], 1);
+    assert_eq!(
+        find_children_by_cmdline(b"sy-plugin-fake\0", sibling_root.path()),
+        sibling_pids
+    );
+    sibling
+        .shutdown()
+        .await
+        .expect("untouched sibling shutdown");
     let _ = proc.shutdown().await;
 }
 
@@ -510,11 +529,10 @@ async fn ping_then_pong_roundtrip() {
 // copied verbatim here so the conformance binary is self-contained
 // and doesn't grow a cross-test `mod common` import surface) ──
 
-/// Walk `/proc/<pid>/cmdline` and return every pid whose argv
-/// contains the given NUL-suffixed needle. Used by scenario 3 to
-/// locate the running fake binary without exposing the supervisor's
-/// internal `Child` handle.
-fn find_children_by_cmdline(needle_with_nul: &[u8]) -> Vec<u32> {
+/// Filter by the fixture's private cwd before reading any cmdline; return only
+/// its fake child matching the NUL-suffixed needle. Scenario 3 owns that fixture,
+/// so it never selects another test's child or exposes unrelated process argv.
+fn find_children_by_cmdline(needle_with_nul: &[u8], workdir: &Path) -> Vec<u32> {
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return Vec::new();
     };
@@ -527,6 +545,13 @@ fn find_children_by_cmdline(needle_with_nul: &[u8]) -> Vec<u32> {
         let Ok(pid) = name_s.parse::<u32>() else {
             continue;
         };
+        if std::fs::read_link(format!("/proc/{pid}/cwd"))
+            .ok()
+            .as_deref()
+            != Some(workdir)
+        {
+            continue;
+        }
         let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
             continue;
         };

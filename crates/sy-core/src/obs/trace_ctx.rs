@@ -71,6 +71,7 @@ pub struct TraceCtx {
 pub struct TraceCtxLayer;
 
 impl TraceCtxLayer {
+    /// Public associated function in the sy core data model.
     pub fn new() -> Self {
         Self
     }

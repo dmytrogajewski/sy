@@ -755,6 +755,7 @@ async fn handle_search(this: &FileHandler, req: Request) -> Response {
                 );
             }
         };
+        tracing::debug!(status = ?outcome.status, "file knowledge search completed");
         knowledge::merge(outcome.hits, filename_hits)
             .into_iter()
             .map(|(p, _)| p)

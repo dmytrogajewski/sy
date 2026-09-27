@@ -242,10 +242,15 @@ fn exit_code_for(state: &str) -> i32 {
 mod tests {
     use super::*;
 
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
+    /// `crate::aiplane::TEST_ENV_LOCK` is the contract: every test in this
+    /// binary that mutates `XDG_RUNTIME_DIR` rendezvouses there, or the
+    /// aiplane socket-binding smoke tests bind on one path and connect on
+    /// another (`ENOENT` flakes in `aiplane::ipc::tests`). A private mutex
+    /// here looks safe and is not — it only serialises against itself.
     fn with_runtime_dir<F: FnOnce()>(dir: &str, f: F) {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::aiplane::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let prev = std::env::var("XDG_RUNTIME_DIR").ok();
         std::env::set_var("XDG_RUNTIME_DIR", dir);
         f();

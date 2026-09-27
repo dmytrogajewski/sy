@@ -20,19 +20,29 @@ release:
 test:
 	cargo test --workspace --all-targets
 
+.PHONY: test-spark
+test-spark:
+	cargo test --no-default-features --test sparkplane_bridge
+
 test-npu:
 	cargo test --workspace --all-targets --features test-npu
 
 # Retrieval-eval golden set (REQ-9). Runs the labelled queries through
 # the live index and reports recall@1/5, MRR, abstain accuracy. Exits
-# non-zero (drift, code 3) when a metric regresses past tolerance, so CI
-# gates on it. Needs the sy-knowledge daemon running with an index.
+# non-zero (drift, code 3) when a metric regresses past the floors in
+# `src/knowledge/eval.rs`. Needs the sy-knowledge daemon running with an
+# index, so it is an on-host pre-push gate — GitHub Actions has no index
+# to score against and runs `make lint` + `make docs-lint` instead.
 eval:
 	cargo run --quiet -- knowledge eval --json
 
 lint:
 	./scripts/check_main_rs_loc.sh 1118
 	cargo clippy --workspace --all-targets -- -D warnings
+
+.PHONY: lint-spark
+lint-spark:
+	cargo clippy --no-default-features --test sparkplane_bridge -- -D warnings
 
 fmt:
 	cargo fmt --all
@@ -52,8 +62,10 @@ bench:
 
 install: release
 	cp --remove-destination target/release/sy ~/.local/bin/sy
-	@if command -v sudo >/dev/null && [ "$$(getenforce 2>/dev/null)" = "Enforcing" ]; then \
-		sudo restorecon -v ~/.local/bin/sy; \
+	@if [ "$$(getenforce 2>/dev/null)" = "Enforcing" ]; then \
+		if restorecon -v ~/.local/bin/sy 2>/dev/null; then :; \
+		elif command -v sudo >/dev/null && sudo restorecon -v ~/.local/bin/sy; then :; \
+		else echo "  ! could not relabel ~/.local/bin/sy — run: sudo restorecon -v ~/.local/bin/sy"; exit 1; fi; \
 	fi
 
 # Productivized recovery for the initramfs-too-early amdxdna probe
@@ -84,7 +96,7 @@ docs-lint:
 	@set -e; \
 	if command -v markdownlint-cli2 >/dev/null 2>&1; then \
 		echo "==> markdownlint-cli2"; \
-		markdownlint-cli2 '**/*.md' '!target/**' '!node_modules/**' '!specs/runs/**' '!.vale/**'; \
+		markdownlint-cli2 '**/*.md' '!target/**' '!node_modules/**' '!website/node_modules/**' '!specs/runs/**' '!.vale/**'; \
 	else \
 		echo "skip: markdownlint-cli2 not installed (npm i -g markdownlint-cli2)"; \
 	fi; \

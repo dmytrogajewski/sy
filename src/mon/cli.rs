@@ -349,11 +349,13 @@ mod tests {
     /// caught.
     #[test]
     fn snapshot_exits_3_when_aggregator_down() {
-        use std::sync::Mutex;
-        // Tests mutate XDG_RUNTIME_DIR; serialise with other env-
-        // mutating tests in this module.
-        static ENV_LOCK: Mutex<()> = Mutex::new(());
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // Tests mutate XDG_RUNTIME_DIR, so this must rendezvous on the
+        // binary-wide lock (see `crate::aiplane::TEST_ENV_LOCK`): the aiplane
+        // smoke tests bind listeners under whatever `XDG_RUNTIME_DIR` says,
+        // and a module-local mutex does not serialise against them.
+        let _lock = crate::aiplane::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let prev = std::env::var_os("XDG_RUNTIME_DIR");
         let tmp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("XDG_RUNTIME_DIR", tmp.path());

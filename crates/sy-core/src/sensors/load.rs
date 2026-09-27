@@ -9,8 +9,11 @@ use serde::{Deserialize, Serialize};
 /// can render decimals without a second division.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct LoadSample {
+    /// Public struct field in the sy core data model.
     pub one: f32,
+    /// Public struct field in the sy core data model.
     pub five: f32,
+    /// Public struct field in the sy core data model.
     pub fifteen: f32,
 }
 

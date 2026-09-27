@@ -11,7 +11,7 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use minijinja::Environment;
-use serde::Deserialize;
+use settings::{load_sy_file, SyFile};
 use walkdir::WalkDir;
 
 mod agt;
@@ -40,9 +40,10 @@ mod npu;
 mod plugin;
 mod popup;
 mod profile;
+mod settings;
 mod silent;
 mod sound;
-mod spark;
+mod sparkplane_bridge;
 mod stack;
 mod supervision;
 mod syauth;
@@ -81,6 +82,9 @@ enum Cmd {
     ///   sy apply --yes                # confirm destructive ops
     ///   sy apply                      # apply everything
     Apply {
+        /// Apply only the named integration; leave desktop and other components untouched.
+        #[arg(long, env = "SY_APPLY_ONLY", value_parser = ["sparkplane"])]
+        only: Option<String>,
         /// Theme name (resolved as `themes/<name>.toml`)
         #[arg(short, long)]
         theme: Option<String>,
@@ -371,9 +375,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: plugin::cli::PluginCmd,
     },
+    /// Forward commands to the separately installed Sparkplane client.
+    #[command(disable_help_flag = true, disable_help_subcommand = true)]
     Spark {
-        #[command(flatten)]
-        cli: spark::cli::SparkCli,
+        #[arg(num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<std::ffi::OsString>,
     },
     /// `systemctl --user` / `journalctl --user` wrapper per SPEC §4.7
     /// (arch-supervision Step 3). Subcommands: start|stop|restart|
@@ -389,24 +395,23 @@ enum Cmd {
         cmd: supervision::service::ServiceCmd,
     },
 }
-#[derive(Deserialize, Default)]
-struct SyFile {
-    theme: Option<String>,
-}
-
 const DEFAULT_THEME: &str = "gruvbox-material";
 
 fn main() -> Result<()> {
+    let cli = Cli::parse();
+    if let Cmd::Spark { args } = &cli.command {
+        return sparkplane_bridge::dispatch(args);
+    }
     // Must run before any threads spawn: re-exec with the AMD venv's
     // LD_LIBRARY_PATH + ORT_DYLIB_PATH baked in (no-op when absent).
     aiplane::reexec::maybe_reexec_with_amd_env();
-    // SPEC §4.6 / arch-observability Step 1: install the CLI's
-    // tracing subscriber. `_obs_guard` lives until `main` returns.
-    let _obs_guard = sy_core::obs::init(sy_core::obs::Mode::Cli)?;
+    // SPEC §4.6 Step 1 + BUG-20260927-1500: install the CLI subscriber unless
+    // the subcommand is a plane that installs its own. Guard lives to `main`'s end.
+    let _obs_guard = sy_core::obs::init_cli_unless(cli.command.installs_own_subscriber())?;
 
     // SPEC §4.6 / arch-observability Step 4: seed a root trace_id
     // so CLI- and daemon-side logs share an id (see sy_core::obs).
-    let result = sy_core::obs::with_trace_id(sy_core::TraceId::new(), None, run);
+    let result = sy_core::obs::with_trace_id(sy_core::TraceId::new(), None, || run(cli));
     if let Err(e) = &result {
         // Map domain errors to their declared CLIG exit codes.
         if let Some(ae) = e.downcast_ref::<agt::AgtError>() {
@@ -425,9 +430,6 @@ fn main() -> Result<()> {
             eprintln!("error: {}", se.msg);
             std::process::exit(se.code);
         }
-        if let Some(se) = e.downcast_ref::<spark::cli::SparkError>() {
-            se.exit();
-        }
         if let Some(me) = e.downcast_ref::<mon::MonError>() {
             eprintln!("error: {}", me.msg);
             std::process::exit(me.code);
@@ -436,9 +438,7 @@ fn main() -> Result<()> {
     result
 }
 
-fn run() -> Result<()> {
-    let cli = Cli::parse();
-
+fn run(cli: Cli) -> Result<()> {
     // Rendering commands need the repo; planes including Spark do not, so
     // startup and remote-appliance commands work from any directory.
     let resolve_repo = || -> Result<(PathBuf, SyFile, PathBuf)> {
@@ -455,6 +455,7 @@ fn run() -> Result<()> {
 
     match cli.command {
         Cmd::Apply {
+            only,
             theme,
             dry_run,
             diff,
@@ -462,12 +463,20 @@ fn run() -> Result<()> {
             yes,
         } => {
             let (root, syf, target) = resolve_repo()?;
+            if only.is_some() {
+                return sparkplane_bridge::apply_cli(
+                    syf.integrations.sparkplane.as_ref(),
+                    dry_run || diff,
+                    json || diff,
+                );
+            }
             let name = theme
                 .or(syf.theme.clone())
                 .unwrap_or_else(|| DEFAULT_THEME.to_string());
             let ctx = load_theme(&root, &name)?;
             // `--diff` is a documented alias for `--dry-run --json`.
             let dry = dry_run || diff;
+            sparkplane_bridge::apply_cli(syf.integrations.sparkplane.as_ref(), dry, false)?;
             apply(&root, &target, &ctx, &name, dry)?;
             apply_units(&root, dry, json || diff, yes)
         }
@@ -562,7 +571,7 @@ fn run() -> Result<()> {
         Cmd::Service { cmd } => supervision::service::dispatch(cmd),
         Cmd::Mon { cmd } => mon::cli::dispatch(cmd.unwrap_or(mon::cli::default_subcommand())),
         Cmd::Plugin { cmd } => plugin::cli::dispatch(cmd),
-        Cmd::Spark { cli } => spark::cli::dispatch(cli),
+        Cmd::Spark { args } => sparkplane_bridge::dispatch(&args),
     }
 }
 
@@ -591,15 +600,6 @@ fn default_target() -> Result<PathBuf> {
     }
     let home = env::var("HOME").context("HOME not set")?;
     Ok(PathBuf::from(home).join(".config"))
-}
-
-fn load_sy_file(root: &Path) -> Result<SyFile> {
-    let p = root.join("sy.toml");
-    if !p.exists() {
-        return Ok(SyFile::default());
-    }
-    let s = fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
-    toml::from_str(&s).with_context(|| format!("parse {}", p.display()))
 }
 
 fn load_theme(root: &Path, name: &str) -> Result<toml::Table> {
@@ -1060,7 +1060,7 @@ fn tg_theme() -> Result<()> {
     }
     Ok(())
 }
-
+/// Reports whether an executable name is available on `PATH`.
 pub fn which(name: &str) -> bool {
     std::process::Command::new("sh")
         .arg("-c")

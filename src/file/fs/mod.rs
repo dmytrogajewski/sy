@@ -15,6 +15,7 @@ pub mod mime;
 // Step 32 (SPEC §3.3 item 14) — `/proc/self/mountinfo` parser +
 // optional udisks2 D-Bus probe. The 3-pane sidebar + `:m` palette
 // both read `Mount` via this module.
+#[cfg(any(feature = "gui-iced", test))]
 pub mod mounts;
 pub mod trash;
 pub mod walk;

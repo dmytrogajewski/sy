@@ -10,8 +10,11 @@ use serde::{Deserialize, Serialize};
 /// ever lands on a workstation with more RAM than that.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemSample {
+    /// Public struct field in the sy core data model.
     pub total_mib: u64,
+    /// Public struct field in the sy core data model.
     pub used_mib: u64,
+    /// Public struct field in the sy core data model.
     pub swap_used_mib: u64,
 }
 
