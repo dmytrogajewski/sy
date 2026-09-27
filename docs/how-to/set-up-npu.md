@@ -61,7 +61,7 @@ XDNA NPU, and confirm `sy aiplane` serves embeddings from
    `rerank` then pay the full AIE codegen cost on the first daemon start,
    while `stt` refuses to load and tells you to re-run prep.
 
-2b. Speech (`stt`) is optional and prep-managed separately. The Whisper
+3. Speech (`stt`) is optional and prep-managed separately. The Whisper
    artefacts arrive VAIML-*partitioned* (the graph is cut for the AIE) but
    not *compiled*: the `.rai` bitstream for each of the two partitions is
    built locally, ~6 min and ~19.5 GiB peak RSS in total. That belongs here,
@@ -92,7 +92,7 @@ XDNA NPU, and confirm `sy aiplane` serves embeddings from
    Expect "He hoped there would be stew for dinner, turnips and carrots
    …". A cold daemon-side load takes ~7 s once the partitions exist.
 
-3. Restart the planes so `aiplane` picks up AMD's libraries. On
+4. Restart the planes so `aiplane` picks up AMD's libraries. On
    start it re-execs itself with `LD_LIBRARY_PATH` pointing at the
    Ryzen AI runtime (see [glossary: re-exec dance](../reference/glossary.md#re-exec-dance)):
 
@@ -100,7 +100,7 @@ XDNA NPU, and confirm `sy aiplane` serves embeddings from
    systemctl --user restart sy.target
    ```
 
-4. Confirm the NPU plane is up and the embed backend is `vitisai`:
+5. Confirm the NPU plane is up and the embed backend is `vitisai`:
 
    ```bash
    sy aiplane status --json
@@ -112,7 +112,7 @@ XDNA NPU, and confirm `sy aiplane` serves embeddings from
    detected; check that `/opt/AMD/ryzenai/venv` exists and that you
    restarted `sy.target` after installing it.
 
-5. If the tile in the bar ever shows `🧠 !`, or `sy knowledge status`
+6. If the tile in the bar ever shows `🧠 !`, or `sy knowledge status`
    says `daemon: down`, the artifacts are the first thing to check —
    `~/.cache` is a legitimate cleanup target and the plane notices:
 
