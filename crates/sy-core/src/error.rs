@@ -66,6 +66,7 @@ impl ErrorCode {
         ErrorCode::BadRequest,
     ];
 
+    /// Returns the stable string representation of this error code.
     pub fn as_str(self) -> &'static str {
         match self {
             ErrorCode::Overloaded => "Overloaded",

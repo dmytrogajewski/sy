@@ -171,8 +171,11 @@ pub enum Req {
     },
     /// REQ-10 fetch-by-id: resolve a single chunk's full (uncapped)
     /// text + payload by the stable `chunk_id` a bounded search result
-    /// carries. `chunk_id` is the qdrant point id (blake3-derived in
-    /// `chunk::point_id`); the daemon answers with [`Resp::Chunk`].
+    /// carries. `chunk_id` is **qdrant's own point id**, passed through from
+    /// the search response — callers must not re-derive it from
+    /// `file_path`/`chunk_index`, because pipelines hash their own domain
+    /// keys (`chunk::point_id` is one such producer, not the contract);
+    /// the daemon answers with [`Resp::Chunk`].
     GetChunk { chunk_id: String },
 }
 
@@ -295,6 +298,11 @@ pub fn socket_path() -> PathBuf {
 /// NPU wake-up + compile-cache hit on the first call.
 const DEFAULT_DEADLINE_MS: u64 = 30_000;
 
+/// Read budget for one `aiplane.batch` round trip: a full client-side batch
+/// (see `knowledge::embed::EMBED_IPC_MAX_CALL`) plus the daemon's cold NPU
+/// wake-up while it is otherwise busy.
+const BATCH_READ_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// Fire-and-forget op. Silently succeeds if the daemon isn't listening.
 pub fn send(op: &Op) -> Result<()> {
     let path = socket_path();
@@ -332,6 +340,123 @@ pub fn request_with_priority(req: &Req, priority: Priority) -> std::result::Resu
     let payload = read_v1_frame(&mut stream).map_err(wire_err)?;
     let v1: sy_ipc::Response = serde_json::from_slice(&payload).map_err(wire_err)?;
     v1_response_to_legacy(method, v1).map_err(IpcError::Wire)
+}
+
+/// Batched workload dispatch over the v1 `aiplane.batch` method the
+/// knowledge daemon already advertises ([`AIPLANE_METHODS`]).
+///
+/// Why this exists: `/dev/accel/accel0` is single-context, so a CLI
+/// process that embedded its own batch would either steal the device from
+/// the daemon or silently drop to the 14-thread CPU EP — turning a
+/// minutes-long NPU pass into an hours-long storm (the exact failure
+/// `sy knowledge sync` warns about). `sy knowledge index` therefore hands
+/// the batch to the device owner and waits. Until this existed,
+/// `knowledge::embed::embed_batch` could only reach an *in-process*
+/// supervisor, which no CLI process ever installs — so
+/// `sy knowledge index [–-source X]` died with "aiplane supervisor not
+/// running" whether or not the plane was up.
+///
+/// `Err(WorkloadFailed("aiplane daemon not running: …"))` when the socket
+/// is absent, so callers can turn it into an actionable message rather than
+/// a stack of guesses.
+pub fn batch_blocking(
+    workload: WorkloadKind,
+    inputs: Vec<WorkloadInput>,
+    priority: Priority,
+) -> Result<Vec<WorkloadOutput>, super::error::AiplaneError> {
+    batch_blocking_at(&socket_path(), workload, inputs, priority)
+}
+
+/// [`batch_blocking`] with the socket chosen by the caller, so the
+/// no-daemon path is testable without mutating `XDG_RUNTIME_DIR` (every
+/// mutation is a rendezvous request against the aiplane smoke tests).
+pub fn batch_blocking_at(
+    path: &std::path::Path,
+    workload: WorkloadKind,
+    inputs: Vec<WorkloadInput>,
+    priority: Priority,
+) -> Result<Vec<WorkloadOutput>, super::error::AiplaneError> {
+    use super::error::AiplaneError;
+    let mut stream = UnixStream::connect(path).map_err(|e| {
+        AiplaneError::WorkloadFailed(anyhow::anyhow!(
+            "aiplane daemon not running: connect {}: {e}",
+            path.display()
+        ))
+    })?;
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+    // Longer than a single-run read: one call carries up to
+    // `knowledge::embed::EMBED_IPC_MAX_CALL` passages and the daemon may be
+    // mid-pass on the same device.
+    let _ = stream.set_read_timeout(Some(BATCH_READ_TIMEOUT));
+    let envelope =
+        v1_request_with_priority(M_AIPLANE_BATCH, batch_params(workload, &inputs), priority);
+    let bytes =
+        serde_json::to_vec(&envelope).map_err(|e| AiplaneError::WorkloadFailed(e.into()))?;
+    write_v1_frame(&mut stream, &bytes).map_err(|e| AiplaneError::WorkloadFailed(e.into()))?;
+    let payload = read_v1_frame(&mut stream).map_err(|e| AiplaneError::WorkloadFailed(e.into()))?;
+    let v1: sy_ipc::Response =
+        serde_json::from_slice(&payload).map_err(|e| AiplaneError::WorkloadFailed(e.into()))?;
+    match v1 {
+        sy_ipc::Response::Ok { result, .. } => decode_batch_outputs(result, inputs.len()),
+        other => {
+            let msg = v1_error_message(&other);
+            Err(AiplaneError::WorkloadFailed(anyhow::anyhow!(
+                "aiplane.batch: {msg}"
+            )))
+        }
+    }
+}
+
+/// Params for `aiplane.batch`. Factored out so the unit test can assert the
+/// client's encoding against the *server's* own deserializing struct — a
+/// renamed field here is otherwise a runtime 400 from a healthy daemon.
+fn batch_params(workload: WorkloadKind, inputs: &[WorkloadInput]) -> serde_json::Value {
+    serde_json::json!({ "workload": workload, "inputs": inputs })
+}
+
+/// Decode `aiplane.batch`'s `{"outputs": […]}`. A short answer is an error,
+/// not a truncation: the index path maps vectors to chunks *positionally*,
+/// so accepting a partial batch would upsert half a file and call it done.
+fn decode_batch_outputs(
+    result: serde_json::Value,
+    expected: usize,
+) -> Result<Vec<WorkloadOutput>, super::error::AiplaneError> {
+    use super::error::AiplaneError;
+    let outputs: Vec<WorkloadOutput> = serde_json::from_value(
+        result
+            .get("outputs")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    )
+    .map_err(|e| AiplaneError::WorkloadFailed(anyhow::anyhow!("aiplane.batch outputs: {e}")))?;
+    if outputs.len() != expected {
+        return Err(AiplaneError::WorkloadFailed(anyhow::anyhow!(
+            "aiplane.batch returned {} outputs for {expected} inputs",
+            outputs.len()
+        )));
+    }
+    Ok(outputs)
+}
+
+/// Best-effort error text out of a non-`Ok` v1 response.
+fn v1_error_message(resp: &sy_ipc::Response) -> String {
+    match resp {
+        sy_ipc::Response::Err { error, .. } => error.message.clone(),
+        other => format!("unexpected response {other:?}"),
+    }
+}
+
+/// Build a v1 request carrying the caller's QoS class.
+/// `request_with_priority` inlines the same two lines for the legacy path;
+/// new callers go through here.
+fn v1_request_with_priority(
+    method: &str,
+    params: serde_json::Value,
+    priority: Priority,
+) -> sy_ipc::Request {
+    let mut req = build_v1_request(method, params);
+    req.priority = priority;
+    req
 }
 
 fn wire_err<E: Into<anyhow::Error>>(e: E) -> IpcError {
@@ -584,8 +709,13 @@ async fn reject_legacy_envelope(
 /// wires this to `aiplane::supervisor::current()`; tests inject a
 /// `FakeWorkload`-driven dispatcher so the bridge can be exercised
 /// without the multi-process supervisor up.
+///
+/// One method, [`AiplaneDispatch::batch`], because after BUG-20260927-2010
+/// both IPC verbs arrive as an N-input request: the backend was already
+/// batch-shaped (`Supervisor::run_batch`), and a separate `run` entry point
+/// was how `aiplane.batch` ended up on a code path the scheduler could not
+/// reach. `aiplane.run` is a batch of one.
 pub trait AiplaneDispatch: Send + Sync + 'static {
-    fn run(&self, workload: WorkloadKind, input: WorkloadInput) -> Result<WorkloadOutput>;
     fn batch(
         &self,
         workload: WorkloadKind,
@@ -609,15 +739,6 @@ pub trait AiplaneDispatch: Send + Sync + 'static {
 pub struct SupervisorDispatch;
 
 impl AiplaneDispatch for SupervisorDispatch {
-    fn run(&self, workload: WorkloadKind, input: WorkloadInput) -> Result<WorkloadOutput> {
-        let sup = super::supervisor::current()
-            .ok_or_else(|| anyhow::anyhow!("aiplane supervisor not running"))?;
-        sup.run_batch(workload, vec![input]).and_then(|mut outs| {
-            outs.pop()
-                .ok_or_else(|| anyhow::anyhow!("supervisor returned empty batch"))
-        })
-    }
-
     fn batch(
         &self,
         workload: WorkloadKind,
@@ -653,7 +774,7 @@ struct KnowledgeBridge {
     /// `aiplane.cancel` handler reads it to resolve the workload
     /// kind so callers can fire `sy aiplane cancel <request_id>`
     /// without naming the workload.
-    inflight_kinds: Arc<std::sync::Mutex<std::collections::HashMap<Ulid, WorkloadKind>>>,
+    inflight_kinds: Arc<InflightKinds>,
     /// `JoinHandle` of the scheduler dispatcher thread. Held so the
     /// thread stays alive for the bridge's lifetime; dropping the
     /// bridge drops the Scheduler senders and the dispatcher exits
@@ -735,6 +856,45 @@ pub fn current_scheduler() -> Option<Arc<Scheduler>> {
     CURRENT_SCHEDULER.get().cloned()
 }
 
+/// The bridge's live `request_id -> WorkloadKind` registry (SPEC §4.2 /
+/// arch-aiplane-scheduler Step 7), shared between the workload handlers and
+/// the `aiplane.cancel` handler. Always held as `Arc<InflightKinds>`.
+type InflightKinds = std::sync::Mutex<std::collections::HashMap<Ulid, WorkloadKind>>;
+
+/// RAII entry in [`InflightKinds`]: registers on creation, removes on drop.
+/// Both workload handlers hold one for the request's lifetime, so every exit
+/// path — admit rejection, cancellation, dropped oneshot, success — cleans up
+/// without repeating the lock, and `aiplane.cancel <request_id>` can always
+/// resolve the workload kind. `aiplane.batch` held no entry at all before
+/// BUG-20260927-2010, because it never entered the scheduler that the registry
+/// mirrors: cancelling an inflight batch required the caller to also name the
+/// workload, unlike `aiplane.run`.
+struct InflightKindGuard {
+    map: Arc<InflightKinds>,
+    id: Ulid,
+}
+
+impl InflightKindGuard {
+    fn new(map: &Arc<InflightKinds>, id: Ulid, kind: WorkloadKind) -> Self {
+        map.lock()
+            .expect("inflight_kinds poisoned")
+            .insert(id, kind);
+        Self {
+            map: Arc::clone(map),
+            id,
+        }
+    }
+}
+
+impl Drop for InflightKindGuard {
+    fn drop(&mut self) {
+        self.map
+            .lock()
+            .expect("inflight_kinds poisoned")
+            .remove(&self.id);
+    }
+}
+
 /// Synchronous "admit + wait" through the bridge's scheduler. Used
 /// by daemon-side sync handlers (knowledge.search_rerank's
 /// embed pass, MCP tool dispatch) that need priority-aware
@@ -748,6 +908,30 @@ pub fn admit_blocking(
     priority: sy_core::Priority,
 ) -> Result<WorkloadOutput, super::error::AiplaneError> {
     use super::error::AiplaneError;
+    let mut outputs = admit_blocking_batch(workload, vec![input], priority)?;
+    outputs.pop().ok_or_else(|| {
+        AiplaneError::WorkloadFailed(anyhow::anyhow!(
+            "scheduler: backend returned no output for a one-input {workload:?} request"
+        ))
+    })
+}
+
+/// [`admit_blocking`] for a batch: one admission, one backend call, N
+/// outputs.
+///
+/// This exists because the plane's *own* index pass used to skip the
+/// scheduler and call `Supervisor::run_batch` directly from inside the
+/// daemon — the same bypass `aiplane.batch` had over IPC (BUG-20260927-2010).
+/// Routing it here is what puts a 700-file embed pass into the `Background`
+/// queue where a foreground `knowledge_search` either outranks it or
+/// preempts it via the cross-class hard escape, instead of contending for the
+/// NPU with nothing in between.
+pub fn admit_blocking_batch(
+    workload: WorkloadKind,
+    inputs: Vec<WorkloadInput>,
+    priority: sy_core::Priority,
+) -> Result<Vec<WorkloadOutput>, super::error::AiplaneError> {
+    use super::error::AiplaneError;
     use tokio_util::sync::CancellationToken;
     use ulid::Ulid;
     let scheduler = current_scheduler().ok_or_else(|| {
@@ -756,7 +940,7 @@ pub fn admit_blocking(
     let (req, rx) = SchedRequest::new(
         Ulid::new(),
         workload,
-        input,
+        inputs,
         priority,
         None,
         CancellationToken::new(),
@@ -887,13 +1071,9 @@ impl KnowledgeBridge {
         // SPEC §4.2 step 2: register the workload with the inflight
         // registry *before* the optional pre-admit sleep so a
         // fast-arriving `aiplane.cancel { target_request_id }` (no
-        // workload field) can still resolve it. Removed in every
-        // exit path below (sleep-cancel, post-sleep token check,
-        // admit failure, response).
-        self.inflight_kinds
-            .lock()
-            .expect("inflight_kinds poisoned")
-            .insert(req.request_id, p.workload);
+        // workload field) can still resolve it. The guard removes it
+        // on every exit path below.
+        let _inflight = InflightKindGuard::new(&self.inflight_kinds, req.request_id, p.workload);
         if let Some(ms) = p.sleep_ms {
             // Cancellable budget so the cancel test can interrupt
             // an otherwise instant FakeWorkload before it runs.
@@ -902,20 +1082,12 @@ impl KnowledgeBridge {
             tokio::select! {
                 biased;
                 _ = token.cancelled() => {
-                    self.inflight_kinds
-                        .lock()
-                        .expect("inflight_kinds poisoned")
-                        .remove(&req.request_id);
                     return v1_err(req.request_id, ErrorCode::Cancelled, "aiplane.run cancelled");
                 }
                 _ = &mut sleep => {}
             }
         }
         if token.is_cancelled() {
-            self.inflight_kinds
-                .lock()
-                .expect("inflight_kinds poisoned")
-                .remove(&req.request_id);
             return v1_err(
                 req.request_id,
                 ErrorCode::Cancelled,
@@ -930,40 +1102,38 @@ impl KnowledgeBridge {
         let (sched_req, rx) = SchedRequest::new(
             req.request_id,
             p.workload,
-            p.input,
+            vec![p.input],
             req.priority,
             None,
             token.clone(),
         );
         if let Err(e) = self.scheduler.admit(sched_req) {
-            self.inflight_kinds
-                .lock()
-                .expect("inflight_kinds poisoned")
-                .remove(&req.request_id);
             return aiplane_error_to_v1(req.request_id, e);
         }
         let outcome = tokio::select! {
             biased;
             _ = token.cancelled() => {
-                self.inflight_kinds
-                    .lock()
-                    .expect("inflight_kinds poisoned")
-                    .remove(&req.request_id);
                 return v1_err(req.request_id, ErrorCode::Cancelled, "aiplane.run cancelled");
             }
             r = rx => r,
         };
-        self.inflight_kinds
-            .lock()
-            .expect("inflight_kinds poisoned")
-            .remove(&req.request_id);
         drop(guard);
         match outcome {
-            Ok(Ok(output)) => sy_ipc::Response::Ok {
-                schema_version: SCHEMA_VERSION,
-                request_id: req.request_id,
-                result: serde_json::json!({ "output": output }),
-                blob: None,
+            Ok(Ok(mut outputs)) => match outputs.pop() {
+                Some(output) => sy_ipc::Response::Ok {
+                    schema_version: SCHEMA_VERSION,
+                    request_id: req.request_id,
+                    result: serde_json::json!({ "output": output }),
+                    blob: None,
+                },
+                // A backend that answers a one-input request with zero
+                // outputs is broken, not empty: say so rather than
+                // forwarding `null` for the caller to unwrap.
+                None => v1_err(
+                    req.request_id,
+                    ErrorCode::Internal,
+                    "aiplane.run: backend returned no output",
+                ),
             },
             Ok(Err(e)) => aiplane_error_to_v1(req.request_id, e),
             Err(_) => v1_err(
@@ -987,6 +1157,10 @@ impl KnowledgeBridge {
         };
         let guard = self.cancel_registry.register(req.request_id);
         let token = guard.token();
+        // SPEC §4.2: same inflight registration as `aiplane.run`, so
+        // `aiplane.cancel <request_id>` resolves an inflight batch's
+        // workload kind too.
+        let _inflight = InflightKindGuard::new(&self.inflight_kinds, req.request_id, p.workload);
         if let Some(ms) = p.sleep_ms {
             let sleep = tokio::time::sleep(Duration::from_millis(ms));
             tokio::pin!(sleep);
@@ -998,16 +1172,40 @@ impl KnowledgeBridge {
                 _ = &mut sleep => {}
             }
         }
-        let dispatcher = Arc::clone(&self.aiplane);
-        let workload = p.workload;
-        let inputs = p.inputs;
-        let dispatch = tokio::task::spawn_blocking(move || dispatcher.batch(workload, inputs));
+        if token.is_cancelled() {
+            return v1_err(
+                req.request_id,
+                ErrorCode::Cancelled,
+                "aiplane.batch cancelled",
+            );
+        }
+        // SPEC §4.3 admission — this is the fix. A batch used to be handed
+        // straight to `AiplaneDispatch::batch` on a blocking task, so it
+        // skipped the class queues entirely: no cap, no strict-priority
+        // ordering, no `Overloaded` backpressure, no inflight entry, and no
+        // visibility in `Status.queue_depths`. A whole index pass could park
+        // on the NPU ahead of (or beside) a foreground search, and the only
+        // thing keeping search latency sane was the caller's own
+        // `EMBED_IPC_MAX_CALL` self-restraint. Now a batch is one admitted
+        // request of `req.priority` — which also means it becomes eligible
+        // for the cross-class hard escape like any other inflight.
+        let (sched_req, rx) = SchedRequest::new(
+            req.request_id,
+            p.workload,
+            p.inputs,
+            req.priority,
+            None,
+            token.clone(),
+        );
+        if let Err(e) = self.scheduler.admit(sched_req) {
+            return aiplane_error_to_v1(req.request_id, e);
+        }
         let outcome = tokio::select! {
             biased;
             _ = token.cancelled() => {
                 return v1_err(req.request_id, ErrorCode::Cancelled, "aiplane.batch cancelled");
             }
-            r = dispatch => r,
+            r = rx => r,
         };
         drop(guard);
         match outcome {
@@ -1017,11 +1215,11 @@ impl KnowledgeBridge {
                 result: serde_json::json!({ "outputs": outputs }),
                 blob: None,
             },
-            Ok(Err(e)) => v1_err(req.request_id, ErrorCode::Internal, &format!("{e:#}")),
-            Err(join_err) => v1_err(
+            Ok(Err(e)) => aiplane_error_to_v1(req.request_id, e),
+            Err(_) => v1_err(
                 req.request_id,
                 ErrorCode::Internal,
-                &format!("aiplane dispatch task panicked: {join_err}"),
+                "aiplane dispatcher dropped response oneshot",
             ),
         }
     }
@@ -1774,6 +1972,68 @@ mod tests {
     fn malformed_request_returns_serde_err_not_panic() {
         let r: Result<Req, _> = serde_json::from_str("not json");
         assert!(r.is_err());
+    }
+
+    /// The client's `aiplane.batch` params must keep deserializing into the
+    /// server's own struct — a renamed key is a runtime 400 from a healthy
+    /// daemon, which no compiler can catch.
+    #[test]
+    fn batch_params_match_the_server_params_struct() {
+        let params = batch_params(
+            WorkloadKind::Embed,
+            &[WorkloadInput::Text {
+                text: "passage: one".into(),
+            }],
+        );
+        let parsed: AiplaneBatchParams =
+            serde_json::from_value(params).expect("client params parse as server params");
+        assert_eq!(parsed.workload, WorkloadKind::Embed);
+        assert_eq!(parsed.inputs.len(), 1);
+        assert!(parsed.sleep_ms.is_none(), "sleep_ms is a test hook only");
+    }
+
+    #[test]
+    fn batch_outputs_decode_and_enforce_length() {
+        let one = WorkloadOutput::Vector {
+            vector: vec![1.0, 0.0],
+        };
+        let body = serde_json::json!({ "outputs": [one.clone(), one.clone()] });
+        let out = decode_batch_outputs(body, 2).expect("two outputs for two inputs");
+        assert_eq!(out.len(), 2);
+
+        let short = decode_batch_outputs(serde_json::json!({ "outputs": [one] }), 3)
+            .expect_err("a short batch must not be silently accepted");
+        let msg = short.to_string();
+        assert!(
+            msg.contains("1 outputs for 3 inputs"),
+            "the mismatch must be reported positionally, got {msg}"
+        );
+        let missing = decode_batch_outputs(serde_json::json!({}), 1)
+            .expect_err("no outputs key at all must fail");
+        assert!(missing.to_string().contains("0 outputs for 1 inputs"));
+    }
+
+    /// No daemon on the socket must read as "not running" with the path in
+    /// hand — that is what `knowledge::embed` turns into a fix hint.
+    #[test]
+    fn batch_blocking_reports_a_missing_daemon_with_the_socket_path() {
+        // A path inside a directory that does not exist: connect answers
+        // ENOENT, exactly the "no plane" condition — with no global env
+        // mutation, so this test cannot perturb a smoke test's bind.
+        let dir = tempfile::tempdir().expect("runtime dir");
+        let gone = dir.path().join("gone").join("sy-knowledge.sock");
+        let err = batch_blocking_at(
+            &gone,
+            WorkloadKind::Embed,
+            vec![WorkloadInput::Text { text: "x".into() }],
+            Priority::Interactive,
+        )
+        .expect_err("nothing is listening under a fresh temp dir");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("aiplane daemon not running") && msg.contains("sy-knowledge.sock"),
+            "the error must name the condition and the socket, got {msg}"
+        );
     }
 
     #[test]
@@ -2818,6 +3078,154 @@ mod tests {
         }
     }
 
+    /// BUG-20260927-2010 regression: `aiplane.batch` used to go straight to
+    /// `AiplaneDispatch::batch` on a blocking task, so a bulk embed call from
+    /// an index pass reached the NPU *immediately* — no class queue, no cap,
+    /// no strict-priority ordering. With the dispatcher parked on the same
+    /// deterministic gate `scheduler_priority_e2e` uses, queued batches must
+    /// not touch the backend at all, and an Interactive batch must be pulled
+    /// ahead of the Background ones.
+    #[test]
+    fn batches_are_admitted_by_priority() {
+        const SLEEP_MS: u64 = 50;
+        const ADMIT_SETTLE: Duration = Duration::from_millis(150);
+        let _smoke = crate::aiplane::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = unique_tmp_dir("aiplane-v1-batch-priority");
+        std::fs::create_dir_all(&tmp).expect("mkdir tmp");
+        let prev = env::var("XDG_RUNTIME_DIR").ok();
+        env::set_var("XDG_RUNTIME_DIR", &tmp);
+
+        let (ops_tx, _ops_rx) = mpsc::channel::<Op>();
+        let (req_tx, _req_rx) = mpsc::channel::<(Req, oneshot::Sender<Resp>)>();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let slow = Arc::new(SlowFakeDispatch::new(Duration::from_millis(SLEEP_MS)));
+        let dispatch: Arc<dyn AiplaneDispatch> = Arc::clone(&slow) as Arc<dyn AiplaneDispatch>;
+        serve_with_dispatch(ops_tx, req_tx, cancel, dispatch).expect("serve v1");
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .expect("client rt");
+        rt.block_on(async {
+            let path = socket_path();
+            let batch_call = |name: &'static str, priority: Priority| {
+                let p = path.clone();
+                tokio::spawn(async move {
+                    let mut c = sy_ipc::Client::connect(&p).await.expect("batch connect");
+                    c.call(
+                        "aiplane.batch",
+                        serde_json::json!({
+                            "workload": "embed",
+                            "inputs": [
+                                { "kind": "text", "text": name },
+                                { "kind": "text", "text": format!("{name}-2") },
+                            ],
+                        }),
+                        sy_ipc::CallOpts {
+                            priority,
+                            deadline_ms: Some(10_000),
+                            ..sy_ipc::CallOpts::default()
+                        },
+                    )
+                    .await
+                    .expect("aiplane.batch")
+                })
+            };
+
+            // Park the dispatcher on the gate with one Background run.
+            let blocker = {
+                let p = path.clone();
+                tokio::spawn(async move {
+                    let mut c = sy_ipc::Client::connect(&p).await.expect("blocker connect");
+                    c.call(
+                        "aiplane.run",
+                        serde_json::json!({
+                            "workload": "embed",
+                            "input": { "kind": "text", "text": "blocker" },
+                        }),
+                        sy_ipc::CallOpts {
+                            priority: Priority::Background,
+                            deadline_ms: Some(10_000),
+                            ..sy_ipc::CallOpts::default()
+                        },
+                    )
+                    .await
+                    .expect("blocker aiplane.run")
+                })
+            };
+            tokio::time::sleep(ADMIT_SETTLE).await;
+
+            let bg_a = batch_call("bg-batch-a", Priority::Background);
+            let bg_b = batch_call("bg-batch-b", Priority::Background);
+            tokio::time::sleep(ADMIT_SETTLE).await;
+            let interactive = batch_call("interactive-batch", Priority::Interactive);
+            tokio::time::sleep(ADMIT_SETTLE).await;
+
+            // THE regression assertion. Before the fix these three batches
+            // executed on their own blocking tasks and the log was already
+            // full; now nothing may reach the backend while the dispatcher is
+            // parked, because admission — not the NPU — is holding them.
+            let early = slow.snapshot();
+            assert!(
+                early.is_empty(),
+                "batches must wait behind admission, reached backend: {early:?}"
+            );
+
+            slow.release_gate();
+            assert!(
+                matches!(
+                    blocker.await.expect("blocker join"),
+                    sy_ipc::Response::Ok { .. }
+                ),
+                "blocker must succeed"
+            );
+            let interactive_resp = interactive.await.expect("interactive join");
+            for h in [bg_a, bg_b] {
+                assert!(
+                    matches!(h.await.expect("bg join"), sy_ipc::Response::Ok { .. }),
+                    "background batch must succeed"
+                );
+            }
+
+            // The response shape is unchanged by the routing: two inputs,
+            // two outputs, positionally.
+            match interactive_resp {
+                sy_ipc::Response::Ok { result, .. } => {
+                    let outputs = result
+                        .get("outputs")
+                        .and_then(|o| o.as_array())
+                        .expect("outputs array");
+                    assert_eq!(outputs.len(), 2, "one output per input");
+                }
+                other => panic!("expected Ok, got {other:?}"),
+            }
+
+            let order = slow.snapshot();
+            let idx = |needle: &str| {
+                order
+                    .iter()
+                    .position(|s| s == needle)
+                    .unwrap_or_else(|| panic!("{needle} dispatched: {order:?}"))
+            };
+            assert_eq!(idx("blocker"), 0, "the gated run goes first");
+            assert!(
+                idx("interactive-batch") < idx("bg-batch-a")
+                    && idx("interactive-batch") < idx("bg-batch-b"),
+                "Interactive batch must outrank queued Background batches: {order:?}"
+            );
+        });
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(v) = prev {
+            env::set_var("XDG_RUNTIME_DIR", v);
+        } else {
+            env::remove_var("XDG_RUNTIME_DIR");
+        }
+    }
+
     /// `AiplaneDispatch` decorator used by the cancel-via-registry
     /// test: forwards `run`/`batch` to the inner FakeWorkload-backed
     /// dispatch, and records every `cancel(workload, request_id)`
@@ -2843,9 +3251,6 @@ mod tests {
     }
 
     impl AiplaneDispatch for RecordingDispatch {
-        fn run(&self, workload: WorkloadKind, input: WorkloadInput) -> Result<WorkloadOutput> {
-            self.inner.run(workload, input)
-        }
         fn batch(
             &self,
             workload: WorkloadKind,
@@ -2899,9 +3304,9 @@ mod tests {
         }
     }
 
-    impl AiplaneDispatch for SlowFakeDispatch {
-        fn run(&self, _workload: WorkloadKind, input: WorkloadInput) -> Result<WorkloadOutput> {
-            // First call to `run` blocks on `gate` so the e2e test
+    impl SlowFakeDispatch {
+        fn run_one(&self, input: WorkloadInput) -> Result<WorkloadOutput> {
+            // First call blocks on `gate` so the e2e test
             // can admit every priority class before the dispatcher
             // pulls the second call — the strict-priority ordering
             // is then observable without wall-clock assumptions.
@@ -2931,12 +3336,15 @@ mod tests {
                 .push(text.clone());
             Ok(WorkloadOutput::Text { text })
         }
+    }
+
+    impl AiplaneDispatch for SlowFakeDispatch {
         fn batch(
             &self,
-            workload: WorkloadKind,
+            _workload: WorkloadKind,
             inputs: Vec<WorkloadInput>,
         ) -> Result<Vec<WorkloadOutput>> {
-            inputs.into_iter().map(|i| self.run(workload, i)).collect()
+            inputs.into_iter().map(|i| self.run_one(i)).collect()
         }
     }
 
@@ -2961,9 +3369,6 @@ mod tests {
     }
 
     impl AiplaneDispatch for FakeAiplaneDispatch {
-        fn run(&self, workload: WorkloadKind, input: WorkloadInput) -> Result<WorkloadOutput> {
-            self.registry.run(workload, input)
-        }
         fn batch(
             &self,
             workload: WorkloadKind,

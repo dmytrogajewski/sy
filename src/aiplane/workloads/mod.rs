@@ -5,9 +5,10 @@
 //! to `register_all`. The Workload skill (`.claude/commands/workload.md`)
 //! walks the full 8-artefact checklist.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::registry::Registry;
+use super::registry::{Registry, WorkloadKind};
 use super::session::SessionPool;
 
 pub mod embed;
@@ -130,4 +131,50 @@ mod tests {
         assert_eq!(parse_intra_threads(Some("lots")), DEFAULT_NPU_INTRA_THREADS);
         assert_eq!(parse_intra_threads(Some("-3")), DEFAULT_NPU_INTRA_THREADS);
     }
+}
+
+/// On-disk artifacts a workload's `load()` looks for, so `sy doctor` can
+/// pre-flight them instead of waiting for the daemon to crash-loop on a
+/// wiped `~/.cache` (BUG-20260927-0119). Stems and layouts come from the
+/// workloads themselves — this module never re-derives a path.
+#[derive(Debug, Clone)]
+pub struct ArtifactSet {
+    pub kind: WorkloadKind,
+    /// Preferred ONNX (NPU-compiled / quantised).
+    pub model: PathBuf,
+    /// ONNX that keeps the workload loadable on the CPU EP when `model`
+    /// is gone. `None` when the workload has no CPU path at all.
+    pub fallback_model: Option<PathBuf>,
+    pub tokenizer: PathBuf,
+    /// Command that rebuilds the set.
+    pub prep: String,
+    /// False = losing this set costs quality, not service. `rerank` is the
+    /// case: it re-scores search hits, so `sy doctor` must not shout
+    /// `fail` (nor the daemon suspend indexing) over a missing reranker.
+    pub indexing_critical: bool,
+}
+
+/// Every workload the knowledge daemon raises at start-up. Ordered as
+/// `knowledge::daemon::REQUIRED_WORKLOADS` so `sy doctor --json` is stable.
+pub fn artifact_sets() -> Vec<ArtifactSet> {
+    let (embed_model, embed_tokenizer) = embed::required_paths();
+    let (rerank_model, rerank_tokenizer) = rerank::required_paths();
+    vec![
+        ArtifactSet {
+            kind: WorkloadKind::Embed,
+            model: embed_model,
+            fallback_model: Some(embed::fallback_model_path()),
+            tokenizer: embed_tokenizer,
+            prep: "python ~/sources/sy/scripts/prep_npu_workload.py --workload embed".into(),
+            indexing_critical: true,
+        },
+        ArtifactSet {
+            kind: WorkloadKind::Rerank,
+            model: rerank_model,
+            fallback_model: None,
+            tokenizer: rerank_tokenizer,
+            prep: "python ~/sources/sy/scripts/prep_npu_workload.py --workload rerank".into(),
+            indexing_critical: false,
+        },
+    ]
 }

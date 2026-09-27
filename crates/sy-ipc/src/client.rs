@@ -30,9 +30,13 @@ use sy_core::Priority;
 /// differ from `CallOpts::default()`.
 #[derive(Debug, Clone)]
 pub struct CallOpts {
+    /// Public struct field in the sy public API.
     pub priority: Priority,
+    /// Public struct field in the sy public API.
     pub deadline_ms: Option<u64>,
+    /// Public struct field in the sy public API.
     pub trace_id: Option<TraceId>,
+    /// Public struct field in the sy public API.
     pub parent_span_id: Option<SpanId>,
     /// Explicit request id. `None` ⇒ generate a fresh `Ulid` per
     /// call. Setting this lets callers correlate a `system.cancel`
@@ -64,6 +68,7 @@ pub struct Client {
 }
 
 impl Client {
+    /// Public associated function in the sy public API.
     pub async fn connect(path: &Path) -> io::Result<Self> {
         let stream = UnixStream::connect(path).await?;
         let (reader, writer) = stream.into_split();
@@ -73,6 +78,7 @@ impl Client {
         })
     }
 
+    /// Public method in the sy public API.
     pub async fn call(
         &mut self,
         method: &str,

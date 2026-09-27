@@ -73,6 +73,14 @@ const SOCKET_BIND_DEADLINE: Duration = Duration::from_secs(5);
 /// first-call VAIP compile (sub-minute on warm cache, several min
 /// cold) fits.
 const RUN_BATCH_TIMEOUT: Duration = Duration::from_secs(900);
+
+/// Budget for raising a worker that is not warm yet. The first batch for an
+/// on-demand kind can land on a cold VAIP compile (3–10 min per
+/// `worker::runner`), and the NPU serialises inference anyway — a slow raise
+/// still beats a false "worker not reachable". Kept equal to
+/// [`RUN_BATCH_TIMEOUT`] so a raise can never outlive the batch that asked
+/// for it.
+const WORKER_RAISE_DEADLINE: Duration = Duration::from_secs(900);
 /// SPEC §4.3 "Cancellation pattern" step 5: the supervisor gives a
 /// worker this long to yield after a `WorkerReq::Cancel` before
 /// SIGKILLing the child and respawning from the VitisAI compile
@@ -291,6 +299,13 @@ impl Supervisor {
         kind: WorkloadKind,
         inputs: Vec<WorkloadInput>,
     ) -> Result<Vec<WorkloadOutput>> {
+        // Raise on demand. Kinds outside the startup warm set (`stt`, `ocr`,
+        // `vad`) have a deterministic socket path that nothing has bound yet,
+        // so probing it directly answered "sy-aiplane worker not reachable"
+        // and made `sy aiplane run --workload stt` unusable precisely when the
+        // daemon was healthy enough to raise the worker — the CLI's in-process
+        // fallback only covers the daemon-*down* case.
+        self.ensure(kind, WORKER_RAISE_DEADLINE)?;
         let socket = self.socket_for(kind)?;
         let req = WorkerReq::RunBatch {
             request_id: ulid::Ulid::nil(),
@@ -645,8 +660,24 @@ mod tests {
                                         .store(true, std::sync::atomic::Ordering::SeqCst);
                                     WorkerResp::ShutdownAck
                                 }
-                                WorkerReq::RunBatch { .. } => WorkerResp::Error {
-                                    msg: "fake worker: RunBatch not implemented".into(),
+                                WorkerReq::RunBatch {
+                                    inputs,
+                                    request_id: _,
+                                } => WorkerResp::RunBatch {
+                                    outputs: inputs
+                                        .into_iter()
+                                        .map(|i| match i {
+                                            WorkloadInput::Text { text } => WorkloadOutput::Text {
+                                                text: format!("fake:{text}"),
+                                            },
+                                            other => WorkloadOutput::Vector {
+                                                vector: vec![f32::from(matches!(
+                                                    other,
+                                                    WorkloadInput::TextPair { .. }
+                                                ))],
+                                            },
+                                        })
+                                        .collect(),
                                 },
                                 WorkerReq::Cancel { .. } => {
                                     if !ignore_cancel {
@@ -676,6 +707,54 @@ mod tests {
                 pid,
             }))
         }
+    }
+
+    #[test]
+    fn run_batch_raises_a_kind_outside_the_warm_set() {
+        // `sy aiplane run --workload stt|ocr|vad` against a *live* daemon:
+        // these kinds are not in the startup warm set, so nothing has bound
+        // their socket yet. run_batch used to probe that path anyway and
+        // answer "sy-aiplane worker not reachable" (BUG-20260927-0420.md).
+        let _guard = crate::aiplane::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!(
+            "sy-supervisor-raise-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let prev = std::env::var("XDG_RUNTIME_DIR").ok();
+        std::env::set_var("XDG_RUNTIME_DIR", &tmp);
+
+        let sup = Supervisor::with_spawn(Arc::new(FakeSpawn::new()));
+        let outs = sup
+            .run_batch(
+                WorkloadKind::Stt,
+                vec![WorkloadInput::Text {
+                    text: "hello".to_string(),
+                }],
+            )
+            .expect("run_batch must raise the worker on demand, not fail");
+        assert_eq!(outs.len(), 1, "one output per input survives the raise");
+        assert!(
+            matches!(
+                &outs[0],
+                WorkloadOutput::Text { text } if text == "fake:hello"
+            ),
+            "the batch must reach the raised worker and come back: {:?}",
+            outs[0]
+        );
+
+        if let Some(v) = prev {
+            std::env::set_var("XDG_RUNTIME_DIR", v);
+        } else {
+            std::env::remove_var("XDG_RUNTIME_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

@@ -77,6 +77,54 @@ impl EmbedWorkload {
     }
 }
 
+/// `(NPU bf16 model, tokenizer.json)` — the two files [`EmbedWorkload::load`]
+/// refuses to start without. `pub` so `sy doctor`'s `aiplane.model_artifacts`
+/// pre-flight checks exactly what the loader looks for instead of
+/// duplicating the stems (BUG-20260927-0119).
+pub fn required_paths() -> (PathBuf, PathBuf) {
+    let dir = EmbedWorkload::cache_dir();
+    (
+        dir.join(format!("{MODEL_STEM}.bf16.onnx")),
+        dir.join(format!("{MODEL_STEM}.tokenizer/tokenizer.json")),
+    )
+}
+
+/// The FP32 export the same prep run leaves next to the BF16 one. Opening
+/// it on the CPU EP is the degraded-but-serving option when the BF16
+/// artifact is gone; see [`pick_model`].
+pub fn fallback_model_path() -> PathBuf {
+    EmbedWorkload::cache_dir().join(format!("{MODEL_STEM}.onnx"))
+}
+
+/// Which ONNX to open, and whether the NPU is on the table at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ModelChoice {
+    /// BF16 export present: try VitisAI, fall back to CPU if the EP is
+    /// unavailable (the long-standing behaviour).
+    NpuFirst(PathBuf),
+    /// BF16 export missing but the FP32 export survived. Embeddings run on
+    /// the CPU EP — slower, but the plane serves search and keeps indexing
+    /// instead of exiting(1) and taking the shared IPC socket with it.
+    CpuOnly(PathBuf),
+}
+
+/// Resolve the model file. `None` means neither export exists, which is the
+/// one case that genuinely warrants a hard failure.
+///
+/// The old code checked only the BF16 path and bailed, which made the CPU
+/// fallback sitting a few lines below it unreachable: a cache sweep that
+/// deleted the big `.bf16.onnx` blobs disabled embeddings even though a
+/// perfectly loadable FP32 graph was still on disk.
+fn pick_model(bf16: &Path, fp32: &Path) -> Option<ModelChoice> {
+    if bf16.is_file() {
+        return Some(ModelChoice::NpuFirst(bf16.to_path_buf()));
+    }
+    if fp32.is_file() {
+        return Some(ModelChoice::CpuOnly(fp32.to_path_buf()));
+    }
+    None
+}
+
 impl Default for EmbedWorkload {
     fn default() -> Self {
         Self::new()
@@ -98,17 +146,9 @@ impl Workload for EmbedWorkload {
             return Ok(());
         }
         let dir = Self::cache_dir();
-        let model_path = dir.join(format!("{MODEL_STEM}.bf16.onnx"));
-        let tokenizer_path = dir.join(format!("{MODEL_STEM}.tokenizer/tokenizer.json"));
+        let (model_path, tokenizer_path) = required_paths();
+        let choice = pick_model(&model_path, &fallback_model_path());
 
-        if !model_path.is_file() {
-            anyhow::bail!(
-                "embed model not found at {}\nBuild it with:\n  \
-                 source /opt/AMD/ryzenai/venv/bin/activate && \
-                 python ~/sources/sy/scripts/prep_npu_workload.py --workload embed",
-                model_path.display()
-            );
-        }
         if !tokenizer_path.is_file() {
             anyhow::bail!(
                 "tokenizer.json not found at {}\nRe-run prep_npu_workload.py --workload embed.",
@@ -116,36 +156,67 @@ impl Workload for EmbedWorkload {
             );
         }
 
+        let (model_path, npu_eligible) = match choice {
+            Some(ModelChoice::NpuFirst(path)) => (path, true),
+            Some(ModelChoice::CpuOnly(path)) => {
+                tracing::warn!(
+                    target: "sy::aiplane::workloads::embed",
+                    npu_model = %model_path.display(),
+                    cpu_model = %path.display(),
+                    "bf16 export missing; embeddings will run on the CPU EP. Rebuild the NPU graph with prep_npu_workload.py --workload embed."
+                );
+                (path, false)
+            }
+            None => anyhow::bail!(
+                "embed model not found at {}\nBuild it with:\n  \
+                 source /opt/AMD/ryzenai/venv/bin/activate && \
+                 python ~/sources/sy/scripts/prep_npu_workload.py --workload embed",
+                model_path.display()
+            ),
+        };
+
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("load tokenizer.json: {e}"))?;
 
-        let (session, backend) = match try_vitisai(&model_path, &dir) {
-            Ok(s) => {
-                let hw = detect_npu_label();
-                tracing::info!(
-                    target: "sy::aiplane::workloads::embed",
-                    hardware = %hw,
-                    model = MODEL_STEM,
-                    backend = "vitisai",
-                    "NPU active"
-                );
-                (s, "vitisai")
-            }
-            Err(vitis_err) => {
-                tracing::warn!(
-                    target: "sy::aiplane::workloads::embed",
-                    error = %format!("{vitis_err:#}"),
-                    "VitisAI unavailable; falling back to CPU"
-                );
-                let s = try_cpu(&model_path)?;
-                let hw = format!("{} (CPU)", detect_cpu_model());
-                tracing::info!(
-                    target: "sy::aiplane::workloads::embed",
-                    hardware = %hw,
-                    backend = "cpu",
-                    "CPU EP active"
-                );
-                (s, "cpu")
+        let (session, backend) = if !npu_eligible {
+            let s = try_cpu(&model_path)?;
+            let hw = format!("{} (CPU)", detect_cpu_model());
+            tracing::info!(
+                target: "sy::aiplane::workloads::embed",
+                hardware = %hw,
+                backend = "cpu",
+                "CPU EP active (no bf16 export)"
+            );
+            (s, "cpu")
+        } else {
+            match try_vitisai(&model_path, &dir) {
+                Ok(s) => {
+                    let hw = detect_npu_label();
+                    tracing::info!(
+                        target: "sy::aiplane::workloads::embed",
+                        hardware = %hw,
+                        model = MODEL_STEM,
+                        backend = "vitisai",
+                        "NPU active"
+                    );
+                    (s, "vitisai")
+                }
+                Err(vitis_err) => {
+                    tracing::warn!(
+                        target: "sy::aiplane::workloads::embed",
+                        error = %format!("{vitis_err:#}"),
+                        "VitisAI unavailable; falling back to CPU"
+                    );
+                    let s = try_cpu(&model_path)?;
+                    let hw = format!("{} (CPU)", detect_cpu_model());
+                    tracing::info!(
+                        target: "sy::aiplane::workloads::embed",
+                        hardware = %hw,
+                        backend = "cpu",
+                        "CPU EP active"
+                    );
+                    (s, "cpu")
+                }
             }
         };
         *guard = Some(LoadedEmbedder {
@@ -349,6 +420,68 @@ fn run_one(emb: &mut LoadedEmbedder, run_options: &RunOptions, prefixed: &str) -
 mod tests {
     use super::*;
 
+    // BUG-20260927-0119: the CPU fallback existed but was unreachable,
+    // because `load()` bailed on the missing bf16 file before ever
+    // consulting it. These pin the resolution order.
+
+    #[test]
+    fn pick_model_prefers_the_bf16_export_when_both_exist() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let bf16 = dir.path().join("m.bf16.onnx");
+        let fp32 = dir.path().join("m.onnx");
+        std::fs::write(&bf16, b"x").expect("write bf16");
+        std::fs::write(&fp32, b"x").expect("write fp32");
+        assert_eq!(
+            pick_model(&bf16, &fp32),
+            Some(ModelChoice::NpuFirst(bf16)),
+            "NPU graph must win when present"
+        );
+    }
+
+    #[test]
+    fn pick_model_falls_back_to_fp32_when_bf16_is_gone() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let bf16 = dir.path().join("m.bf16.onnx");
+        let fp32 = dir.path().join("m.onnx");
+        std::fs::write(&fp32, b"x").expect("write fp32");
+        assert_eq!(
+            pick_model(&bf16, &fp32),
+            Some(ModelChoice::CpuOnly(fp32)),
+            "a wiped bf16 export must degrade to CPU, not kill the plane"
+        );
+    }
+
+    #[test]
+    fn pick_model_reports_nothing_only_when_both_are_gone() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        assert_eq!(
+            pick_model(&dir.path().join("m.bf16.onnx"), &dir.path().join("m.onnx")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_dangling_bf16_symlink_is_not_a_model() {
+        // The exact incident shape: `~/.cache/sy/aiplane/<stem>/` held
+        // symlinks into a cache dir that a disk sweep later emptied.
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let bf16 = dir.path().join("m.bf16.onnx");
+        std::os::unix::fs::symlink(dir.path().join("nowhere"), &bf16).expect("symlink");
+        assert_eq!(pick_model(&bf16, &dir.path().join("m.onnx")), None);
+    }
+
+    #[test]
+    fn fallback_model_path_is_the_fp32_sibling() {
+        // Guards against `with_extension("")` mangling the dotted stem:
+        // "multilingual-e5-base.bf16.onnx" -> "multilingual-e5-base.bf16".
+        let fp32 = fallback_model_path();
+        assert_eq!(
+            fp32.file_name().and_then(|n| n.to_str()),
+            Some("multilingual-e5-base.onnx")
+        );
+        let (bf16, _) = required_paths();
+        assert_eq!(bf16.parent(), fp32.parent());
+    }
     #[test]
     fn embed_workload_advertises_correct_kind() {
         let w = EmbedWorkload::new();

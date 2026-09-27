@@ -253,7 +253,7 @@ pub fn migrate_state_dir() -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -363,7 +363,8 @@ mod tests {
         assert!(!is_fresh(&s));
     }
 
-    fn test_status() -> Status {
+    /// Minimal all-zero snapshot for status + consumer tests.
+    pub(crate) fn test_status() -> Status {
         Status {
             ts_unix: 0,
             daemon_running: false,

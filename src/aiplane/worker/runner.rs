@@ -25,11 +25,13 @@ const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// --socket <path>` after the AMD-venv re-exec has fired (the
 /// supervisor passes the same env down to children).
 ///
-/// Returns `Ok(())` on a clean Shutdown or SIGTERM; `Err(_)` only
-/// for unrecoverable startup failures (socket bind, unsupported
-/// workload kind). The Workload's `load()` failing is *not* a
-/// process-level error — it's reflected in `WorkerState::Failed` and
-/// the supervisor decides whether to restart.
+/// Returns `Err(_)` only for unrecoverable startup failures (socket bind,
+/// unsupported workload kind) so `main` can print them. Once the IPC server
+/// is up this function never returns: shutdown leaves through
+/// [`exit_process`], because returning normally would run the faulting VitisAI
+/// finalizer. The Workload's `load()` failing is *not* a process-level error —
+/// it's reflected in `WorkerState::Failed` and the supervisor decides whether
+/// to restart.
 pub fn run(kind: WorkloadKind, socket: PathBuf) -> Result<()> {
     // SPEC §4.6 / arch-observability Step 1: each `sy aiplane worker`
     // subprocess is a daemon-shaped process (one per workload kind),
@@ -74,15 +76,48 @@ pub fn run(kind: WorkloadKind, socket: PathBuf) -> Result<()> {
         req_rx,
     );
 
+    if let Err(e) = &result {
+        tracing::error!(
+            target: "sy::aiplane::worker",
+            kind = %kind,
+            error = %format!("{e:#}"),
+            "worker serve loop failed"
+        );
+    }
     tracing::info!(
         target: "sy::aiplane::worker",
         kind = %kind,
         result = ?result,
         "worker shutting down"
     );
+    // Releases the session (and with it `/dev/accel`) *before* the process
+    // goes away, so a supervisor respawn does not queue behind our teardown.
     workload.unload();
     let _ = std::fs::remove_file(&socket);
-    result
+    drop(_obs_guard);
+    let status = i32::from(result.is_err());
+    exit_process(status)
+}
+
+/// Terminate this worker without running shared-object finalizers.
+///
+/// ONNX Runtime's VitisAI EP registers a library finalizer that dereferences
+/// state ORT has already destroyed, so **every** worker stop died with
+/// SIGSEGV in `libonnxruntime_providers_vitisai.so` under
+/// `_dl_call_fini <- exit <- __libc_start_main` — confirmed from the cores of
+/// both the embed and rerank workers: one ~330 MB core pair per plane
+/// restart, plus a `status=11/SEGV` line in journald that made every shutdown
+/// look like a crash (specs/bugs/BUG-20260927-0400.md). `std::process::exit`
+/// reaches those same handlers, so the only exit that survives is `_exit`:
+/// it skips userspace teardown while the kernel still releases the session,
+/// the device mmaps, the socket fd and every page. `run()` has already
+/// flushed logs, dropped the obs guard, unloaded the workload and unlinked
+/// its socket by the time this is called.
+pub fn exit_process(status: i32) -> ! {
+    // SAFETY: `_exit` is async-signal-safe, takes no locks and never
+    // returns. Skipping userspace cleanup is the intent, not a side effect;
+    // see the doc comment for why running it is the faulting path.
+    unsafe { libc::_exit(status) }
 }
 
 struct InternalState {
@@ -359,6 +394,9 @@ fn install_signal_handlers(shutdown: Arc<AtomicBool>) {
     extern "C" fn handler(_: c_int) {
         SIGNAL.store(true, Ordering::SeqCst);
     }
+    // SAFETY: registering a `fn`-pointer handler that only touches a static
+    // `AtomicBool` (no allocation, no non-atomic state). `signal` itself is
+    // an FFI call; the handler's semantics are signal-safe by construction.
     unsafe {
         libc::signal(libc::SIGTERM, handler as *const () as usize);
         libc::signal(libc::SIGINT, handler as *const () as usize);

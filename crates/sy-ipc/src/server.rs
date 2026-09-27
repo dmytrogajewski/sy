@@ -26,18 +26,22 @@ pub struct PeerCredentials {
 }
 
 impl PeerCredentials {
+    /// Public associated function in the sy public API.
     pub const fn new(pid: Option<i32>, uid: u32, gid: u32) -> Self {
         Self { pid, uid, gid }
     }
 
+    /// Public method in the sy public API.
     pub const fn pid(self) -> Option<i32> {
         self.pid
     }
 
+    /// Public method in the sy public API.
     pub const fn uid(self) -> u32 {
         self.uid
     }
 
+    /// Public method in the sy public API.
     pub const fn gid(self) -> u32 {
         self.gid
     }
@@ -45,6 +49,7 @@ impl PeerCredentials {
 
 /// Admission policy evaluated only against credentials supplied by the kernel.
 pub trait PeerAuthorizer: Send + Sync + 'static {
+    /// Public method in the sy public API.
     fn authorize(&self, credentials: Option<PeerCredentials>) -> bool;
 }
 
@@ -63,6 +68,7 @@ impl PeerAuthorizer for SameEuidAuthorizer {
 /// per-connection state lives behind interior-mutability locks
 /// inside the impl.
 pub trait Handler: Send + Sync + 'static {
+    /// Public method in the sy public API.
     fn handle(&self, req: Request) -> impl std::future::Future<Output = Response> + Send;
 }
 
@@ -75,10 +81,12 @@ pub struct Server<H: Handler> {
 }
 
 impl<H: Handler> Server<H> {
+    /// Public associated function in the sy public API.
     pub fn new(handler: H) -> Self {
         Self::with_authorizer(handler, SameEuidAuthorizer)
     }
 
+    /// Public associated function in the sy public API.
     pub fn with_authorizer(handler: H, authorizer: impl PeerAuthorizer) -> Self {
         Self {
             handler: Arc::new(handler),

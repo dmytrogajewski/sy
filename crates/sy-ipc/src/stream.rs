@@ -26,7 +26,9 @@ pub const KIND_CLOSED: &str = "closed";
 /// streams can route events to the right consumer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
+    /// Public struct field in the sy public API.
     pub schema_version: u32,
+    /// Public struct field in the sy public API.
     pub request_id: Ulid,
     /// Discriminator under which the daemon serialised the payload.
     /// Each method documents its own kinds (e.g. `agt.tail` emits
