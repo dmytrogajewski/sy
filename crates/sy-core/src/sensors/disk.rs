@@ -50,6 +50,7 @@ pub struct DiskDevice {
 /// minor ascending in practice).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiskSample {
+    /// Public struct field in the sy core data model.
     pub devices: Vec<DiskDevice>,
 }
 

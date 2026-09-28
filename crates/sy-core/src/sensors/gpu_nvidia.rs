@@ -42,6 +42,7 @@ pub struct GpuNvidiaSample {
 /// (the typical AMD-only / no-NVIDIA case).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GpuNvidiaSnapshot {
+    /// Public struct field in the sy core data model.
     pub gpus: Vec<GpuNvidiaSample>,
 }
 

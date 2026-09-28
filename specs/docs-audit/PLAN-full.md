@@ -1,5 +1,7 @@
 # PLAN: full
 
+Status: complete
+
 ## Mode
 docs-roadmap
 
@@ -111,4 +113,46 @@ docs-roadmap
 - Driver: `/documenter` audit
 
 ## Open questions
-- A documentation site generator is out of this skill's scope. The user asked for Docusaurus and a GitHub Action in the same request; those land beside this plan, not inside it.
+- None for the current documentation scope. The existing Docusaurus site and
+  GitHub Actions are maintained beside this plan and pass their production
+  build/link checks in the current pass.
+
+### Item 12 — Sparkplane bridge/network documentation refresh
+- Description: Align sy's Sparkplane documentation with the pinned `0.1.5`
+  client and its explicit per-launch network opt-in.
+- DoR:
+  - [x] Current `sy.toml` release pin inspected
+  - [x] Canonical Sparkplane reference checked for flag and environment names
+- DoD:
+  - [x] README, installation, serving, CLI, and bridge reference show a
+    copy-pasteable `--allow-network` example
+  - [x] The docs state the opt-in is per launch and does not remove filesystem
+    sandboxing or alter approval policy
+  - [x] Changelog records the documentation change
+  - [x] Legacy syauth page identifies itself as a compatibility index
+- Files affected: `README.md`, `CHANGELOG.md`, `docs/how-to/install-spark.md`,
+  `docs/how-to/serve-a-model-on-spark.md`, `docs/reference/cli.md`,
+  `docs/reference/spark.md`, `docs/syauth-setup.md`
+- Driver: `/documenter` current-pass refresh
+
+### Item 13 — Rust public-item documentation
+- Description: Add outer documentation comments for every public item that
+  fails strict rustdoc, including the constants, fields, variants, methods,
+  and constructors discovered across the workspace.
+- DoR:
+  - [x] Strict `RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --no-deps --workspace` reproduced the finding
+- DoD:
+  - [x] Strict workspace rustdoc exits successfully
+- Files likely affected: `crates/sy-plugin-md/src/render.rs`
+- Driver: `/implement` (implementation, not documentation-only authoring)
+
+### Item 14 — Third-party notices inventory
+- Description: Add a repository-level inventory for Good Docs Project
+  templates and other third-party material referenced in documentation.
+- DoR:
+  - [x] Attribution comments and external template sources identified
+- DoD:
+  - [x] `THIRD_PARTY_NOTICES.md` lists source, licence, and affected files
+  - [x] A community/documentation entry links to the inventory
+- Files likely affected: `THIRD_PARTY_NOTICES.md`, `CONTRIBUTING.md`
+- Driver: `/documenter` authoring

@@ -1000,7 +1000,7 @@ secret environment-variable name—never the secret. Current official OpenAI
 documentation requires custom-provider `base_url`, `env_key`, and
 `wire_api = "responses"`; `responses` is the only supported wire value and
 direct `experimental_bearer_token` is discouraged
-([OpenAI Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)).
+([OpenAI Codex configuration reference](https://developers.openai.com/codex/config-reference)).
 
 **Delivered CJM:** coding agent operator → asks `sy` for a Codex config and
 exports the scoped token from its protected file → pinned Codex connects to the

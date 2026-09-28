@@ -12,6 +12,7 @@ use std::process::{Command, Stdio};
 use anyhow::Result;
 
 #[derive(Debug, Clone)]
+#[cfg(feature = "gui-iced")]
 pub struct ClipEntry {
     pub id: String,
     pub preview: String,
@@ -27,6 +28,7 @@ pub struct ClipEntry {
 
 /// Read the top `n` entries from cliphist. Returns an empty vec if cliphist
 /// is missing or fails (so the bar degrades gracefully).
+#[cfg(feature = "gui-iced")]
 pub fn top(n: usize) -> Vec<ClipEntry> {
     let out = match Command::new("cliphist")
         .arg("list")
@@ -89,6 +91,7 @@ pub fn copy_to_clipboard(id: &str) -> Result<()> {
 /// Order matches descending popularity; the parser stops on first
 /// match. Bare strings (no leading dot) — cliphist writes them inline
 /// in the `[[ binary data N KiB <ext> ]]` token.
+#[cfg(any(feature = "gui-iced", test))]
 const CLIPHIST_IMAGE_EXTS: &[&str] = &["png", "jpeg", "jpg", "webp", "gif", "bmp"];
 
 /// Extract the image extension from a cliphist preview line.
@@ -98,6 +101,7 @@ const CLIPHIST_IMAGE_EXTS: &[&str] = &["png", "jpeg", "jpg", "webp", "gif", "bmp
 /// a static string, or `None` for text/unknown entries. Matches the
 /// `cliphist-fuzzel-img` contrib script's regex but without pulling a
 /// `regex` dep: we only need a fixed extension set.
+#[cfg(any(feature = "gui-iced", test))]
 pub fn parse_image_ext(preview: &str) -> Option<&'static str> {
     let preview = preview.trim_start();
     if !preview.starts_with("[[ binary data") {
@@ -117,6 +121,7 @@ pub fn parse_image_ext(preview: &str) -> Option<&'static str> {
 /// format the `image` crate understands is fair game. Split from
 /// `decode_to_thumb_at` so tests can exercise the cache invariant
 /// without a fake `cliphist` on `PATH`.
+#[cfg(any(feature = "gui-iced", test))]
 pub fn thumb_from_clip_bytes_at(
     cache_dir: &std::path::Path,
     id: &str,
@@ -133,6 +138,7 @@ pub fn thumb_from_clip_bytes_at(
 /// them through `thumb_from_clip_bytes_at`. `ext` is accepted for
 /// symmetry with `parse_image_ext` callers but not consulted — the
 /// cache always re-encodes as PNG.
+#[cfg(feature = "gui-iced")]
 pub fn decode_to_thumb_at(
     cache_dir: &std::path::Path,
     id: &str,
@@ -153,6 +159,7 @@ pub fn decode_to_thumb_at(
 
 /// Convenience wrapper that targets the shared
 /// `state::thumbs_dir()` cache.
+#[cfg(feature = "gui-iced")]
 pub fn decode_to_thumb(id: &str, ext: &str, size: u32) -> Result<std::path::PathBuf> {
     let dir = super::state::thumbs_dir()?;
     decode_to_thumb_at(&dir, id, ext, size)

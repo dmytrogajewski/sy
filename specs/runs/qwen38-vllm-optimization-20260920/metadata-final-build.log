@@ -1,0 +1,146 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load remote build context
+#1 DONE 0.0s
+
+#2 copy /context /
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/vllm/vllm-openai:qwen38-flash-next@sha256:fc120ece0a388cc0aa1caad4a9f1cd92113484ab7ec2fd0efadd62585be05bf8
+#3 DONE 0.0s
+
+#4 [ 2/27] ADD --checksum=sha256:02adb76b789f9fccf472e922e3be7b4b2a95962ae7d7c3eb99bfeac6052dccad     https://raw.githubusercontent.com/blazux/qwen3.8-Flash-DGX/5be66376e8beaf96655f2d5682c82d538a970e66/src/vllm_ple_mmap.py     /usr/local/lib/python3.12/dist-packages/vllm_ple_mmap.py
+#4 DONE 0.0s
+
+#5 [21/27] ADD --checksum=sha256:4245ba4f6cce24ce10840b4db586ef4fbd361248250a15e1e5c22feb2ac4fc18 https://raw.githubusercontent.com/blazux/qwen3.8-Flash-DGX/5be66376e8beaf96655f2d5682c82d538a970e66/LICENSE /opt/llm/licenses/blazux.txt
+#5 DONE 0.0s
+
+#6 [22/27] ADD --checksum=sha256:02e07067a581a25c426b339a5c9598319749393c1222f435f131667bdbb0f36a https://raw.githubusercontent.com/jschmied/qwen38-flash-next-gb10/e0ef69d4f5575dad00d34e05479eaf4c6547bace/LICENSE /opt/llm/licenses/jschmied.txt
+#6 DONE 0.0s
+
+#7 [ 8/27] ADD --checksum=sha256:bcf59adbe3e317bc6300f6eecd01d2dcdb6388b7341449c74bdcee8c949b1f11 https://raw.githubusercontent.com/blazux/qwen3.8-Flash-DGX/5be66376e8beaf96655f2d5682c82d538a970e66/src/patch_mamba_block_size.py /opt/llm/patch_mamba_block_size.py
+#7 DONE 0.0s
+
+#8 [11/27] ADD --checksum=sha256:6459e0fdc8df30e0c1d1f45be7c1b6bef0d68b0e73c073a82c52ea2a7f4b26d4 https://raw.githubusercontent.com/blazux/qwen3.8-Flash-DGX/5be66376e8beaf96655f2d5682c82d538a970e66/src/draft_vocab_65536.npy /opt/llm/draft_vocab_65536.npy
+#8 DONE 0.0s
+
+#9 [14/27] ADD --checksum=sha256:b103fbeaf7589b9468471142ad0b30012a076f93d20ba11fc5ff6dcb1ecd32a6 https://raw.githubusercontent.com/jschmied/qwen38-flash-next-gb10/e0ef69d4f5575dad00d34e05479eaf4c6547bace/patches/kernel-det/bindings_det.cpp /opt/llm/kernel-det/src/bindings_det.cpp
+#9 DONE 0.0s
+
+#10 [ 7/27] ADD --checksum=sha256:fa78ac95c3c7f0426c3a0de63441665eb2e1e2743944a3821f6b89808936be6c https://raw.githubusercontent.com/blazux/qwen3.8-Flash-DGX/5be66376e8beaf96655f2d5682c82d538a970e66/src/mamba_utils_guarded.py /usr/local/lib/python3.12/dist-packages/vllm/v1/worker/mamba_utils.py
+#10 DONE 0.0s
+
+#11 [10/27] ADD --checksum=sha256:209ddfba7ff2e6b434a4442b9b9176bd478d9d17ded94ff46a0c04a8ae42ed0e https://raw.githubusercontent.com/blazux/qwen3.8-Flash-DGX/5be66376e8beaf96655f2d5682c82d538a970e66/src/patch_mtp_draft_vocab.py /opt/llm/patch_mtp_draft_vocab.py
+#11 DONE 0.0s
+
+#12 [13/27] ADD --checksum=sha256:138cacfc5eb117f0922d53c88727e4d0dc26dcfb246c3d401fc280cfc726cc71 https://raw.githubusercontent.com/jschmied/qwen38-flash-next-gb10/e0ef69d4f5575dad00d34e05479eaf4c6547bace/patches/kernel-det/build_det.py /opt/llm/kernel-det/src/build_det.py
+#12 DONE 0.0s
+
+#13 [17/27] ADD --checksum=sha256:b4ef9ce298d43d6c0e6db9fcca451df20815b2cfe33791919c1ad9c0e84f0ba7 https://raw.githubusercontent.com/jschmied/qwen38-flash-next-gb10/e0ef69d4f5575dad00d34e05479eaf4c6547bace/patches/kernel-det/persistent_topk.cuh /opt/llm/kernel-det/src/persistent_topk.cuh
+#13 DONE 0.0s
+
+#14 [19/27] ADD --checksum=sha256:70905073fe3fa361030bf1cb469b74610766bdfe361419cd7df50af2561322e3 https://raw.githubusercontent.com/jschmied/qwen38-flash-next-gb10/e0ef69d4f5575dad00d34e05479eaf4c6547bace/tools/determinism/qsadet_patch.py /opt/llm/qsadet_patch.py
+#14 DONE 0.0s
+
+#15 [16/27] ADD --checksum=sha256:16939700ae389750782ff5c0d5b9caef59aa0ff8b869b64ec94fa72c814910ee https://raw.githubusercontent.com/jschmied/qwen38-flash-next-gb10/e0ef69d4f5575dad00d34e05479eaf4c6547bace/patches/kernel-det/torch_utils.h /opt/llm/kernel-det/src/torch_utils.h
+#15 DONE 0.0s
+
+#16 [15/27] ADD --checksum=sha256:19e1d53425ea9a839445722fd1dac1c41727128eebdce84508c1bfb8592afecf https://raw.githubusercontent.com/jschmied/qwen38-flash-next-gb10/e0ef69d4f5575dad00d34e05479eaf4c6547bace/patches/kernel-det/topk_det.cu /opt/llm/kernel-det/src/topk_det.cu
+#16 DONE 0.0s
+
+#17 [ 3/27] ADD --checksum=sha256:2652964a5084fa8c599e598f0f1d255181394a88305456a108117d4d45e34a04 https://raw.githubusercontent.com/blazux/qwen3.8-Flash-DGX/5be66376e8beaf96655f2d5682c82d538a970e66/src/test_ple_mmap_cpu.py /opt/llm/checks/test_ple_mmap_cpu.py
+#17 DONE 0.0s
+
+#18 [ 1/27] FROM docker.io/vllm/vllm-openai:qwen38-flash-next@sha256:fc120ece0a388cc0aa1caad4a9f1cd92113484ab7ec2fd0efadd62585be05bf8
+#18 resolve docker.io/vllm/vllm-openai:qwen38-flash-next@sha256:fc120ece0a388cc0aa1caad4a9f1cd92113484ab7ec2fd0efadd62585be05bf8 0.0s done
+#18 DONE 0.0s
+
+#19 [20/27] RUN VLLM_QSA_PY=/usr/local/lib/python3.12/dist-packages/vllm/models/qwen3_8_flash_next/nvidia/ops/qsa.py python3 /opt/llm/qsadet_patch.py
+#19 CACHED
+
+#20 [22/27] ADD --checksum=sha256:02e07067a581a25c426b339a5c9598319749393c1222f435f131667bdbb0f36a https://raw.githubusercontent.com/jschmied/qwen38-flash-next-gb10/e0ef69d4f5575dad00d34e05479eaf4c6547bace/LICENSE /opt/llm/licenses/jschmied.txt
+#20 CACHED
+
+#21 [14/27] ADD --checksum=sha256:b103fbeaf7589b9468471142ad0b30012a076f93d20ba11fc5ff6dcb1ecd32a6 https://raw.githubusercontent.com/jschmied/qwen38-flash-next-gb10/e0ef69d4f5575dad00d34e05479eaf4c6547bace/patches/kernel-det/bindings_det.cpp /opt/llm/kernel-det/src/bindings_det.cpp
+#21 CACHED
+
+#22 [ 5/27] RUN chmod 0644 "/usr/local/lib/python3.12/dist-packages/vllm_ple_mmap.py"     && cp "/usr/local/lib/python3.12/dist-packages/vllm/models/qwen3_8_flash_next/nvidia/ple_layer.py" "/usr/local/lib/python3.12/dist-packages/vllm/models/qwen3_8_flash_next/nvidia/ple_layer.py.orig"     && printf '\n\n# Pinned qwen3.8-Flash-DGX PLE mmap hook.\nfrom vllm_ple_mmap import apply as _ple_mmap_apply\n_ple_mmap_apply(Qwen3_8FlashNextNGramEmbedding)\n' >> "/usr/local/lib/python3.12/dist-packages/vllm/models/qwen3_8_flash_next/nvidia/ple_layer.py"     && python3 -c "import ast; ast.parse(open('/usr/local/lib/python3.12/dist-packages/vllm/models/qwen3_8_flash_next/nvidia/ple_layer.py').read())"
+#22 CACHED
+
+#23 [18/27] RUN cd /opt/llm/kernel-det/src && MAX_JOBS=1 DET_ARCH=121a DET_BUILD_DIR=/opt/llm/kernel-det/build python3 build_det.py     && cp /opt/llm/kernel-det/build/_C_det.so /opt/llm/kernel-det/_C_det.so
+#23 CACHED
+
+#24 [ 8/27] ADD --checksum=sha256:bcf59adbe3e317bc6300f6eecd01d2dcdb6388b7341449c74bdcee8c949b1f11 https://raw.githubusercontent.com/blazux/qwen3.8-Flash-DGX/5be66376e8beaf96655f2d5682c82d538a970e66/src/patch_mamba_block_size.py /opt/llm/patch_mamba_block_size.py
+#24 CACHED
+
+#25 [ 4/27] RUN python3 /opt/llm/checks/test_ple_mmap_cpu.py
+#25 CACHED
+
+#26 [ 6/27] RUN sed -i 's/DEFAULT = 102400/DEFAULT = 101376  # GB10 shared-memory limit/' /usr/local/lib/python3.12/dist-packages/vllm/third_party/flash_linear_attention/ops/utils.py     && grep -q 'DEFAULT = 101376' /usr/local/lib/python3.12/dist-packages/vllm/third_party/flash_linear_attention/ops/utils.py     && sed -i 's/for num_warps in \[2, 4\]/for num_warps in [2]  # fla-953 Blackwell race/' /usr/local/lib/python3.12/dist-packages/vllm/third_party/flash_linear_attention/ops/chunk_delta_h.py     && grep -Fq 'for num_warps in [2]' /usr/local/lib/python3.12/dist-packages/vllm/third_party/flash_linear_attention/ops/chunk_delta_h.py
+#26 CACHED
+
+#27 [11/27] ADD --checksum=sha256:6459e0fdc8df30e0c1d1f45be7c1b6bef0d68b0e73c073a82c52ea2a7f4b26d4 https://raw.githubusercontent.com/blazux/qwen3.8-Flash-DGX/5be66376e8beaf96655f2d5682c82d538a970e66/src/draft_vocab_65536.npy /opt/llm/draft_vocab_65536.npy
+#27 CACHED
+
+#28 [17/27] ADD --checksum=sha256:b4ef9ce298d43d6c0e6db9fcca451df20815b2cfe33791919c1ad9c0e84f0ba7 https://raw.githubusercontent.com/jschmied/qwen38-flash-next-gb10/e0ef69d4f5575dad00d34e05479eaf4c6547bace/patches/kernel-det/persistent_topk.cuh /opt/llm/kernel-det/src/persistent_topk.cuh
+#28 CACHED
+
+#29 [19/27] ADD --checksum=sha256:70905073fe3fa361030bf1cb469b74610766bdfe361419cd7df50af2561322e3 https://raw.githubusercontent.com/jschmied/qwen38-flash-next-gb10/e0ef69d4f5575dad00d34e05479eaf4c6547bace/tools/determinism/qsadet_patch.py /opt/llm/qsadet_patch.py
+#29 CACHED
+
+#30 [ 9/27] RUN chmod 0644 /usr/local/lib/python3.12/dist-packages/vllm/v1/worker/mamba_utils.py     && python3 /opt/llm/patch_mamba_block_size.py /usr/local/lib/python3.12/dist-packages
+#30 CACHED
+
+#31 [13/27] ADD --checksum=sha256:138cacfc5eb117f0922d53c88727e4d0dc26dcfb246c3d401fc280cfc726cc71 https://raw.githubusercontent.com/jschmied/qwen38-flash-next-gb10/e0ef69d4f5575dad00d34e05479eaf4c6547bace/patches/kernel-det/build_det.py /opt/llm/kernel-det/src/build_det.py
+#31 CACHED
+
+#32 [10/27] ADD --checksum=sha256:209ddfba7ff2e6b434a4442b9b9176bd478d9d17ded94ff46a0c04a8ae42ed0e https://raw.githubusercontent.com/blazux/qwen3.8-Flash-DGX/5be66376e8beaf96655f2d5682c82d538a970e66/src/patch_mtp_draft_vocab.py /opt/llm/patch_mtp_draft_vocab.py
+#32 CACHED
+
+#33 [15/27] ADD --checksum=sha256:19e1d53425ea9a839445722fd1dac1c41727128eebdce84508c1bfb8592afecf https://raw.githubusercontent.com/jschmied/qwen38-flash-next-gb10/e0ef69d4f5575dad00d34e05479eaf4c6547bace/patches/kernel-det/topk_det.cu /opt/llm/kernel-det/src/topk_det.cu
+#33 CACHED
+
+#34 [ 7/27] ADD --checksum=sha256:fa78ac95c3c7f0426c3a0de63441665eb2e1e2743944a3821f6b89808936be6c https://raw.githubusercontent.com/blazux/qwen3.8-Flash-DGX/5be66376e8beaf96655f2d5682c82d538a970e66/src/mamba_utils_guarded.py /usr/local/lib/python3.12/dist-packages/vllm/v1/worker/mamba_utils.py
+#34 CACHED
+
+#35 [12/27] RUN python3 /opt/llm/patch_mtp_draft_vocab.py /usr/local/lib/python3.12/dist-packages/vllm/models/qwen3_8_flash_next/nvidia/mtp.py
+#35 CACHED
+
+#36 [21/27] ADD --checksum=sha256:4245ba4f6cce24ce10840b4db586ef4fbd361248250a15e1e5c22feb2ac4fc18 https://raw.githubusercontent.com/blazux/qwen3.8-Flash-DGX/5be66376e8beaf96655f2d5682c82d538a970e66/LICENSE /opt/llm/licenses/blazux.txt
+#36 CACHED
+
+#37 [ 3/27] ADD --checksum=sha256:2652964a5084fa8c599e598f0f1d255181394a88305456a108117d4d45e34a04 https://raw.githubusercontent.com/blazux/qwen3.8-Flash-DGX/5be66376e8beaf96655f2d5682c82d538a970e66/src/test_ple_mmap_cpu.py /opt/llm/checks/test_ple_mmap_cpu.py
+#37 CACHED
+
+#38 [16/27] ADD --checksum=sha256:16939700ae389750782ff5c0d5b9caef59aa0ff8b869b64ec94fa72c814910ee https://raw.githubusercontent.com/jschmied/qwen38-flash-next-gb10/e0ef69d4f5575dad00d34e05479eaf4c6547bace/patches/kernel-det/torch_utils.h /opt/llm/kernel-det/src/torch_utils.h
+#38 CACHED
+
+#39 [ 2/27] ADD --checksum=sha256:02adb76b789f9fccf472e922e3be7b4b2a95962ae7d7c3eb99bfeac6052dccad     https://raw.githubusercontent.com/blazux/qwen3.8-Flash-DGX/5be66376e8beaf96655f2d5682c82d538a970e66/src/vllm_ple_mmap.py     /usr/local/lib/python3.12/dist-packages/vllm_ple_mmap.py
+#39 CACHED
+
+#40 [23/27] COPY checks/qwen38_optimization.py /opt/llm/checks/qwen38_optimization.py
+#40 CACHED
+
+#41 [24/27] COPY patches/sha256-4ba17608fbb8908c6dfb2e796b8eb9aa4517cdcf6f261c40e8d9d8583b283e25.py /opt/llm/patches/qwen38_cpu_metadata.py
+#41 DONE 0.0s
+
+#42 [25/27] RUN python3 /opt/llm/patches/qwen38_cpu_metadata.py /usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/short_conv_attn.py
+#42 DONE 0.1s
+
+#43 [26/27] RUN chmod -R a+rX /opt/llm
+#43 DONE 0.2s
+
+#44 [27/27] RUN HOME=/tmp python3 /opt/llm/checks/qwen38_optimization.py
+#44 1.827 vocabulary, draft projection, target preservation, mixed metadata and kernel loading: OK
+#44 DONE 2.1s
+
+#45 exporting to image
+#45 exporting layers 0.1s done
+#45 exporting manifest sha256:77ef8a5db0d0852bd5bbc038040ad1996ec295921df89c108abb03dc5a0f01bb done
+#45 exporting config sha256:0cebbb61dc9898b4a1d83110741fa957d6d397b29fdb56ac2605a5dcf0c73041 done
+#45 exporting attestation manifest sha256:e5855ae6fa00f8533d461ad1b36e25ad2ed6320aeca4d31ebf0118d32f2d09a8 done
+#45 exporting manifest list sha256:8cd67c8d2f84f34b10706df637b44d899ddb74fc495f1d1a99c0caabbbc365b6 done
+#45 naming to docker.io/sy-spark/vllm-qwen38-mmap:20260920-metadata
+#45 naming to docker.io/sy-spark/vllm-qwen38-mmap:20260920-metadata done
+#45 unpacking to docker.io/sy-spark/vllm-qwen38-mmap:20260920-metadata 0.1s done
+#45 DONE 0.3s

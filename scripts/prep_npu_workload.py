@@ -18,9 +18,15 @@ For each kind, outputs land at
 ``~/.cache/sy/aiplane/<model-stem>/`` and the compiled VAIP cache
 survives across daemon restarts.
 
-Status: ``embed`` is fully implemented. ``rerank``, ``vad``, ``stt``,
-and ``ocr`` are scaffolded — each prints the recipe and exits 2 so
-the user (or the ``/workload`` skill) can fill in the export wrapper.
+Status: ``embed`` and ``rerank`` run the full export -> Quark -> VAIP
+pipeline. ``stt`` snapshots AMD's prebuilt NPU ONNX. ``vad`` and ``ocr``
+are scaffolded — each prints the recipe and exits 2 so the user (or the
+``/workload`` skill) can fill in the export wrapper.
+
+The VAIP ``cache_key`` must match, byte for byte, the key the Rust
+worker asks ORT for (``src/aiplane/workloads/<kind>.rs``); a mismatch
+compiles a partition the daemon never looks up, so the first daemon
+start pays the full AIE codegen cost again. See ``cache_key_for``.
 """
 from __future__ import annotations
 
@@ -44,6 +50,11 @@ WORKLOAD_DEFAULTS = {
         "quant_preset": "BF16",
         "no_bf16_shrink": True,
         "ships_tokenizer": True,
+        # Must match embed.rs: `compiled_<stem>_bf16_seq<SEQ>_o1`. `_o1`
+        # versions ORT's pre-pass optimisation level (node names are baked
+        # into the .rai), so the generic `_b<batch>` shape would orphan
+        # the partition we just paid to compile.
+        "cache_key_tail": "_o1",
     },
     "rerank": {
         "model_id": "BAAI/bge-reranker-v2-m3",
@@ -75,7 +86,15 @@ WORKLOAD_DEFAULTS = {
         # batch>1 export attempt.
         "batch_size": 1,
         "quant_preset": "BF16",
-        "no_bf16_shrink": True,
+        # Shrink ON is mandatory at batch=1, not optional: Quark's BF16
+        # pass keeps the FP32 initializers inline behind Cast nodes, so
+        # without `_shrink_fp32_initializers_to_bf16` the graph VAIP has
+        # to serialize is ~2.27 GiB and VAIP dies with
+        # `onnx.ModelProto exceeded maximum protobuf size of 2GB:
+        # 2274195868 / resultmodel serialize to string error` during the
+        # warm compile. Shrunk it is ~1.2 GiB and the partition lands.
+        # (batch>1 is still out — same cap, bigger graph; see above.)
+        "no_bf16_shrink": False,
         "strip_value_info": False,
         "ships_tokenizer": True,
     },
@@ -322,11 +341,22 @@ _WHISPER_VITISAI_CONFIGS = {
 }
 
 
-def prepare_stt_prebuilt(defaults: dict, out_dir: Path) -> dict:
+def prepare_stt_prebuilt(defaults: dict, out_dir: Path,
+                         skip_warm: bool = False) -> dict:
     """Snapshot the prebuilt Whisper NPU artefacts into the cache layout
-    `aiplane::workloads::stt` expects, and vendor the VitisAI EP configs
-    alongside them. No Quark export / quantise — the ONNX from
-    `amd/whisper-medium-onnx-npu` is already VAIML-partitioned BF16.
+    `aiplane::workloads::stt` expects, vendor the VitisAI EP configs
+    alongside them, and compile both partitions on the NPU. No Quark export /
+    quantise — the ONNX from `amd/whisper-medium-onnx-npu` is already
+    VAIML-partitioned BF16.
+
+    "Partitioned" describes the *graph*; the AIE *bitstream* is still ours to
+    build. `warm_npu_cache` below does that for whisper exactly as it does for
+    embed/rerank, because the compile must not happen at runtime: it peaks at
+    ~19.5 GiB / ~6 min (measured, Strix Point) and `sy-knowledge.service` runs
+    under `MemoryHigh`, where the kernel answers an over-cap allocation by
+    parking the threads in direct reclaim — the STT worker then sits in
+    `loading` forever while the host idles with 35 GiB free. See
+    specs/bugs/BUG-20260927-0910.md.
 
     Resulting layout under `out_dir` (= ~/.cache/sy/aiplane/whisper-medium):
 
@@ -335,6 +365,8 @@ def prepare_stt_prebuilt(defaults: dict, out_dir: Path) -> dict:
                    preprocessor_config.json}
         vitisai_config_whisper_encoder.json
         vitisai_config_whisper_decoder.json
+        whisper_medium_encoder/whisper_medium_encoder.rai   (compiled here)
+        whisper_medium_decoder/whisper_medium_decoder.rai   (compiled here)
     """
     import shutil
     from huggingface_hub import snapshot_download
@@ -346,25 +378,43 @@ def prepare_stt_prebuilt(defaults: dict, out_dir: Path) -> dict:
     amd_src.mkdir(parents=True, exist_ok=True)
     tok_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"      snapshot {onnx_repo} → {amd_src}", file=sys.stderr)
-    onnx_local = Path(snapshot_download(repo_id=onnx_repo))
-    for name in ("encoder_model.onnx", "decoder_model.onnx",
-                 "decoder_model.onnx.data"):
-        src = onnx_local / name
-        if src.is_file():
-            shutil.copy2(src, amd_src / name)
+    onnx_names = ("encoder_model.onnx", "decoder_model.onnx",
+                  "decoder_model.onnx.data")
+    onnx_present = all((amd_src / n).is_file() and (amd_src / n).stat().st_size
+                       for n in onnx_names)
+    if onnx_present:
+        # Re-running prep to (re)compile the .rai partitions must not drag
+        # 3.1 GB through the Hugging Face cache again.
+        print(f"      reusing existing {amd_src}", file=sys.stderr)
+    else:
+        print(f"      snapshot {onnx_repo} → {amd_src}", file=sys.stderr)
+        # Pull only what the loader reads. The repo also publishes
+        # medium_encoder.onnx / ggml-*.rai variants that sy never touches: an
+        # unfiltered snapshot drags ~4.7 GB through the HF cache to use ~3.1 GB.
+        onnx_local = Path(snapshot_download(
+            repo_id=onnx_repo,
+            allow_patterns=list(onnx_names),
+        ))
+        for name in onnx_names:
+            src = onnx_local / name
+            if src.is_file():
+                shutil.copy2(src, amd_src / name)
 
-    print(f"      snapshot {model_id} tokenizer/feature-extractor → {tok_dir}",
-          file=sys.stderr)
-    tok_local = Path(snapshot_download(
-        repo_id=model_id,
-        allow_patterns=["tokenizer.json", "vocab.json", "merges.txt",
-                        "tokenizer_config.json", "special_tokens_map.json",
-                        "added_tokens.json", "preprocessor_config.json"],
-    ))
-    for f in tok_local.glob("*"):
-        if f.is_file():
-            shutil.copy2(f, tok_dir / f.name)
+    tok_names = ("tokenizer.json", "preprocessor_config.json")
+    if all((tok_dir / n).is_file() for n in tok_names):
+        print(f"      reusing existing {tok_dir}", file=sys.stderr)
+    else:
+        print(f"      snapshot {model_id} tokenizer/feature-extractor → {tok_dir}",
+              file=sys.stderr)
+        tok_local = Path(snapshot_download(
+            repo_id=model_id,
+            allow_patterns=["tokenizer.json", "vocab.json", "merges.txt",
+                            "tokenizer_config.json", "special_tokens_map.json",
+                            "added_tokens.json", "preprocessor_config.json"],
+        ))
+        for f in tok_local.glob("*"):
+            if f.is_file():
+                shutil.copy2(f, tok_dir / f.name)
 
     for name, src in _WHISPER_VITISAI_CONFIGS.items():
         if not src.is_file():
@@ -372,13 +422,40 @@ def prepare_stt_prebuilt(defaults: dict, out_dir: Path) -> dict:
         shutil.copy2(src, out_dir / name)
         print(f"      vendored {name}", file=sys.stderr)
 
-    return {
+    summary = {
         "onnx_repo": onnx_repo,
         "encoder_onnx": str(amd_src / "encoder_model.onnx"),
         "decoder_onnx": str(amd_src / "decoder_model.onnx"),
         "tokenizer_dir": str(tok_dir),
         "vitisai_configs": [str(out_dir / n) for n in _WHISPER_VITISAI_CONFIGS],
     }
+
+    # cache_key must equal what stt.rs hands the VitisAI EP, or the daemon
+    # looks for its bitstream in a directory we just left empty.
+    partitions = (
+        ("whisper_medium_encoder", amd_src / "encoder_model.onnx",
+         "vitisai_config_whisper_encoder.json"),
+        ("whisper_medium_decoder", amd_src / "decoder_model.onnx",
+         "vitisai_config_whisper_decoder.json"),
+    )
+    if skip_warm:
+        print("      skipping NPU compile (--skip-warm); first `aiplane run "
+              "--workload stt` will refuse to load", file=sys.stderr)
+        summary["warmed"] = []
+        return summary
+
+    warmed = []
+    for cache_key, onnx, cfg_name in partitions:
+        print(f"      compiling {cache_key} on NPU (~3 min, ~14 GiB peak)",
+              file=sys.stderr)
+        warm = warm_npu_cache(onnx, out_dir / cfg_name, out_dir, cache_key)
+        summary[f"{cache_key}_compile_seconds"] = warm["compile_seconds"]
+        summary[f"{cache_key}_first_inference_ms"] = warm["first_inference_ms"]
+        warmed.append(cache_key)
+        print(f"      compiled {cache_key} in {warm['compile_seconds']}s",
+              file=sys.stderr)
+    summary["warmed"] = warmed
+    return summary
 
 
 # =============================================================================
@@ -584,6 +661,51 @@ def warm_npu_cache(bf16_path: Path, vaip_config: Path, cache_dir: Path,
     }
 
 
+def assert_writable_in_place(out_dir: Path, stem: str) -> None:
+    """Refuse to write through a symlink that escapes `out_dir`.
+
+    Older installs populated ``~/.cache/sy/aiplane/<stem>/`` with symlinks
+    into ``~/.cache/sy/npu-embed/``. That layout is a double hazard: a
+    cache sweep of the target leaves dangling links the loader reports as
+    "model not found", and ONNX >= 1.16 rejects external data whose
+    resolved path leaves the model directory
+    (`external data path ... is outside the model directory`), so the
+    artifacts cannot even be rebuilt in place. Deleting the links is the
+    fix — this guard just says so before a 10-minute export instead of
+    after it.
+    """
+    escaped = [
+        link.name
+        for link in (out_dir / f"{stem}.onnx", out_dir / f"{stem}.onnx.data",
+                     out_dir / f"{stem}.tokenizer",
+                     out_dir / f"{stem}.bf16.onnx",
+                     out_dir / f"{stem}.bf16.onnx.data")
+        if link.is_symlink() and not (link.resolve().is_relative_to(out_dir))
+    ]
+    if escaped:
+        print(f"error: {out_dir} holds symlinks that point outside it: "
+              f"{', '.join(escaped)}", file=sys.stderr)
+        print(f"hint: rm {' '.join(str(out_dir / n) for n in escaped)} "
+              f"and re-run; artefacts are written in place from now on.",
+              file=sys.stderr)
+        raise SystemExit(2)
+
+
+def cache_key_for(workload: str, defaults: dict, stem: str, suffix: str,
+                  seq_len: int, batch_size: int) -> str:
+    """VAIP partition cache key for `workload`, byte-identical to the key
+    the Rust worker passes to the VitisAI EP.
+
+    Generic shape is ``compiled_<stem>_<suffix>_seq<N>_b<B>`` (what
+    ``rerank`` asks for). Workloads whose loader pins a different tail set
+    ``cache_key_tail`` in ``WORKLOAD_DEFAULTS`` — ``embed`` does, because
+    its cached ``.rai`` is versioned by ORT optimisation level rather than
+    batch dim. Wrong key == a compiled partition the daemon never looks up.
+    """
+    tail = defaults.get("cache_key_tail", f"_b{batch_size}")
+    return f"compiled_{stem}_{suffix}_seq{seq_len}{tail}"
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -610,6 +732,10 @@ def main() -> int:
                                  "vaip_config.json"))
     ap.add_argument("--skip-warm", action="store_true",
                     help="Skip the NPU compile/warmup step.")
+    ap.add_argument("--cache-key", default=None,
+                    help="Override the VAIP partition cache key. Must equal "
+                         "the key the Rust worker requests or the compiled "
+                         "partition is orphaned (see cache_key_for).")
     ap.add_argument("--no-bf16-shrink", action="store_true",
                     help="Force-skip the BF16 initializer shrink pass. "
                          "Some workloads default to this anyway "
@@ -651,13 +777,15 @@ def main() -> int:
     out_dir = (args.output_dir or
                (Path.home() / ".cache/sy/aiplane" / stem)).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
+    assert_writable_in_place(out_dir, stem)
     fp32 = out_dir / f"{stem}.onnx"
     suffix = preset.lower()
     quant = out_dir / f"{stem}.{suffix}.onnx"
     batch_size = max(1, args.batch_size or defaults.get("batch_size", 1))
     # Cache key always folds the batch dim in; we don't carry a
     # back-compat suffix-free variant.
-    cache_key = f"compiled_{stem}_{suffix}_seq{seq_len}_b{batch_size}"
+    cache_key = args.cache_key or cache_key_for(
+        args.workload, defaults, stem, suffix, seq_len, batch_size)
 
     summary: dict = {
         "workload": args.workload,
@@ -669,13 +797,18 @@ def main() -> int:
         "output_dir": str(out_dir),
     }
 
-    # Prebuilt-ONNX workloads (Whisper STT) skip the Quark export /
-    # quantise / NPU-warm pipeline: the artefacts are already
-    # VAIML-partitioned upstream. Snapshot them into place and return.
+    # Prebuilt-ONNX workloads (Whisper STT) skip the Quark export / quantise
+    # steps — the artefacts arrive VAIML-partitioned — but NOT the NPU warm:
+    # the .rai bitstream still has to be compiled locally, and it has to be
+    # compiled here rather than inside the daemon. See BUG-20260927-0910.
     if defaults.get("prebuilt_onnx"):
-        print(f"[1/1] Fetching prebuilt NPU artefacts for {args.workload}",
+        print(f"[1/2] Fetching prebuilt NPU artefacts for {args.workload}",
               file=sys.stderr)
-        summary.update(prepare_stt_prebuilt(defaults, out_dir))
+        print(f"[2/2] Compiling partitions on NPU "
+              f"({'skipped' if args.skip_warm else '~6 min total'})",
+              file=sys.stderr)
+        summary.update(prepare_stt_prebuilt(defaults, out_dir,
+                                            skip_warm=args.skip_warm))
         if args.json:
             print(json.dumps(summary, indent=2))
         else:

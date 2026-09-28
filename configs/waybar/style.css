@@ -116,7 +116,7 @@ tooltip {
 
 /* Hidden tiles collapse to zero width — used by sy-disk above threshold,
    sy-silent outside its window, and sy-bat on machines with no battery.
-   sy-knowledge collapses when the daemon is down. */
+   sy-knowledge collapses only where the plane never ran on this host. */
 #custom-sy-gpu.absent,
 #custom-sy-npu.absent,
 #custom-sy-disk.hidden,
@@ -146,6 +146,7 @@ tooltip {
 #custom-sy-knowledge.cancelling { color: @fg_dim; }
 #custom-sy-knowledge.paused     { color: @yellow; }
 #custom-sy-knowledge.error      { color: @red; }
+#custom-sy-knowledge.down       { color: @red; font-weight: 700; }
 
 #custom-sy-silent.active { color: @aqua; }
 

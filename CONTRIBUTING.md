@@ -160,6 +160,10 @@ The non-negotiables from [`AGENTS.md`](AGENTS.md) apply:
 
 Documentation is a deliverable, not an afterthought.
 
+Documentation templates and other third-party material are listed in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Preserve the attribution
+comments at the top of derived documentation pages when editing them.
+
 - Every PR that changes user-visible behaviour ships a docs update
   in the same change. That can be `README.md`, a page under
   `docs/tutorials/`, `docs/how-to/`, `docs/reference/`, or

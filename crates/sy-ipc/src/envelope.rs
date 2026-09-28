@@ -27,16 +27,24 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// break that mandates a `SCHEMA_VERSION` bump.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
+    /// Public struct field in the sy public API.
     pub schema_version: u32,
+    /// Public struct field in the sy public API.
     pub request_id: Ulid,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    /// Public struct field in the sy public API.
     pub trace_id: Option<TraceId>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    /// Public struct field in the sy public API.
     pub parent_span_id: Option<SpanId>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    /// Public struct field in the sy public API.
     pub deadline_ms: Option<u64>,
+    /// Public struct field in the sy public API.
     pub priority: Priority,
+    /// Public struct field in the sy public API.
     pub method: String,
+    /// Public struct field in the sy public API.
     pub params: serde_json::Value,
 }
 
@@ -49,16 +57,25 @@ pub struct Request {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Response {
+    /// Public variant in the sy public API.
     Ok {
+        /// Public struct field in the sy public API.
         schema_version: u32,
+        /// Public struct field in the sy public API.
         request_id: Ulid,
+        /// Public struct field in the sy public API.
         result: serde_json::Value,
         #[serde(skip_serializing_if = "Option::is_none", default)]
+        /// Public struct field in the sy public API.
         blob: Option<BlobRef>,
     },
+    /// Public variant in the sy public API.
     Err {
+        /// Public struct field in the sy public API.
         schema_version: u32,
+        /// Public struct field in the sy public API.
         request_id: Ulid,
+        /// Public struct field in the sy public API.
         error: ErrorBody,
     },
 }
@@ -71,8 +88,11 @@ pub enum Response {
 /// seal check lives in the consumer of `sy-ipc`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlobRef {
+    /// Public struct field in the sy public API.
     pub kind: BlobKind,
+    /// Public struct field in the sy public API.
     pub len: u64,
+    /// Public struct field in the sy public API.
     pub sha256: String,
 }
 
@@ -82,6 +102,7 @@ pub struct BlobRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BlobKind {
+    /// Public variant in the sy public API.
     Memfd,
 }
 
@@ -91,11 +112,15 @@ pub enum BlobKind {
 /// back off (e.g. `Overloaded`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorBody {
+    /// Public struct field in the sy public API.
     pub code: ErrorCode,
+    /// Public struct field in the sy public API.
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    /// Public struct field in the sy public API.
     pub retry_after_ms: Option<u64>,
     #[serde(default)]
+    /// Public struct field in the sy public API.
     pub details: serde_json::Value,
 }
 
@@ -134,7 +159,12 @@ pub fn parse_request_strict(bytes: &[u8]) -> Result<Request, ParseRequestError> 
 /// `BadRequest` maps onto `ErrorCode::BadRequest`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseRequestError {
-    IncompatibleSchema { got: Option<u32> },
+    /// The peer uses a different schema version.
+    IncompatibleSchema {
+        /// Schema version received from the peer, when available.
+        got: Option<u32>,
+    },
+    /// Public variant in the sy public API.
     BadRequest(String),
 }
 

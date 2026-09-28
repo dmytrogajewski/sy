@@ -54,7 +54,7 @@ will reference.
 |---|---|---|---|
 | `basics_license` | pass | [`LICENSE`](../../LICENSE) | MIT licence, SPDX identifier visible in the file header. README's §License section cites `MIT` and links the file. |
 | `basics_license_location` | pass | [`LICENSE`](../../LICENSE) at repo root | Standard location. |
-| `basics_floss_license` | pass | [`LICENSE`](../../LICENSE) | MIT is on the [OSI-approved list](https://opensource.org/licenses/MIT). |
+| `basics_floss_license` | pass | [`LICENSE`](../../LICENSE) | MIT is on the [SPDX licence list](https://spdx.org/licenses/MIT.html), which records its OSI-approved identifier. |
 | `basics_documentation_basics` | pass | [`README.md`](../../README.md), [`CONTRIBUTING.md`](../../CONTRIBUTING.md) | README answers "what is this" / "how to install" / "how to use" in the first screen; CONTRIBUTING explains how to build and test. |
 | `basics_documentation_interface` | pass | [`docs/reference/cli.md`](../reference/cli.md), [`README.md` §CLI cheat-sheet](../../README.md#cli-cheat-sheet) | Per-subcommand flag tables, exit codes, env vars. Every command also supports `--help`. |
 | `basics_repo_public` | pass | GitHub repository at `https://github.com/dmytrogajewski/sy` | Public, version-controlled. |

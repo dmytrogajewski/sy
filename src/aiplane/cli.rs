@@ -5,6 +5,7 @@
 //! As of the scaffold commit, only `status`, `list`, and `run` are
 //! wired. `install-service` and `bench` land with the daemon migration.
 
+use std::io::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -424,12 +425,25 @@ fn run(
     // debug and before the daemon is migrated. The daemon-side
     // bridge dispatches through the supervisor exactly as the
     // legacy `Req::Run` did.
+    // True when this invocation loaded a workload *here* rather than in the
+    // daemon, i.e. when this process owns native (ORT/VitisAI) sessions whose
+    // destructors are known-broken. See `exit_process` below.
+    let mut served_in_process = false;
     let output = match call_aiplane_run(kind, input.clone(), priority, deadline_ms, trace_id) {
         Ok(out) => out,
         Err(AiplaneCallError::DaemonDown) => {
+            // The VitisAI EP shells out to the AMD AIE compiler, which prints
+            // its banner and `peano-lib` progress through C `printf` on **fd
+            // 1** — up to megabytes of it on a cold load. That is the same
+            // descriptor `--json` writes its document to, so the flag's
+            // machine-readable contract only holds if the chatter is moved to
+            // stderr for the duration (BUG-20260927-0910).
+            let _quiet = FdRedirect::to_stderr()?;
             let pool = Arc::new(SessionPool::new());
             let registry = workloads::register_all(pool);
-            registry.run(kind, input)?
+            let out = registry.run(kind, input)?;
+            served_in_process = true;
+            out
         }
         Err(AiplaneCallError::Wire(e)) => return Err(e.context("ipc request")),
         Err(AiplaneCallError::Remote(msg)) => anyhow::bail!("daemon: {msg}"),
@@ -464,7 +478,82 @@ fn run(
             }
         }
     }
+    if served_in_process {
+        // The result is on stdout and flushed; leave the process before any
+        // ONNX Runtime / VitisAI destructor runs. Those finalizers fault
+        // (SIGSEGV at exit) and the AIE compiler prints more banner text while
+        // doing it, so letting them run would both crash the CLI after a
+        // successful answer and smear fd 1 — same teardown bug that forced
+        // `_exit` in the worker path (BUG-20260927-0400).
+        std::io::stdout().flush().ok();
+        std::io::stderr().flush().ok();
+        super::worker::runner::exit_process(0);
+    }
     Ok(())
+}
+
+/// OS-level `dup2` of one descriptor onto another, reverted on drop.
+///
+/// The AMD inference stack writes to fd 1 through C `printf`, which
+/// `std::io::set_output_capture` and any Rust-level redirection cannot see.
+/// Moving the descriptor itself is the only way to keep `--json` output
+/// parseable while an EP is loaded.
+struct FdRedirect {
+    dst: i32,
+    saved: i32,
+}
+
+impl FdRedirect {
+    /// Send everything written to `dst` to `src` until this value drops.
+    ///
+    /// Rust's own stdout is drained first: it is user-space buffered, and
+    /// otherwise bytes queued *before* the redirect would be flushed into
+    /// the wrong descriptor afterwards.
+    ///
+    // SAFETY: `dup`/`dup2` are the POSIX descriptor primitives. They take no
+    // pointers and cannot alias or free Rust-owned memory; the sole
+    // requirement is that `dst`'s original target survives until `Drop` puts
+    // it back. That lifetime is exactly what this struct encodes, so the
+    // pair is not exposed as free functions.
+    fn new(dst: i32, src: i32) -> Result<Self> {
+        std::io::stdout()
+            .flush()
+            .context("flush stdout before descriptor redirect")?;
+        // SAFETY: see the justification above for this `unsafe` block.
+        let saved = unsafe {
+            let saved = libc::dup(dst);
+            if saved < 0 {
+                anyhow::bail!("dup fd {dst}: {}", std::io::Error::last_os_error());
+            }
+            if libc::dup2(src, dst) < 0 {
+                let e = std::io::Error::last_os_error();
+                libc::close(saved);
+                anyhow::bail!("dup2 fd {src} -> {dst}: {e}");
+            }
+            saved
+        };
+        Ok(Self { dst, saved })
+    }
+
+    /// Redirect the process's standard output onto standard error.
+    fn to_stderr() -> Result<Self> {
+        Self::new(libc::STDOUT_FILENO, libc::STDERR_FILENO)
+    }
+}
+
+impl Drop for FdRedirect {
+    fn drop(&mut self) {
+        // Drain the Rust buffer while still redirected so nothing we printed
+        // during the window leaks to the restored descriptor, then put the
+        // original target back.
+        std::io::stdout().flush().ok();
+        // SAFETY: `self.saved` is the `dup` we took in `new` and this type is
+        // not `Copy`/`Clone`, so `dup2` + `close` run on it exactly once.
+        unsafe {
+            libc::dup2(self.saved, self.dst);
+            libc::close(self.saved);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -672,5 +761,67 @@ mod tests {
             rendered.contains("unit"),
             "error should explain the missing unit: {rendered}"
         );
+    }
+
+    /// The AMD stack writes with C `printf`, not `println!`, so the guard has
+    /// to move the *descriptor*. Asserted against private temp-file fds
+    /// rather than the harness's own stdout, which would scramble other
+    /// tests' captured output (BUG-20260927-0910).
+    #[test]
+    fn fd_redirect_moves_native_writes_and_restores_the_original() {
+        use std::os::fd::AsRawFd;
+
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let original = std::fs::File::create(dir.path().join("stdout")).expect("create stdout");
+        let diverted = std::fs::File::create(dir.path().join("stderr")).expect("create stderr");
+
+        let write = |fd: i32, bytes: &[u8]| {
+            // SAFETY: `bytes` outlives the call and fd is an open descriptor
+            // owned by the File above; this mirrors what C printf does.
+            unsafe {
+                libc::write(fd, bytes.as_ptr() as *const std::ffi::c_void, bytes.len());
+            }
+        };
+
+        write(original.as_raw_fd(), b"before ");
+        {
+            let guard =
+                FdRedirect::new(original.as_raw_fd(), diverted.as_raw_fd()).expect("redirect");
+            // Write the way the EP does: straight to the descriptor. Rust's own
+            // `println!` is deliberately not asserted here — under `--test`
+            // the harness intercepts `stdout` in user space, so a Rust-level
+            // write never reaches the fd and would prove nothing.
+            write(guard.dst, b"native chatter");
+        }
+        write(original.as_raw_fd(), b"after");
+
+        let original_text = std::fs::read_to_string(dir.path().join("stdout")).expect("read back");
+        let diverted_text = std::fs::read_to_string(dir.path().join("stderr")).expect("read back");
+        assert_eq!(
+            diverted_text, "native chatter",
+            "the native write made while redirected must land in the new target: {diverted_text:?}"
+        );
+        assert!(
+            original_text.starts_with("before "),
+            "bytes queued before the redirect must not be diverted: {original_text:?}"
+        );
+        assert!(
+            original_text.ends_with("after"),
+            "the descriptor must be restored on drop: {original_text:?}"
+        );
+        assert!(
+            !original_text.contains("chatter"),
+            "writes inside the window must not leak back: {original_text:?}"
+        );
+    }
+
+    /// `FdRedirect::new` is only reachable through `to_stderr` in production;
+    /// without that the helper reads as dead code and it is the call site
+    /// that owns the contract.
+    #[test]
+    fn fd_redirect_to_stderr_targets_standard_out() {
+        let guard = FdRedirect::to_stderr().expect("redirect stdout to stderr");
+        assert_eq!(guard.dst, libc::STDOUT_FILENO);
+        drop(guard);
     }
 }

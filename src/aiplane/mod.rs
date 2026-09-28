@@ -11,6 +11,7 @@
 //!
 //! - `registry` — `WorkloadKind` enum + `Workload` trait + `Registry`
 //!   dispatch.
+//! - `degraded` — record of workers the daemon could not raise (BUG-20260927-0119).
 //! - `session` — shared NPU mutex + `RunCtx` (cancellation/throughput).
 //! - `reexec` — the AMD venv re-exec dance (called from `main()` before
 //!   any thread spawn).
@@ -30,6 +31,7 @@
 //! daemon and renames the systemd unit to `sy-aiplane.service`.
 
 pub mod cli;
+pub mod degraded;
 pub mod error;
 pub mod ipc;
 #[cfg(feature = "mon-exporter")]

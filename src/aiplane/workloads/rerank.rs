@@ -105,6 +105,19 @@ impl RerankWorkload {
     }
 }
 
+/// `(bf16 model, tokenizer.json)` — the files [`RerankWorkload::load`]
+/// refuses to start without. There is no FP32/CPU fallback here (see
+/// `try_vitisai`: the xlm-roberta-large graph is only usable on the AIE),
+/// so a missing artifact really does mean "no reranking".
+/// `pub` so `sy doctor` pre-flights the loader's own list.
+pub fn required_paths() -> (PathBuf, PathBuf) {
+    let dir = RerankWorkload::cache_dir();
+    (
+        dir.join(format!("{MODEL_STEM}.bf16.onnx")),
+        dir.join(format!("{MODEL_STEM}.tokenizer/tokenizer.json")),
+    )
+}
+
 impl Default for RerankWorkload {
     fn default() -> Self {
         Self::new()
@@ -126,8 +139,7 @@ impl Workload for RerankWorkload {
             return Ok(());
         }
         let dir = Self::cache_dir();
-        let model_path = dir.join(format!("{MODEL_STEM}.bf16.onnx"));
-        let tokenizer_path = dir.join(format!("{MODEL_STEM}.tokenizer/tokenizer.json"));
+        let (model_path, tokenizer_path) = required_paths();
 
         if !model_path.is_file() {
             anyhow::bail!(

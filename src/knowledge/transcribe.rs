@@ -56,6 +56,95 @@ const STT_SAMPLE_RATE: u32 = 16_000;
 /// return immediately.
 const STT_READY_DEADLINE: Duration = Duration::from_secs(1800);
 
+/// Least a transcript must say to be worth a vector.
+///
+/// Whisper answers silence with an empty string, a lone replacement
+/// character, or one of its own non-speech annotations (`[Music]`,
+/// `(footsteps)`, `[heartbeat]`); on mere noise it hallucinates a syllable
+/// (`в`, `(`, `-`). Scored with [`speech_signal`] across this machine's
+/// 4 133 Telegram sidecars: 129 carry **zero** signal, 23 more carry one to
+/// three, and the median is 84. The line cannot be raised toward "a useful
+/// snippet", because `спасибо` is seven characters and saying thank you is a
+/// perfectly searchable thing to have done. So 4, which rejects the 150
+/// provable non-utterances among the 4 132 indexed voice chunks (3.6 %) and
+/// not one real word.
+///
+/// Not cosmetic. A one-character document embeds to a degenerate vector that
+/// dense retrieval ranks *above* real content: two such chunks topped the live
+/// query that surfaced `BUG-20260927-2355`.
+pub(crate) const MIN_SPEECH_CHARS: usize = 4;
+
+// The floor's entire justification is that it sits under a real word (спасибо is
+// seven characters and is a complete answer). Asserted at compile time, so a
+// future tightening that starts eating content fails the build rather than
+// quietly deleting transcripts — a runtime `assert!` on constants is
+// tautological, and clippy says so.
+const _: () = assert!(
+    MIN_SPEECH_CHARS <= 7,
+    "MIN_SPEECH_CHARS above 7 starts eating real one-word voice notes"
+);
+
+/// Payload kinds whose text is a *transcript* rather than file bytes, and are
+/// therefore governed by [`has_speech`]. Today only Telegram voice notes and
+/// round videos. Deliberately narrow: `sy knowledge prune` re-applies this
+/// gate to already-indexed points, and applying a transcript rule to `code`
+/// or `notes` chunks would delete real content — an earlier scan scored 382
+/// Rust chunks as silence before the brace bug was fixed.
+pub(crate) const TRANSCRIBED_KINDS: &[&str] = &[crate::knowledge::pipeline::telegram::VOICE_KIND];
+
+/// Whether a transcript carries speech at all, as opposed to silence, noise,
+/// or a sound-effect label. Filters the transcription route
+/// ([`crate::knowledge::pipeline::telegram::TelegramPipeline::voice_records`])
+/// and the index gate in `cli::index_impl`, which share this one predicate so
+/// no source can index what no source can transcribe.
+pub(crate) fn has_speech(text: &str) -> bool {
+    speech_signal(text) >= MIN_SPEECH_CHARS
+}
+
+/// Signal carried by a transcript: weighted characters, outside bracketed
+/// annotations. Non-alphanumerics score nothing (which also discards the
+/// U+FFFD a failed decode leaves behind), and anything inside bracketing
+/// punctuation is whisper describing the audio rather than words spoken in it.
+fn speech_signal(text: &str) -> usize {
+    let mut annotation_depth = 0usize;
+    text.chars()
+        .map(|c| {
+            match c {
+                // Whispers annotates with brackets and parens only. Braces
+                // are NOT an annotation: this predicate is written for
+                // transcripts, but a chunk of Rust is `{ ... }` all the way
+                // down, and treating braces as noise scored 382 real
+                // `agent-history` code chunks at zero on the first scan.
+                '[' | '(' => annotation_depth += 1,
+                ']' | ')' => annotation_depth = annotation_depth.saturating_sub(1),
+                _ => {}
+            }
+            if annotation_depth == 0 {
+                signal_weight(c)
+            } else {
+                0
+            }
+        })
+        .sum()
+}
+
+/// Information weight of one character. An ideograph or kana is a whole
+/// morpheme, so "你好吗" ("how are you?") is a searchable phrase at three
+/// characters where "спасибо" needs seven. Weighing them alike would delete
+/// Chinese, Japanese and Korean speech while keeping Russian — a silent,
+/// script-shaped data-loss bug. `chunk.rs` already refuses to size its char
+/// budget by ASCII assumptions; neither does this.
+fn signal_weight(c: char) -> usize {
+    if !c.is_alphanumeric() {
+        return 0;
+    }
+    // CJK radicals/ideographs incl. kana, Hangul compatibility jamo, compat
+    // ideographs, Hangul syllables.
+    const CJK: &[std::ops::RangeInclusive<u32>] =
+        &[0x2E80..=0x9FFF, 0xAC00..=0xD7AF, 0xF900..=0xFAFF];
+    usize::from(CJK.iter().any(|r| r.contains(&(c as u32)))) + 1
+}
+
 /// Turns a voice/video media file into transcribed text. Implementations:
 /// the always-compiled [`AiplaneTranscriber`] (the NPU `Stt` route — the
 /// default when the supervisor is running), the [`DisabledTranscriber`]
@@ -213,6 +302,59 @@ pub fn default_transcriber() -> Box<dyn Transcriber> {
 
 #[cfg(test)]
 mod tests {
+    /// Found by scanning the live corpus with this predicate before shipping
+    /// it: 382 `agent-history` chunks are Rust shaped like `{ kind:
+    /// CheckpointRegionKind::DraftBound` and scored zero once braces counted
+    /// as annotations. Transcripts never contain code, but a gate that is
+    /// *wrong* about punctuation is a gate someone will eventually reuse —
+    /// `BUG-20260927-2355`.
+    #[test]
+    fn braces_are_not_annotations() {
+        for code in [
+            "{ kind: CheckpointRegionKind::DraftBound",
+            "u64 { 77: pub fn new(code: &'static str, msg: &'static str) }",
+        ] {
+            assert!(has_speech(code), "code must not read as silence: {code:?}");
+        }
+    }
+
+    #[test]
+    fn silence_and_sound_effects_are_not_speech() {
+        // Every shape observed in the real corpus, verbatim.
+        for junk in [
+            "",
+            "   ",
+            "\u{fffd}",
+            "-",
+            "(",
+            "в",
+            "[Music]",
+            "[ music]",
+            "[ [Music]",
+            "[heartbeat]",
+            "(footsteps)",
+            "[me [meow]",
+            "(音声",
+        ] {
+            assert!(!has_speech(junk), "must reject {junk:?}");
+        }
+    }
+
+    #[test]
+    fn real_words_are_speech_in_any_script() {
+        // The 7-character Russian word is the reason the floor is 4 and not 12.
+        for real in [
+            "спасибо",
+            "успех!",
+            "hello",
+            "你好吗",
+            "(окей) погнали",
+            "[Music] Thank you very much",
+        ] {
+            assert!(has_speech(real), "must accept {real:?}");
+        }
+    }
+
     use super::*;
     use std::cell::Cell;
 

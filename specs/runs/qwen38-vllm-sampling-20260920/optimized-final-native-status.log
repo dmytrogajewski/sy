@@ -1,0 +1,5 @@
+sy-spark-i_399d6f488a7be6ee2831fdc7ef153624-g8 Up 26 minutes
+pid=2985242 restarts=0 oom=false policy=unless-stopped
+GPU 0: NVIDIA GB10 (UUID: GPU-14f061ec-1fbb-b9a7-713c-fe23683c880b)
+releases/0.1.0-5d710a6c595fb1a3b1cd80de4e8d193e55cd8ed2035e6ecf631863c0e4852be4
+c01dac71cde5a519af3488d1aac55cedac339029a363edce81d16fe70b556f15  /opt/sy-spark/current/sy

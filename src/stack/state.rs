@@ -310,6 +310,7 @@ pub fn thumbs_dir() -> Result<PathBuf> {
     Ok(d)
 }
 
+#[cfg(any(feature = "gui-iced", test))]
 fn is_image_item(item: &Item) -> bool {
     if item.content_kind == "image" {
         return true;
@@ -335,6 +336,7 @@ fn is_image_item(item: &Item) -> bool {
 /// per-frame view path. Shared between
 /// `state::thumbnail_path_at` (stack items) and
 /// `clip::decode_to_thumb` (cliphist binary entries).
+#[cfg(any(feature = "gui-iced", test))]
 pub fn write_thumbnail_png(
     cache_dir: &Path,
     file_stem: &str,
@@ -364,6 +366,7 @@ pub fn write_thumbnail_png(
 /// for non-image items so callers can dispatch on the result. The
 /// destination file is `cache_dir/<id>.<size>.png`; re-uses the
 /// cached copy if already present (mtime-stable across calls).
+#[cfg(any(feature = "gui-iced", test))]
 pub fn thumbnail_path_at(cache_dir: &Path, item: &Item, size: u32) -> Result<Option<PathBuf>> {
     if !is_image_item(item) {
         return Ok(None);
@@ -388,6 +391,7 @@ pub fn thumbnail_path_at(cache_dir: &Path, item: &Item, size: u32) -> Result<Opt
 
 /// Convenience wrapper that resolves the cache dir from
 /// `thumbs_dir()` before delegating to `thumbnail_path_at`.
+#[cfg(feature = "gui-iced")]
 pub fn thumbnail_path(item: &Item, size: u32) -> Result<Option<PathBuf>> {
     let dir = thumbs_dir()?;
     thumbnail_path_at(&dir, item, size)
@@ -399,6 +403,7 @@ pub fn thumbnail_path(item: &Item, size: u32) -> Result<Option<PathBuf>> {
 /// `bytes`, joined with `\n`. Inputs longer than `max_lines` get an
 /// ellipsis line appended so the viewer knows the body was clipped.
 /// Used by the bar's hover popup for text and code slots.
+#[cfg(any(feature = "gui-iced", test))]
 pub fn text_preview(bytes: &[u8], max_lines: usize) -> String {
     let s = String::from_utf8_lossy(bytes);
     let total = s.lines().count();

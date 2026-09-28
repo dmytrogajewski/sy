@@ -36,7 +36,7 @@ pub mod panic;
 mod trace_ctx;
 
 use std::io::{self, IsTerminal};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -58,7 +58,26 @@ pub enum Mode {
     /// Long-lived daemon. `name` is the systemd unit's basename
     /// (without `.service`), used as the journald identifier and
     /// the rolling-appender subdirectory.
-    Daemon { name: &'static str },
+    Daemon {
+        /// Systemd/journald name for the daemon.
+        name: &'static str,
+    },
+}
+
+/// Install the [`Mode::Cli`] subscriber unless the subcommand about to
+/// run is a long-lived plane that installs its own [`Mode::Daemon`]
+/// stack (BUG-20260927-1500).
+///
+/// `tracing` allows one subscriber per process, so a CLI subscriber
+/// installed before dispatch silently wins the slot and the daemon's
+/// journald + rolling-JSONL layers never land. `main` therefore asks
+/// the command first (`sy_core::obs::init_cli_unless(cmd.…)`) and hands
+/// the slot over by returning `None`.
+pub fn init_cli_unless(defer: bool) -> Result<Option<WorkerGuard>> {
+    if defer {
+        return Ok(None);
+    }
+    init(Mode::Cli).map(Some)
 }
 
 /// Initialise the process-global `tracing` subscriber. Returns the
@@ -132,14 +151,14 @@ pub fn init(mode: Mode) -> Result<WorkerGuard> {
         )
     });
 
-    // `tracing` enforces one subscriber per process. When `main` runs
-    // `Mode::Cli` before dispatching to a daemon subcommand, the
-    // daemon's later `Mode::Daemon{..}` call would hit
-    // `try_init`-already-set. Treat that as a graceful no-op: the
-    // first call wins, the daemon logs through whatever subscriber
-    // is already installed. A future cleanup can defer init until
-    // the subcommand is known so the daemon's journald + rolling
-    // appender layers can win — for now, keep daemons alive.
+    // `tracing` enforces one subscriber per process. `main` now defers
+    // its `Mode::Cli` subscriber for every known daemon subcommand
+    // (BUG-20260927-1500), so `try_init` should succeed here. It can
+    // still lose the race when a *new* plane forgets to declare itself
+    // in `Cmd::installs_own_subscriber`: the first subscriber wins and
+    // this daemon's journald + rolling-JSONL layers are skipped. Say so
+    // on stderr (it lands in the journal via systemd's stderr capture)
+    // instead of swallowing the sink loss, then keep the daemon alive.
     let registry = tracing_subscriber::registry()
         .with(filter)
         .with(trace_ctx::TraceCtxLayer::new())
@@ -147,6 +166,9 @@ pub fn init(mode: Mode) -> Result<WorkerGuard> {
         .with(json_layer)
         .with(journald_layer);
     if registry.try_init().is_err() {
+        if let Some(note) = deferred_subscriber_notice(mode) {
+            eprintln!("sy: {note}");
+        }
         return Ok(guard);
     }
 
@@ -166,6 +188,63 @@ pub fn init(mode: Mode) -> Result<WorkerGuard> {
     crate::metrics::register_core_metrics();
 
     Ok(guard)
+}
+
+/// Explain that a daemon's own layers were skipped because a subscriber
+/// was already installed. `None` for [`Mode::Cli`], where finding a
+/// pre-existing subscriber is expected and harmless.
+///
+/// Emitted by [`init`] on stderr rather than `tracing::warn!` because
+/// at that exact moment *this* process's logging is the thing that is
+/// broken — the message has to reach the journal without a subscriber.
+fn deferred_subscriber_notice(mode: Mode) -> Option<String> {
+    match mode {
+        Mode::Daemon { name } => Some(format!(
+            "{name}: tracing subscriber already installed — journald and rolling-JSONL \
+             sinks SKIPPED; add this subcommand to `Cmd::installs_own_subscriber` \
+             (src/supervision/log_scope.rs) so `main` defers its CLI subscriber"
+        )),
+        Mode::Cli => None,
+    }
+}
+
+/// Rolling-JSONL retention horizon in days. `tracing_appender`'s daily
+/// roller never deletes anything, and the sink this module owns carries
+/// every daemon's INFO stream, so an unbounded directory is a disk
+/// time-bomb (the pre-fix directory held 76 empty daily files). Mirrors
+/// the power plane's telemetry retention (`specs/bugs/BUG-20260712-0139.md`
+/// documents why a bounded horizon, not a hard cap, is the right primitive).
+const LOG_RETENTION_DAYS: i64 = 7;
+
+/// Delete rotated appender files older than `keep_days` before `today`.
+///
+/// `tracing_appender::rolling::daily` names rotated files
+/// `<basename>.jsonl.YYYY-MM-DD`; anything without a parseable trailing
+/// date (the active file, hand-dropped artefacts) is left alone.
+/// Fail-soft: an unreadable directory or a failed unlink is not worth
+/// killing a daemon over. Returns the number of files removed.
+fn prune_rotated_logs(dir: &Path, today: chrono::NaiveDate, keep_days: i64) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Some((_, stem)) = name.rsplit_once('.') else {
+            continue;
+        };
+        let Ok(date) = chrono::NaiveDate::parse_from_str(stem, "%Y-%m-%d") else {
+            continue;
+        };
+        if today.signed_duration_since(date).num_days() <= keep_days {
+            continue;
+        }
+        if std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// Build the stderr `fmt::Layer`. JSON when stdout/stderr aren't
@@ -214,6 +293,7 @@ fn non_blocking_appender_for(
 ) -> Result<(tracing_appender::non_blocking::NonBlocking, WorkerGuard)> {
     let dir = state_logs_dir().join(name);
     std::fs::create_dir_all(&dir).with_context(|| format!("create log dir {}", dir.display()))?;
+    prune_rotated_logs(&dir, chrono::Utc::now().date_naive(), LOG_RETENTION_DAYS);
     let appender = tracing_appender::rolling::daily(&dir, format!("sy-{name}.jsonl"));
     Ok(tracing_appender::non_blocking(appender))
 }
@@ -399,5 +479,76 @@ mod tests {
             "info event leaked past RUST_LOG=warn: {line}"
         );
         assert!(line.contains("should-pass"), "warn event missing: {line}");
+    }
+
+    // -- BUG-20260927-1500: deferred CLI init + appender retention ----
+
+    #[test]
+    fn init_cli_unless_defer_skips_the_cli_subscriber() {
+        // `defer = true` is the daemon path: `main` must hand the
+        // process-global subscriber slot to the daemon's own
+        // `Mode::Daemon` call, so it gets no guard and no subscriber.
+        assert!(
+            init_cli_unless(true)
+                .expect("deferred init is infallible")
+                .is_none(),
+            "deferring the CLI subscriber must not install one"
+        );
+    }
+
+    #[test]
+    fn deferred_notice_names_the_daemon_only_in_daemon_mode() {
+        let note = deferred_subscriber_notice(Mode::Daemon {
+            name: "sy-knowledge",
+        })
+        .expect("a daemon whose layers were skipped must say so");
+        assert!(
+            note.contains("sy-knowledge") && note.contains("installs_own_subscriber"),
+            "notice must name the plane and the fix site, got {note}"
+        );
+        assert!(
+            deferred_subscriber_notice(Mode::Cli).is_none(),
+            "a CLI process finding a pre-existing subscriber is expected, not a defect"
+        );
+    }
+
+    #[test]
+    fn prune_rotated_logs_deletes_only_stale_dated_files() {
+        let tmp = tempdir().expect("tempdir");
+        let dir = tmp.path();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 27).expect("date");
+        let names = [
+            "sy-sy-test.jsonl",            // active file: never touched
+            "sy-sy-test.jsonl.2026-09-27", // today
+            "sy-sy-test.jsonl.2026-09-20", // exactly at the horizon
+            "sy-sy-test.jsonl.2026-09-19", // one day past the horizon
+            "sy-sy-test.jsonl.keep-me",    // unparseable suffix
+        ];
+        for n in names {
+            fs::write(dir.join(n), b"x").expect("seed file");
+        }
+
+        let removed = prune_rotated_logs(dir, today, LOG_RETENTION_DAYS);
+
+        assert_eq!(removed, 1, "only the file past the horizon is swept");
+        for keep in [
+            "sy-sy-test.jsonl",
+            "sy-sy-test.jsonl.2026-09-27",
+            "sy-sy-test.jsonl.2026-09-20",
+            "sy-sy-test.jsonl.keep-me",
+        ] {
+            assert!(dir.join(keep).exists(), "{keep} must survive the sweep");
+        }
+        assert!(!dir.join("sy-sy-test.jsonl.2026-09-19").exists());
+    }
+
+    #[test]
+    fn prune_rotated_logs_tolerates_a_missing_dir() {
+        let missing = std::path::Path::new("/nonexistent/sy/logs/sy-test");
+        assert_eq!(
+            prune_rotated_logs(missing, chrono::Utc::now().date_naive(), LOG_RETENTION_DAYS),
+            0,
+            "a daemon must not die over log retention"
+        );
     }
 }

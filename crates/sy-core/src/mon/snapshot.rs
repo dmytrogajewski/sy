@@ -36,19 +36,26 @@ pub struct SystemSnapshot {
     /// Capture instant in Unix milliseconds. The aggregator stamps
     /// this once per tick after every panel has been collected.
     pub captured_at_ms: u64,
+    /// Public struct field in the sy core data model.
     pub cpu: CpuPanel,
+    /// Public struct field in the sy core data model.
     pub mem: MemPanel,
     /// One entry per physical GPU. Empty on a host without any
     /// discoverable GPU (DRM card absent / `nvidia-smi` missing).
     pub gpu: Vec<GpuPanel>,
+    /// Public struct field in the sy core data model.
     pub npu: NpuPanel,
     /// One entry per network interface visible in `/proc/net/dev`.
     pub net: Vec<NetIfacePanel>,
     /// One entry per block device visible in `/proc/diskstats`.
     pub disk: Vec<DiskDevicePanel>,
+    /// Public struct field in the sy core data model.
     pub aiplane: AiplanePanel,
+    /// Public struct field in the sy core data model.
     pub knowledge: KnowledgePanel,
+    /// Public struct field in the sy core data model.
     pub agents: AgentsPanel,
+    /// Public struct field in the sy core data model.
     pub supervisor: SupervisorPanel,
     /// Per-source errors observed by the aggregator during the tick
     /// (sensor read failure, plane socket missing, scrape timeout).
@@ -100,8 +107,11 @@ pub struct CpuPanel {
 /// Host memory panel — MiB-scaled to keep the JSON readable.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemPanel {
+    /// Public struct field in the sy core data model.
     pub total_mib: u64,
+    /// Public struct field in the sy core data model.
     pub used_mib: u64,
+    /// Public struct field in the sy core data model.
     pub swap_used_mib: u64,
 }
 
@@ -110,12 +120,19 @@ pub struct MemPanel {
 /// dance.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GpuPanel {
+    /// Public struct field in the sy core data model.
     pub vendor: String,
+    /// Public struct field in the sy core data model.
     pub name: String,
+    /// Public struct field in the sy core data model.
     pub util_pct: u32,
+    /// Public struct field in the sy core data model.
     pub vram_used_mib: u64,
+    /// Public struct field in the sy core data model.
     pub vram_total_mib: u64,
+    /// Public struct field in the sy core data model.
     pub temp_c: f32,
+    /// Public struct field in the sy core data model.
     pub power_w: f32,
 }
 
@@ -125,6 +142,7 @@ pub struct GpuPanel {
 pub struct NpuPanel {
     /// Short tag (`"amd-xdna"`). Empty when no NPU is present.
     pub vendor: String,
+    /// Public struct field in the sy core data model.
     pub util_pct: u32,
     /// `true` when the device is in active power state. The popup
     /// shows a dim/lit icon based on this.
@@ -132,6 +150,7 @@ pub struct NpuPanel {
     /// Firmware version string read from sysfs. May be empty on
     /// kernels that don't expose it.
     pub fw_version: String,
+    /// Public struct field in the sy core data model.
     pub power_w: f32,
     /// Live holders of `/dev/accel/accel0` as reported by `lsof` —
     /// usually `["sy-aiplane"]`, empty when the device is idle.
@@ -141,17 +160,24 @@ pub struct NpuPanel {
 /// Per-interface network panel entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetIfacePanel {
+    /// Public struct field in the sy core data model.
     pub name: String,
+    /// Public struct field in the sy core data model.
     pub rx_bytes: u64,
+    /// Public struct field in the sy core data model.
     pub tx_bytes: u64,
 }
 
 /// Per-device disk panel entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiskDevicePanel {
+    /// Public struct field in the sy core data model.
     pub name: String,
+    /// Public struct field in the sy core data model.
     pub reads: u64,
+    /// Public struct field in the sy core data model.
     pub writes: u64,
+    /// Public struct field in the sy core data model.
     pub io_in_progress: u64,
 }
 
@@ -160,40 +186,55 @@ pub struct DiskDevicePanel {
 /// JSON key order is deterministic and the golden file stays stable.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AiplanePanel {
+    /// Public struct field in the sy core data model.
     pub queue_depth: BTreeMap<String, u32>,
+    /// Public struct field in the sy core data model.
     pub warm: BTreeMap<String, u32>,
+    /// Public struct field in the sy core data model.
     pub latency_p99_ms: BTreeMap<String, f32>,
+    /// Public struct field in the sy core data model.
     pub errors_total: u64,
 }
 
 /// Knowledge plane panel.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct KnowledgePanel {
+    /// Public struct field in the sy core data model.
     pub collections: u32,
+    /// Public struct field in the sy core data model.
     pub docs_indexed: u64,
+    /// Public struct field in the sy core data model.
     pub embed_throughput_docs_per_s: f32,
+    /// Public struct field in the sy core data model.
     pub search_qps: f32,
 }
 
 /// Agent runner panel.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentsPanel {
+    /// Public struct field in the sy core data model.
     pub running: u32,
+    /// Public struct field in the sy core data model.
     pub rss_total_mib: u64,
+    /// Public struct field in the sy core data model.
     pub policy_denials_recent: u32,
 }
 
 /// Supervisor panel: one row per plane.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SupervisorPanel {
+    /// Public struct field in the sy core data model.
     pub planes: Vec<PlanePanel>,
 }
 
 /// One supervised plane's state row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanePanel {
+    /// Public struct field in the sy core data model.
     pub name: String,
+    /// Public struct field in the sy core data model.
     pub state: String,
+    /// Public struct field in the sy core data model.
     pub restarts: u32,
 }
 
@@ -204,8 +245,11 @@ pub struct PlanePanel {
 /// group errors without parsing the message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MonError {
+    /// Public struct field in the sy core data model.
     pub plane: String,
+    /// Public struct field in the sy core data model.
     pub kind: String,
+    /// Public struct field in the sy core data model.
     pub message: String,
 }
 

@@ -845,6 +845,7 @@ pub fn ctx_for(workdir: PathBuf, theme: Value) -> (HostCtx, mpsc::Receiver<Notif
 /// `PluginBridge` and by `tests/sy_file_plugin_preview.rs` to assert
 /// `host.preview.image_show` / `host.preview.text` round-trip
 /// correctly.
+#[cfg(any(feature = "gui-iced", test))]
 pub fn ctx_for_with_preview(
     workdir: PathBuf,
     theme: Value,

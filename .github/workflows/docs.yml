@@ -97,6 +97,7 @@ jobs:
             **/*.md
             !target/**
             !node_modules/**
+            !website/node_modules/**
             !specs/runs/**
 
   vale:

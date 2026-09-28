@@ -1,0 +1,2 @@
+2985242 0 {"Name":"unless-stopped","MaximumRetryCount":0} [{"PathOnHost":"/dev/nvidia0","PathInContainer":"/dev/nvidia0","CgroupPermissions":"rw"},{"PathOnHost":"/dev/nvidiactl","PathInContainer":"/dev/nvidiactl","CgroupPermissions":"rw"},{"PathOnHost":"/dev/nvidia-uvm","PathInContainer":"/dev/nvidia-uvm","CgroupPermissions":"rw"},{"PathOnHost":"/dev/nvidia-uvm-tools","PathInContainer":"/dev/nvidia-uvm-tools","CgroupPermissions":"rw"}]
+GPU 0: NVIDIA GB10 (UUID: GPU-14f061ec-1fbb-b9a7-713c-fe23683c880b)

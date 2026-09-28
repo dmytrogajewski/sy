@@ -1,0 +1,26 @@
+INFO 09-20 17:16:49 [jit_monitor.py:85] Kernel JIT monitor activated; monitored JIT compilations during inference will use mode=error.
+Traceback (most recent call last):
+  File "<stdin>", line 19, in <module>
+  File "/usr/local/lib/python3.12/dist-packages/vllm/v1/sample/ops/topk_topp_sampler.py", line 361, in apply_top_k_top_p
+    return apply_top_k_top_p_triton(logits, k, p)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/vllm/v1/sample/ops/topk_topp_triton.py", line 949, in apply_top_k_top_p_triton
+    _topk_topp_kernel[(NUM_PROGRAMS,)](
+  File "/usr/local/lib/python3.12/dist-packages/triton/runtime/jit.py", line 370, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/triton/runtime/jit.py", line 739, in run
+    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/triton/runtime/jit.py", line 886, in _do_compile
+    self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, target, device, constexprs, options,
+  File "/usr/local/lib/python3.12/dist-packages/triton/runtime/jit.py", line 654, in _call_hook
+    return hook(
+           ^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/vllm/utils/jit_monitor.py", line 271, in _on_jit_compile
+    _log_triton_jit_compile(fn_name, kwargs)
+  File "/usr/local/lib/python3.12/dist-packages/vllm/utils/jit_monitor.py", line 231, in _log_triton_jit_compile
+    _handle_jit_event(
+  File "/usr/local/lib/python3.12/dist-packages/vllm/utils/jit_monitor.py", line 135, in _handle_jit_event
+    raise RuntimeError(message % args)
+RuntimeError: Triton kernel JIT compilation during inference: _topk_topp_kernel. This causes a latency spike; consider extending warmup to cover this shape/config.

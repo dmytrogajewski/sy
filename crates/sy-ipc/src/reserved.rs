@@ -25,8 +25,11 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// `sy doctor` cross-checks them.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BuildInfo {
+    /// Public struct field in the sy public API.
     pub name: String,
+    /// Public struct field in the sy public API.
     pub version: String,
+    /// Public struct field in the sy public API.
     pub git_sha: String,
 }
 
@@ -62,9 +65,13 @@ impl Capabilities {
 /// tooltip embed verbatim.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct HealthSnapshot {
+    /// Public struct field in the sy public API.
     pub state: HealthState,
+    /// Public struct field in the sy public API.
     pub status_line: String,
+    /// Public struct field in the sy public API.
     pub queue_depth: u32,
+    /// Public struct field in the sy public API.
     pub warm_models: Vec<String>,
 }
 
@@ -74,9 +81,13 @@ pub struct HealthSnapshot {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HealthState {
+    /// Public variant in the sy public API.
     Ready,
+    /// Public variant in the sy public API.
     Degraded,
+    /// Public variant in the sy public API.
     Starting,
+    /// Public variant in the sy public API.
     Failed,
 }
 
@@ -98,6 +109,7 @@ pub struct SystemMethods {
 }
 
 impl SystemMethods {
+    /// Public associated function in the sy public API.
     pub fn new(
         build_info: BuildInfo,
         health_fn: HealthFn,

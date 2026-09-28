@@ -1,0 +1,36 @@
+{
+  "schema": "sy.spark.instance-list/v1",
+  "instances": [
+    {
+      "schema": "sy.spark.instance/v2",
+      "id": "i_399d6f488a7be6ee2831fdc7ef153624",
+      "name": "qwen38-vllm",
+      "model_id": "m_00fff9662171942b2cd5c15405805f41",
+      "model": "huggingface:RadixArk/Qwen3.8-Flash-Next-NVFP4@7b719225242aacd3dbd3f9407468c2ee9a9d2594#sha256:069e380200041a5b7249a952e005de0a1b50c83f38fdd473282d189c5610e683",
+      "model_commit": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+      "engine_id": "vllm-qwen38-mmap-arm64",
+      "engine_fingerprint": "sha256:1b878194852da5048ecd7b104b89b0cc42758ac8fd35c97206378b1db4ec0df4",
+      "artifact_fingerprint": "sha256:26d708967d17a7b261018701fffcce2f40f2efa98476905e1a7e365db4872de6",
+      "objective": "inference",
+      "resources": {
+        "image_bytes": 9727131221,
+        "startup_peak_bytes": 114000000000,
+        "steady_peak_bytes": 114000000000,
+        "compile_cache_bytes": 1073741824
+      },
+      "context_window": 262144,
+      "default_reasoning_effort": null,
+      "generation": 8,
+      "desired": "running",
+      "observed": "healthy",
+      "endpoint": "/openai/qwen38-vllm/v1",
+      "healthy": true,
+      "started_at": "2026-09-20T19:22:45.493Z",
+      "startup_milliseconds": 648327,
+      "last_failure": null,
+      "restart_failures": 0,
+      "restart_suppressed": false,
+      "quarantine": null
+    }
+  ]
+}

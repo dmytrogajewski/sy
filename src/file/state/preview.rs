@@ -8,9 +8,8 @@
 //! preview that just finished decoding would overwrite the freshly
 //! hovered one.
 //!
-//! Pure data, no I/O — so the type is **not** `gui-iced`-gated.
-//! `--no-default-features` builds (CLI/MCP only) still see the field
-//! on `State`; the dispatch + widget tree live behind the feature.
+//! Pure data, no I/O, owned by the GUI feature. Headless CLI/MCP
+//! preview requests use their separate IPC response path.
 //!
 //! Step 27 extended this slice with a plugin-routed text cache so
 //! `Message::PreviewLoadedText` can stash the body it received from a

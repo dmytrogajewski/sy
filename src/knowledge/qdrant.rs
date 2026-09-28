@@ -353,6 +353,10 @@ pub fn delete_by_source(source: &str) -> Result<()> {
     Ok(())
 }
 
+/// Ids per delete request. A corpus-wide prune can name thousands of points;
+/// paging keeps each request body small and a mid-list failure cheap.
+pub const DELETE_PAGE: usize = 256;
+
 /// Delete points by their ids.
 pub fn delete_points(ids: &[String]) -> Result<()> {
     if ids.is_empty() {
@@ -376,8 +380,30 @@ pub fn delete_points(ids: &[String]) -> Result<()> {
 
 #[derive(Debug, Deserialize)]
 pub struct SearchHit {
+    /// Qdrant's own point id, verbatim — the only identifier `get_point`
+    /// can resolve. Each pipeline derives its point id from its *own* key
+    /// (telegram hashes the anchor message id, not the window's
+    /// `chunk_index`), so an id re-derived from `payload.file_path` +
+    /// `payload.chunk_index` belongs to no point and REQ-10 fetch-by-id
+    /// silently returns nothing (specs/bugs/BUG-20260927-0312.md).
+    #[serde(deserialize_with = "de_point_id")]
+    pub id: String,
     pub score: f32,
     pub payload: PointPayload,
+}
+
+/// Accept both qdrant point-id shapes: the UUID strings we upsert and the
+/// unsigned integers qdrant also allows.
+fn de_point_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+    match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        other => Err(D::Error::custom(format!("unexpected point id {other}"))),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -609,6 +635,82 @@ pub fn get_point(chunk_id: &str) -> Result<Option<PointPayload>> {
     Ok(parsed.result.into_iter().next().map(|p| p.payload))
 }
 
+/// One page of a filtered scroll. `offset` is the `next_page_offset` of the
+/// previous page; the first page carries none. Payload is limited to
+/// `chunk_text` — a corpus-wide scan must not pull vectors or `file_path`.
+pub(crate) fn scroll_body(kind: &str, offset: Option<&str>, limit: usize) -> Value {
+    let mut body = json!({
+        "limit": limit,
+        "filter": {"must": [{"key": "kind", "match": {"value": kind}}]},
+        "with_payload": ["chunk_text"],
+        "with_vector": false,
+    });
+    if let Some(off) = offset {
+        body["offset"] = json!(off);
+    }
+    body
+}
+
+#[derive(Debug, Deserialize)]
+struct ScrollResponse {
+    result: ScrollResult,
+}
+#[derive(Debug, Deserialize)]
+struct ScrollResult {
+    points: Vec<ScrolledPoint>,
+    #[serde(default)]
+    next_page_offset: Option<String>,
+}
+/// Scroll asks for `chunk_text` alone, so it deserializes `chunk_text` alone.
+/// Reusing [`PointPayload`] here fails on the first page: it demands
+/// `source`/`file_path`/`file_mtime`/`content_hash`, none of which the request
+/// asked qdrant to send.
+#[derive(Debug, Deserialize)]
+struct ScrolledPoint {
+    id: String,
+    payload: ScrolledPayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScrolledPayload {
+    #[serde(default)]
+    chunk_text: String,
+}
+
+/// Every `(point_id, chunk_text)` of one payload `kind`, walking every page.
+/// Used by `sy knowledge prune` to re-apply an indexing rule to points that
+/// were indexed before the rule existed; the filter is exact, so the walk is
+/// bounded by that kind's size, not the whole collection.
+pub fn scan_kind(kind: &str) -> Result<Vec<(String, String)>> {
+    let c = client()?;
+    let url = format!("{}/collections/{}/points/scroll", base_url(), COLLECTION);
+    let mut out = Vec::new();
+    let mut offset: Option<String> = None;
+    loop {
+        let resp = c
+            .post(&url)
+            .json(&scroll_body(kind, offset.as_deref(), SCROLL_PAGE))
+            .send()
+            .map_err(|e| unreachable_error(e.into()))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let txt = resp.text().unwrap_or_default();
+            anyhow::bail!("qdrant: scroll {kind} failed ({status}): {txt}");
+        }
+        let parsed: ScrollResponse = resp.json().context("parse qdrant scroll response")?;
+        let r = parsed.result;
+        out.extend(r.points.into_iter().map(|p| (p.id, p.payload.chunk_text)));
+        match r.next_page_offset {
+            Some(next) => offset = Some(next),
+            None => return Ok(out),
+        }
+    }
+}
+
+/// Points per scroll page. Qdrant caps a request's payload volume well below
+/// what a whole kind needs; this is the round number that keeps a page small.
+const SCROLL_PAGE: usize = 256;
+
 #[derive(Debug, Deserialize)]
 struct CountResponse {
     result: CountResult,
@@ -670,6 +772,83 @@ pub fn facet_tags(limit: usize) -> Result<Vec<(String, u64)>> {
 
 #[cfg(test)]
 mod tests {
+    /// The wire shape `scan_kind` reads back. The first version deserialized
+    /// into `PointPayload`, which demands `source`, `file_path`, `file_mtime`
+    /// and `content_hash` — none of which a `with_payload: ["chunk_text"]`
+    /// scroll sends — and `sy knowledge prune` died on the opening page with
+    /// `missing field source`. Pinned hermetically instead of against a live
+    /// qdrant, because the bug was in the JSON contract, not in the server.
+    #[test]
+    fn scroll_page_parses_a_payload_limited_response() {
+        use super::*;
+        let resp: ScrollResponse = serde_json::from_str(
+            r#"{"result":{"points":[
+                {"id":"63faf5c7","payload":{"chunk_text":"-"}},
+                {"id":"bead1a70","payload":{"chunk_text":"\u043f\u0440\u0438\u0432\u0435\u0442"}}
+            ],"next_page_offset":"bead1a70"}}"#,
+        )
+        .expect("parse scroll page");
+        assert_eq!(resp.result.next_page_offset.as_deref(), Some("bead1a70"));
+        let got: Vec<(String, String)> = resp
+            .result
+            .points
+            .into_iter()
+            .map(|p| (p.id, p.payload.chunk_text))
+            .collect();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0], ("63faf5c7".to_string(), "-".to_string()));
+    }
+
+    /// Last page carries no offset, and a point with no `chunk_text` is an
+    /// empty text rather than a parse failure — the prune then judges it as
+    /// the no-speech point it is.
+    #[test]
+    fn scroll_page_ends_without_offset_and_tolerates_missing_text() {
+        use super::*;
+        let resp: ScrollResponse =
+            serde_json::from_str(r#"{"result":{"points":[{"id":"a","payload":{}}]}}"#)
+                .expect("parse last scroll page");
+        assert_eq!(resp.result.next_page_offset, None);
+        assert_eq!(resp.result.points[0].payload.chunk_text, "");
+    }
+
+    /// First page must not send an offset at all, and the kind filter is what
+    /// keeps the walk bounded to transcribed points.
+    #[test]
+    fn scroll_body_pages_and_filters_by_kind() {
+        use super::*;
+        let first = scroll_body("telegram-voice", None, 256);
+        assert_eq!(first["offset"], serde_json::Value::Null);
+        assert_eq!(first["with_vector"], json!(false));
+        assert_eq!(first["filter"]["must"][0]["key"], json!("kind"));
+        assert_eq!(
+            first["filter"]["must"][0]["match"]["value"],
+            json!("telegram-voice")
+        );
+        assert_eq!(
+            scroll_body("telegram-voice", Some("abc"), 256)["offset"],
+            json!("abc")
+        );
+    }
+
+    #[test]
+    fn search_hits_carry_qdrants_own_point_id() {
+        // The id a hit advertises must be the id qdrant stores, or
+        // `knowledge_get_chunk` can never resolve it. Numeric ids stay fetchable.
+        let resp: SearchResponse = serde_json::from_str(
+            r#"{"result":[
+                 {"id":"55bb4ba8-8ba9-379d-b956-789e6b5d2482","score":0.9,
+                  "payload":{"source":"tg","file_path":"/x/result.json","chunk_index":128,
+                             "chunk_text":"t","file_mtime":1,"content_hash":"h"}},
+                 {"id":42,"score":0.8,
+                  "payload":{"source":"tg","file_path":"/x/y.ogg","chunk_index":0,
+                             "chunk_text":"u","file_mtime":1,"content_hash":"h2"}}]}"#,
+        )
+        .expect("qdrant search response parses");
+        assert_eq!(resp.result[0].id, "55bb4ba8-8ba9-379d-b956-789e6b5d2482");
+        assert_eq!(resp.result[1].id, "42");
+    }
+
     use super::*;
 
     #[test]

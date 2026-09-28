@@ -17,7 +17,7 @@ use std::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Index {
     /// Map keyed by the absolute path of an indexed file (already
     /// expanded, no `~`).
@@ -26,7 +26,41 @@ pub struct Index {
     /// When the last incremental sync finished.
     #[serde(default)]
     pub last_sync_unix: u64,
+    /// Chunk/embed contract this index was written under. Compare against
+    /// [`CHUNK_SCHEMA_VERSION`]; see it for why this exists.
+    #[serde(default = "Index::legacy_chunk_schema_version")]
+    pub chunk_schema_version: u32,
 }
+
+impl Default for Index {
+    /// A fresh index is current by definition — that is what makes
+    /// `sy knowledge sync` (which starts from `Index::default()`) clear any
+    /// recorded schema drift.
+    fn default() -> Self {
+        Self {
+            files: HashMap::new(),
+            last_sync_unix: 0,
+            chunk_schema_version: CHUNK_SCHEMA_VERSION,
+        }
+    }
+}
+
+/// Chunk/embed contract version. Bump it whenever the *shape* of an index
+/// entry changes — `chunk::encode`'s window or [`crate::knowledge::chunk::MAX_CHUNK_CHARS`],
+/// the overlap, the sparse leg, the dense payload schema, the embedder model.
+///
+/// Without this, the incremental index is content-hash-only: it compares the
+/// *file*'s extracted text, so a chunker change silently applies to new files
+/// only and the collection keeps serving chunks the current chunker would
+/// never produce — indexed-green and unsearchable, the exact failure
+/// `BUG-20260927-1215.md` documents. The bump turns that into a loud,
+/// deliberate rebuild (see [`resync_required`]) instead of a stale corpus.
+///
+/// `1` is the baseline: whitespace-token + [`crate::knowledge::chunk::MAX_CHUNK_CHARS`]
+/// chunking with the char-cap fix landed. Indexes written before this field
+/// existed are read as `1` (see [`Index::legacy_chunk_schema_version`]) so
+/// introducing the mechanism does not itself force a multi-hour re-embed.
+pub const CHUNK_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileEntry {
@@ -37,6 +71,32 @@ pub struct FileEntry {
     pub content_hash: String,
     /// Qdrant point ids this file owns. Stable so we can delete on update.
     pub point_ids: Vec<String>,
+}
+
+impl Index {
+    /// Value assumed for an `index.json` written before
+    /// [`CHUNK_SCHEMA_VERSION`] existed — the contract in force at the time,
+    /// so upgrading `sy` never rewrites a healthy index by accident.
+    fn legacy_chunk_schema_version() -> u32 {
+        1
+    }
+}
+
+/// Why an incremental pass must not run, or `None` when the on-disk index
+/// matches the current chunk/embed contract.
+///
+/// A mismatch is *not* repaired by forgetting the file entries: their Qdrant
+/// points would stay searchable with no owner to delete them. Only a full
+/// resync (which drops the collection first) may clear it, so the answer is
+/// an actionable error naming the command.
+pub fn resync_required(idx: &Index) -> Option<String> {
+    if idx.chunk_schema_version == CHUNK_SCHEMA_VERSION {
+        return None;
+    }
+    Some(format!(
+        "index was built under chunk-schema v{}; this sy speaks v{} — run          `sy knowledge sync --yes` to drop and re-embed the collection          (an incremental pass would keep serving pre-v{} chunks)",
+        idx.chunk_schema_version, CHUNK_SCHEMA_VERSION, CHUNK_SCHEMA_VERSION
+    ))
 }
 
 pub fn root_dir() -> Result<PathBuf> {
@@ -138,4 +198,61 @@ pub fn now_secs() -> u64 {
 /// blake3 of arbitrary bytes, lowercase hex.
 pub fn hash_bytes(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The whole point of the constant: an index under another contract must
+    /// not be updated incrementally.
+    #[test]
+    fn stale_chunk_schema_forces_a_full_resync() {
+        let mut idx = Index::default();
+        assert_eq!(
+            idx.chunk_schema_version, CHUNK_SCHEMA_VERSION,
+            "a fresh index carries the current contract"
+        );
+        assert!(
+            resync_required(&idx).is_none(),
+            "current schema must index incrementally"
+        );
+
+        // Simulate the next bump: an index written under the previous version.
+        idx.chunk_schema_version = CHUNK_SCHEMA_VERSION - 1;
+        let why = resync_required(&idx).expect("older schema must be refused");
+        assert!(
+            why.contains("sy knowledge sync --yes") && why.contains("chunk-schema v0"),
+            "the refusal must name the command and both versions, got {why}"
+        );
+    }
+
+    /// Upgrading `sy` must not silently invalidate a healthy corpus: an
+    /// `index.json` predating the field is read as the baseline contract.
+    #[test]
+    fn an_index_json_without_the_field_reads_as_the_baseline() -> Result<()> {
+        let legacy = r#"{"files":{},"last_sync_unix":42}"#;
+        let idx: Index = serde_json::from_str(legacy).expect("legacy index.json parses");
+        assert_eq!(idx.last_sync_unix, 42);
+        assert_eq!(idx.chunk_schema_version, 1, "pre-field indexes are v1");
+        assert!(
+            resync_required(&idx).is_none(),
+            "reading an old index must not itself demand a re-embed"
+        );
+        Ok(())
+    }
+
+    /// The version survives a save/load round trip, so drift is detected by
+    /// the daemon on the next pass rather than only in memory.
+    #[test]
+    fn chunk_schema_version_round_trips_through_index_json() {
+        let idx = Index {
+            chunk_schema_version: CHUNK_SCHEMA_VERSION + 1,
+            ..Index::default()
+        };
+        let body = serde_json::to_string(&idx).expect("serialise");
+        let back: Index = serde_json::from_str(&body).expect("parse back");
+        assert_eq!(back.chunk_schema_version, CHUNK_SCHEMA_VERSION + 1);
+        assert!(resync_required(&back).is_some());
+    }
 }

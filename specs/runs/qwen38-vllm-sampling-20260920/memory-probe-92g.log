@@ -1,0 +1,75 @@
+[18:48:19.991][271864582711072][CUDA][E] No CUDA context is current to the calling thread
+[18:48:19.991][271864582711072][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+[18:48:19.991][271864582711072][CUDA][E] No CUDA context is current to the calling thread
+[18:48:19.991][271864582711072][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+[18:48:19.991][271864582711072][CUDA][E] No CUDA context is current to the calling thread
+[18:48:19.991][271864582711072][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+[18:48:19.991][271864582711072][CUDA][E] No CUDA context is current to the calling thread
+[18:48:19.991][271864582711072][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+[18:48:19.991][271864582711072][CUDA][E] No CUDA context is current to the calling thread
+[18:48:19.991][271864582711072][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+[18:48:19.991][271864582711072][CUDA][E] No CUDA context is current to the calling thread
+[18:48:19.991][271864582711072][CUDA][E] Returning 201 (CUDA_ERROR_INVALID_CONTEXT) from cuCtxGetDevice_v2
+{"stage": "ordinary-warmup", "cuda_free": 92670267392, "cuda_total": 128427978752, "allocated": 139075584, "host_available": 122242461696}
+{"stage": "reserved-2147483648", "cuda_free": 90496995328, "cuda_total": 128427978752, "allocated": 2286559232, "host_available": 120069197824}
+{"stage": "reserved-4294967296", "cuda_free": 88316502016, "cuda_total": 128427978752, "allocated": 4434042880, "host_available": 117888704512}
+{"stage": "reserved-6442450944", "cuda_free": 86144200704, "cuda_total": 128427978752, "allocated": 6581526528, "host_available": 115716403200}
+{"stage": "reserved-8589934592", "cuda_free": 83964194816, "cuda_total": 128427978752, "allocated": 8729010176, "host_available": 113536397312}
+{"stage": "reserved-10737418240", "cuda_free": 81783586816, "cuda_total": 128427978752, "allocated": 10876493824, "host_available": 111355789312}
+{"stage": "reserved-12884901888", "cuda_free": 79611363328, "cuda_total": 128427978752, "allocated": 13023977472, "host_available": 109183565824}
+{"stage": "reserved-15032385536", "cuda_free": 77430853632, "cuda_total": 128427978752, "allocated": 15171461120, "host_available": 107003056128}
+{"stage": "reserved-17179869184", "cuda_free": 75258552320, "cuda_total": 128427978752, "allocated": 17318944768, "host_available": 104830754816}
+{"stage": "reserved-19327352832", "cuda_free": 73087574016, "cuda_total": 128427978752, "allocated": 19466428416, "host_available": 102659776512}
+{"stage": "reserved-21474836480", "cuda_free": 70907166720, "cuda_total": 128427978752, "allocated": 21613912064, "host_available": 100479369216}
+{"stage": "reserved-23622320128", "cuda_free": 68734656512, "cuda_total": 128427978752, "allocated": 23761395712, "host_available": 98306859008}
+{"stage": "reserved-25769803776", "cuda_free": 66554650624, "cuda_total": 128427978752, "allocated": 25908879360, "host_available": 96126853120}
+{"stage": "reserved-27917287424", "cuda_free": 64373755904, "cuda_total": 128427978752, "allocated": 28056363008, "host_available": 93945958400}
+{"stage": "reserved-30064771072", "cuda_free": 62201561088, "cuda_total": 128427978752, "allocated": 30203846656, "host_available": 91773763584}
+{"stage": "reserved-32212254720", "cuda_free": 60021260288, "cuda_total": 128427978752, "allocated": 32351330304, "host_available": 89593462784}
+{"stage": "reserved-34359738368", "cuda_free": 57848750080, "cuda_total": 128427978752, "allocated": 34498813952, "host_available": 87420952576}
+{"stage": "reserved-36507222016", "cuda_free": 55668744192, "cuda_total": 128427978752, "allocated": 36646297600, "host_available": 85240946688}
+{"stage": "reserved-38654705664", "cuda_free": 53488136192, "cuda_total": 128427978752, "allocated": 38793781248, "host_available": 83060338688}
+{"stage": "reserved-40802189312", "cuda_free": 51315912704, "cuda_total": 128427978752, "allocated": 40941264896, "host_available": 80888115200}
+{"stage": "reserved-42949672960", "cuda_free": 49135403008, "cuda_total": 128427978752, "allocated": 43088748544, "host_available": 78707605504}
+{"stage": "reserved-45097156608", "cuda_free": 46959464448, "cuda_total": 128427978752, "allocated": 45236232192, "host_available": 76531666944}
+{"stage": "reserved-47244640256", "cuda_free": 44787335168, "cuda_total": 128427978752, "allocated": 47383715840, "host_available": 74359537664}
+{"stage": "reserved-49392123904", "cuda_free": 42606850048, "cuda_total": 128427978752, "allocated": 49531199488, "host_available": 72179052544}
+{"stage": "reserved-51539607552", "cuda_free": 40426627072, "cuda_total": 128427978752, "allocated": 51678683136, "host_available": 69998829568}
+{"stage": "reserved-53687091200", "cuda_free": 38246113280, "cuda_total": 128427978752, "allocated": 53826166784, "host_available": 67818315776}
+{"stage": "reserved-55834574848", "cuda_free": 36073852928, "cuda_total": 128427978752, "allocated": 55973650432, "host_available": 65646055424}
+{"stage": "reserved-57982058496", "cuda_free": 33893847040, "cuda_total": 128427978752, "allocated": 58121134080, "host_available": 63466049536}
+{"stage": "reserved-60129542144", "cuda_free": 31713218560, "cuda_total": 128427978752, "allocated": 60268617728, "host_available": 61285421056}
+{"stage": "reserved-62277025792", "cuda_free": 29540720640, "cuda_total": 128427978752, "allocated": 62416101376, "host_available": 59112923136}
+{"stage": "reserved-64424509440", "cuda_free": 27360002048, "cuda_total": 128427978752, "allocated": 64563585024, "host_available": 56932241408}
+{"stage": "reserved-66571993088", "cuda_free": 25187700736, "cuda_total": 128427978752, "allocated": 66711068672, "host_available": 54759940096}
+{"stage": "reserved-68719476736", "cuda_free": 23007694848, "cuda_total": 128427978752, "allocated": 68858552320, "host_available": 52579934208}
+{"stage": "reserved-70866960384", "cuda_free": 20827930624, "cuda_total": 128427978752, "allocated": 71006035968, "host_available": 50400169984}
+{"stage": "reserved-73014444032", "cuda_free": 18655637504, "cuda_total": 128427978752, "allocated": 73153519616, "host_available": 48227876864}
+{"stage": "reserved-75161927680", "cuda_free": 16475127808, "cuda_total": 128427978752, "allocated": 75301003264, "host_available": 46047367168}
+{"stage": "reserved-77309411328", "cuda_free": 14302826496, "cuda_total": 128427978752, "allocated": 77448486912, "host_available": 43875065856}
+{"stage": "reserved-79456894976", "cuda_free": 12118642688, "cuda_total": 128427978752, "allocated": 79595970560, "host_available": 41690882048}
+{"stage": "reserved-81604378624", "cuda_free": 9946341376, "cuda_total": 128427978752, "allocated": 81743454208, "host_available": 39518580736}
+{"stage": "reserved-83751862272", "cuda_free": 7765995520, "cuda_total": 128427978752, "allocated": 83890937856, "host_available": 37338234880}
+{"stage": "reserved-85899345920", "cuda_free": 5593694208, "cuda_total": 128427978752, "allocated": 86038421504, "host_available": 35165933568}
+{"stage": "reserved-88046829568", "cuda_free": 3413233664, "cuda_total": 128427978752, "allocated": 88185905152, "host_available": 32985473024}
+{"stage": "reserved-90194313216", "cuda_free": 1236398080, "cuda_total": 128427978752, "allocated": 90333388800, "host_available": 30356676608}
+{"stage": "reserved-92341796864", "cuda_free": 1299853312, "cuda_total": 128427978752, "allocated": 92480872448, "host_available": 28904103936}
+{"stage": "reserved-94489280512", "cuda_free": 1680609280, "cuda_total": 128427978752, "allocated": 94628356096, "host_available": 26726420480}
+{"stage": "reserved-96636764160", "cuda_free": 1706958848, "cuda_total": 128427978752, "allocated": 96775839744, "host_available": 24555692032}
+{"stage": "reserved-98784247808", "cuda_free": 1396834304, "cuda_total": 128427978752, "allocated": 98923323392, "host_available": 22375526400}
+{"stage": "graph-replay", "cuda_free": 1250312192, "cuda_total": 128427978752, "allocated": 98990433792, "host_available": 22229053440}
+{"stage": "first-eight-row-sampler", "cuda_free": 938909696, "cuda_total": 128427978752, "allocated": 98990433792, "host_available": 21918064640}
+{"stage": "first-stable-sort", "cuda_free": 935456768, "cuda_total": 128427978752, "allocated": 98990433792, "host_available": 21918584832}
+{"stage": "gemm-1", "cuda_free": 902520832, "cuda_total": 128427978752, "allocated": 98990434304, "host_available": 21892562944}
+{"stage": "gemm-4", "cuda_free": 875646976, "cuda_total": 128427978752, "allocated": 98990434304, "host_available": 21866598400}
+{"stage": "gemm-8", "cuda_free": 875646976, "cuda_total": 128427978752, "allocated": 98990434304, "host_available": 21866598400}
+{"stage": "gemm-16", "cuda_free": 875646976, "cuda_total": 128427978752, "allocated": 98990434304, "host_available": 21866598400}
+{"stage": "gemm-32", "cuda_free": 875646976, "cuda_total": 128427978752, "allocated": 98990434304, "host_available": 21866598400}
+{"stage": "gemm-64", "cuda_free": 875646976, "cuda_total": 128427978752, "allocated": 98990434304, "host_available": 21866598400}
+{"stage": "gemm-8000", "cuda_free": 875646976, "cuda_total": 128427978752, "allocated": 98990450176, "host_available": 21866598400}
+{"stage": "gemm-8004", "cuda_free": 867000320, "cuda_total": 128427978752, "allocated": 98990450176, "host_available": 21858877440}
+{"stage": "gemm-8008", "cuda_free": 867000320, "cuda_total": 128427978752, "allocated": 98990450176, "host_available": 21858877440}
+{"stage": "gemm-8012", "cuda_free": 867000320, "cuda_total": 128427978752, "allocated": 98990450176, "host_available": 21858877440}
+{"stage": "gemm-8191", "cuda_free": 867000320, "cuda_total": 128427978752, "allocated": 98990450176, "host_available": 21858877440}
+{"stage": "gemm-8192", "cuda_free": 867000320, "cuda_total": 128427978752, "allocated": 98990450176, "host_available": 21858877440}
+PASS: first-use sampler, stable sort, and BF16 GEMM after graph replay

@@ -33,6 +33,7 @@ pub struct NetInterface {
 /// stable in practice but the parser does not sort).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetSample {
+    /// Public struct field in the sy core data model.
     pub interfaces: Vec<NetInterface>,
 }
 

@@ -50,6 +50,7 @@ pub struct CancelGuard {
 }
 
 impl CancelRegistry {
+    /// Public associated function in the sy public API.
     pub fn new() -> Self {
         Self::default()
     }

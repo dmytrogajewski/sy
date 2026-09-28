@@ -29,6 +29,8 @@
 //! the previewer to (say) `chromium-headless` is caught even when
 //! `chrome` itself isn't on the host.
 
+#![cfg(feature = "gui-iced")]
+
 use std::path::PathBuf;
 use std::time::SystemTime;
 

@@ -127,31 +127,40 @@ pub fn policy(class: Priority) -> ModelQueuePolicy {
 pub struct Request {
     pub id: Ulid,
     pub workload: WorkloadKind,
-    pub input: WorkloadInput,
+    /// The workload inputs to dispatch in ONE backend call. A single-input
+    /// `aiplane.run` is a batch of one by construction: the backend
+    /// (`Supervisor::run_batch`) is batch-shaped anyway, and carrying `Vec`
+    /// here is what lets `aiplane.batch` reach [`Scheduler::admit`] at all.
+    /// It used to carry one `WorkloadInput`, which left `aiplane.batch`
+    /// structurally unable to be admitted — so batch calls went straight to
+    /// `AiplaneDispatch::batch` with no QoS admission, no queue cap, no
+    /// priority ordering, and no inflight entry for `aiplane.cancel`
+    /// (BUG-20260927-2010).
+    pub inputs: Vec<WorkloadInput>,
     pub class: Priority,
     pub queued_at: Instant,
     pub deadline: Option<Instant>,
     pub cancel: CancellationToken,
-    pub respond: oneshot::Sender<Result<WorkloadOutput, AiplaneError>>,
+    pub respond: oneshot::Sender<Result<Vec<WorkloadOutput>, AiplaneError>>,
 }
 
 impl Request {
     pub fn new(
         id: Ulid,
         workload: WorkloadKind,
-        input: WorkloadInput,
+        inputs: Vec<WorkloadInput>,
         class: Priority,
         deadline: Option<Instant>,
         cancel: CancellationToken,
     ) -> (
         Self,
-        oneshot::Receiver<Result<WorkloadOutput, AiplaneError>>,
+        oneshot::Receiver<Result<Vec<WorkloadOutput>, AiplaneError>>,
     ) {
         let (respond, rx) = oneshot::channel();
         let req = Self {
             id,
             workload,
-            input,
+            inputs,
             class,
             queued_at: Instant::now(),
             deadline,
@@ -420,7 +429,7 @@ impl Dispatcher {
             started_at: Instant::now(),
         });
         let started = Instant::now();
-        let outcome = aiplane.run(kind, req.input);
+        let outcome = aiplane.batch(kind, req.inputs);
         let latency = started.elapsed();
         *self.inflight.lock().expect("dispatcher inflight poisoned") = None;
         // SPEC §4.6: emit the completed counter on success and the
@@ -523,14 +532,14 @@ mod tests {
         class: Priority,
     ) -> (
         Request,
-        oneshot::Receiver<Result<WorkloadOutput, AiplaneError>>,
+        oneshot::Receiver<Result<Vec<WorkloadOutput>, AiplaneError>>,
     ) {
         Request::new(
             Ulid::new(),
             WorkloadKind::Embed,
-            WorkloadInput::Text {
+            vec![WorkloadInput::Text {
                 text: SAMPLE_TEXT.into(),
-            },
+            }],
             class,
             None,
             CancellationToken::new(),
@@ -542,7 +551,12 @@ mod tests {
     /// gate so the dispatcher's interleaving can be observed without
     /// relying on real ORT.
     struct CountingDispatch {
+        /// Per-input answers served (one per `WorkloadInput`).
         calls: AtomicUsize,
+        /// Backend invocations received, i.e. how many times the dispatcher
+        /// called `AiplaneDispatch::batch`. An N-input request must produce
+        /// exactly one of these.
+        backend_calls: AtomicUsize,
         order: Mutex<Vec<Priority>>,
         per_call_delay: Duration,
     }
@@ -551,6 +565,7 @@ mod tests {
         fn new(per_call_delay: Duration) -> Arc<Self> {
             Arc::new(Self {
                 calls: AtomicUsize::new(0),
+                backend_calls: AtomicUsize::new(0),
                 order: Mutex::new(Vec::new()),
                 per_call_delay,
             })
@@ -569,12 +584,8 @@ mod tests {
     /// inflight request to record the dispatch order. We thread it
     /// through `WorkloadInput::Text` by sneaking the class name into
     /// the text payload so the trait shape doesn't have to change.
-    impl AiplaneDispatch for CountingDispatch {
-        fn run(
-            &self,
-            _workload: WorkloadKind,
-            input: WorkloadInput,
-        ) -> anyhow::Result<WorkloadOutput> {
+    impl CountingDispatch {
+        fn answer(&self, input: WorkloadInput) -> anyhow::Result<WorkloadOutput> {
             let label = match &input {
                 WorkloadInput::Text { text } => text.clone(),
                 _ => String::new(),
@@ -591,13 +602,16 @@ mod tests {
             self.order.lock().expect("order poisoned").push(class);
             Ok(WorkloadOutput::Text { text: label })
         }
+    }
 
+    impl AiplaneDispatch for CountingDispatch {
         fn batch(
             &self,
-            workload: WorkloadKind,
+            _workload: WorkloadKind,
             inputs: Vec<WorkloadInput>,
         ) -> anyhow::Result<Vec<WorkloadOutput>> {
-            inputs.into_iter().map(|i| self.run(workload, i)).collect()
+            self.backend_calls.fetch_add(1, Ordering::SeqCst);
+            inputs.into_iter().map(|i| self.answer(i)).collect()
         }
     }
 
@@ -605,12 +619,12 @@ mod tests {
         class: Priority,
     ) -> (
         Request,
-        oneshot::Receiver<Result<WorkloadOutput, AiplaneError>>,
+        oneshot::Receiver<Result<Vec<WorkloadOutput>, AiplaneError>>,
     ) {
         let (mut req, rx) = sample_request(class);
-        req.input = WorkloadInput::Text {
+        req.inputs = vec![WorkloadInput::Text {
             text: class.as_str().into(),
-        };
+        }];
         (req, rx)
     }
 
@@ -714,12 +728,84 @@ mod tests {
             handle.join().expect("dispatcher joins on drop");
             result
         });
-        assert!(matches!(outcome, WorkloadOutput::Text { .. }));
+        assert!(matches!(outcome.as_slice(), [WorkloadOutput::Text { .. }]));
 
         let snap = snapshotter.snapshot();
         let v = counter_value(snap, "sy_workload_completed_total", "kind", "embed")
             .expect("sy_workload_completed_total{kind=embed} must be present");
         assert_eq!(v, 1, "exactly one completed Embed run");
+    }
+
+    /// The property that makes `aiplane.batch` schedulable at all: an
+    /// N-input request is ONE admission and exactly ONE backend call, and all
+    /// N outputs return on the same oneshot **in input order** — the index
+    /// path maps vectors to chunks positionally, so a reordered or split
+    /// batch corrupts the corpus rather than merely slowing it down.
+    ///
+    /// Before BUG-20260927-2010 `Request` carried a single `WorkloadInput`, so
+    /// a batch had no representation the scheduler could accept, and
+    /// `aiplane.batch` was dispatched straight to the backend — outside the
+    /// class queues, outside the caps, and absent from `Status.queue_depths`.
+    #[test]
+    fn multi_input_request_is_one_admission_and_one_backend_call() {
+        const N: usize = 3;
+        let dispatch = CountingDispatch::new(Duration::from_millis(0));
+        let (scheduler, dispatcher) = Scheduler::new();
+        let handle = dispatcher.run(Arc::clone(&dispatch) as Arc<dyn AiplaneDispatch>);
+
+        let inputs: Vec<WorkloadInput> = (0..N)
+            .map(|i| WorkloadInput::Text {
+                text: format!("chunk-{i}"),
+            })
+            .collect();
+        let (req, rx) = Request::new(
+            Ulid::new(),
+            WorkloadKind::Embed,
+            inputs,
+            Priority::Background,
+            None,
+            CancellationToken::new(),
+        );
+        scheduler.admit(req).expect("admit multi-input request");
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("rt");
+        let outputs = rt.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), rx)
+                .await
+                .expect("dispatcher drained")
+                .expect("oneshot")
+                .expect("workload ok")
+        });
+
+        assert_eq!(outputs.len(), N, "one output per input");
+        let texts: Vec<String> = outputs
+            .iter()
+            .map(|o| match o {
+                WorkloadOutput::Text { text } => text.clone(),
+                other => panic!("unexpected output {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec!["chunk-0", "chunk-1", "chunk-2"],
+            "outputs must stay in input order"
+        );
+        assert_eq!(
+            dispatch.backend_calls.load(Ordering::SeqCst),
+            1,
+            "N inputs must be ONE backend call, not N"
+        );
+        assert_eq!(
+            dispatch.calls.load(Ordering::SeqCst),
+            N,
+            "the single call must still serve every input"
+        );
+
+        drop(scheduler);
+        handle.join().expect("dispatcher joins on drop");
     }
 
     #[test]
@@ -818,7 +904,7 @@ mod tests {
                 .expect("dispatcher drained queue")
                 .expect("oneshot")
                 .expect("workload ok");
-            assert!(matches!(result, WorkloadOutput::Text { .. }));
+            assert!(matches!(result.as_slice(), [WorkloadOutput::Text { .. }]));
         }
         drop(scheduler);
         handle.join().expect("dispatcher joins on drop");
@@ -917,12 +1003,8 @@ mod tests {
         }
     }
 
-    impl AiplaneDispatch for GatedRecordingDispatch {
-        fn run(
-            &self,
-            _workload: WorkloadKind,
-            _input: WorkloadInput,
-        ) -> anyhow::Result<WorkloadOutput> {
+    impl GatedRecordingDispatch {
+        fn answer(&self) -> anyhow::Result<WorkloadOutput> {
             let mut g = self.gate.lock().expect("gate poisoned");
             while !*g {
                 g = self.gate_cv.wait(g).expect("gate cv poisoned");
@@ -931,12 +1013,15 @@ mod tests {
                 text: "gated".into(),
             })
         }
+    }
+
+    impl AiplaneDispatch for GatedRecordingDispatch {
         fn batch(
             &self,
-            workload: WorkloadKind,
+            _workload: WorkloadKind,
             inputs: Vec<WorkloadInput>,
         ) -> anyhow::Result<Vec<WorkloadOutput>> {
-            inputs.into_iter().map(|i| self.run(workload, i)).collect()
+            inputs.into_iter().map(|_| self.answer()).collect()
         }
         fn cancel(&self, workload: WorkloadKind, request_id: Ulid) -> anyhow::Result<()> {
             self.cancels

@@ -38,6 +38,7 @@ impl Priority {
         Priority::Batch,
     ];
 
+    /// Public method in the sy core data model.
     pub fn as_str(self) -> &'static str {
         match self {
             Priority::Realtime => "Realtime",

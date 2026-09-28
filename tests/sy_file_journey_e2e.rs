@@ -156,6 +156,7 @@ mod mounts;
 /// the integration-test binary `app.rs` is at the test-crate root,
 /// so `super::fs` here is the test-crate root's `fs`.
 #[allow(dead_code)]
+#[cfg(feature = "gui-iced")]
 mod fs {
     pub(crate) use crate::mounts;
     pub(crate) use crate::walk;
@@ -412,6 +413,7 @@ pub(crate) mod plugin {
     pub(crate) use super::install;
     pub(crate) use super::manifest;
     pub(crate) use super::proc_mod as proc;
+    #[cfg(feature = "gui-iced")]
     pub(crate) use super::registry;
     pub(crate) use super::rpc;
     pub(crate) use super::sandbox;

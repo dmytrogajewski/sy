@@ -36,6 +36,14 @@ Every environment change the user requests must be productivized inside this rep
 
 Snowflake approach is prohibited.
 
+### Independently versioned components
+
+Sparkplane owns the DGX Spark appliance, engines, models, qualification and
+release process in `Sumatoshi-tech/sparkplane`. sy owns only a signed, pinned
+client integration and process bridge (`sy spark`). Reproducibility comes from
+the release pin in `sy.toml`; do not reintroduce appliance code, engine catalogs
+or local source-path dependencies into sy.
+
 ## CLI design: CLIG + agent-friendly
 
 `sy` must follow the [Command Line Interface Guidelines](https://clig.dev/) and be usable by agents as a first-class consumer, not just humans.

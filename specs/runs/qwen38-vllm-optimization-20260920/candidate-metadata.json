@@ -1,0 +1,8 @@
+{
+  "model_fingerprint": "sha256:26d708967d17a7b261018701fffcce2f40f2efa98476905e1a7e365db4872de6",
+  "engine_fingerprint": "sha256:6b139b7b451677d907970d1192c866b5f12a80c6f0036a05af1f8418c2a70487",
+  "image_digest": "sha256:940a052f27ca7b7700127fbfc1786f0ba9fc2ac51da02b35a1916ba017e8d50e",
+  "profile_fingerprint": "sha256:6b139b7b451677d907970d1192c866b5f12a80c6f0036a05af1f8418c2a70487",
+  "served_model": "Qwen3.8-Flash-Next-NVFP4",
+  "responses_path": "/openai/qwen38-vllm/v1/responses"
+}

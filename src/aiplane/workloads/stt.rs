@@ -21,7 +21,16 @@
 //!   tokenizer/{tokenizer.json, ..., preprocessor_config.json}
 //!   vitisai_config_whisper_encoder.json
 //!   vitisai_config_whisper_decoder.json
+//!   whisper_medium_encoder/whisper_medium_encoder.rai
+//!   whisper_medium_decoder/whisper_medium_decoder.rai
 //! ```
+//!
+//! The `.rai` AIE bitstreams are the expensive part (~6 min, 19.5 GiB peak
+//! for both) and `load()` refuses to build them on demand — the daemon lives
+//! under `MemoryHigh`, where an over-cap compile is throttled into a stall
+//! rather than merely slowed down. `prep_npu_workload.py` produces them, so
+//! prep is the only supported way to reach the state this loader wants.
+//! See `specs/bugs/BUG-20260927-0910.md`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -44,6 +53,13 @@ use super::npu_intra_threads;
 use super::whisper_mel::{MelExtractor, N_FRAMES, N_MELS, SAMPLE_RATE};
 
 const MODEL_STEM: &str = "whisper-medium";
+/// VitisAI `cache_key` for the compiled encoder partition. The EP writes the
+/// AIE bitstream to `<cache_dir>/<cache_key>/<cache_key>.rai`; both the EP
+/// option below and the readiness gate in `load()` use these names, so they
+/// live here rather than at the two call sites.
+const ENC_CACHE_KEY: &str = "whisper_medium_encoder";
+/// VitisAI `cache_key` for the compiled decoder partition.
+const DEC_CACHE_KEY: &str = "whisper_medium_decoder";
 /// Encoder hidden dim (medium). The decoder's `xa` cross-attention
 /// input is `[1, ENC_FRAMES, ENC_DIM]`.
 const ENC_DIM: usize = 1024;
@@ -148,6 +164,24 @@ impl Workload for SttWorkload {
             }
         }
 
+        // Both partitions must already be compiled on the AIE. Building one
+        // costs ~6 min and peaks at 19.5 GiB RSS (measured, Strix Point) —
+        // inside the knowledge unit's `MemoryHigh` cgroup the kernel answers
+        // that with direct-reclaim throttling and the worker never leaves
+        // `loading` (BUG-20260927-0910). `prep_npu_workload.py` owns the
+        // compile; a missing bitstream here is a fail-fast, not a job.
+        for key in [ENC_CACHE_KEY, DEC_CACHE_KEY] {
+            if !vaip_partition_compiled(&dir, key) {
+                anyhow::bail!(
+                    "whisper VAIML partition {key} is not compiled (no .rai in {})\n\
+                     The AIE compile takes ~6 min and peaks near 20 GiB, so it must not \
+                     run inside the daemon's MemoryHigh cgroup.\n\
+                     Build it with:\n  \
+                     python scripts/prep_npu_workload.py --workload stt",
+                    dir.join(key).display()
+                );
+            }
+        }
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("load tokenizer.json: {e}"))?;
         let sot = tokenizer
@@ -169,8 +203,8 @@ impl Workload for SttWorkload {
         // AMD's `RyzenAI-SW/Demos/ASR/Whisper/run_whisper.py` drives two
         // VitisAI `InferenceSession`s in one process. Strict NPU: a VitisAI
         // failure is a hard error, never a silent CPU fallback.
-        let encoder = vitisai_session(&encoder_path, &dir, &enc_cfg, "whisper_medium_encoder")?;
-        let decoder = vitisai_session(&decoder_path, &dir, &dec_cfg, "whisper_medium_decoder")?;
+        let encoder = vitisai_session(&encoder_path, &dir, &enc_cfg, ENC_CACHE_KEY)?;
+        let decoder = vitisai_session(&decoder_path, &dir, &dec_cfg, DEC_CACHE_KEY)?;
         // Determine ids/encoder binding order from the decoder's first input
         // type (run_whisper.py's swap guard).
         let decoder_ids_first = decoder_first_input_is_int64(&decoder);
@@ -225,6 +259,33 @@ impl Workload for SttWorkload {
             None => WorkloadHealth::default(),
         }
     }
+}
+
+/// True when the VAIML partition `cache_key` already exists as a compiled
+/// `.rai` AIE bitstream under `cache_dir`.
+///
+/// Only the bitstream counts. The AIE compiler also drops `gops.csv`,
+/// `graph_nodes.json`, `tensor_shape.json` and a `vaiml_par_0/` directory,
+/// and a compile killed by the memory throttle leaves *exactly* those behind
+/// — so directory existence proves nothing (BUG-20260927-0910). The EP has
+/// written the partition both flat and one level down across toolchain
+/// revisions, so both layouts are accepted.
+fn vaip_partition_compiled(cache_dir: &Path, cache_key: &str) -> bool {
+    fn rai_in(dir: &Path) -> bool {
+        std::fs::read_dir(dir)
+            .map(|rd| {
+                rd.flatten().any(|e| {
+                    let p = e.path();
+                    p.is_file() && p.extension().and_then(|x| x.to_str()) == Some("rai")
+                })
+            })
+            .unwrap_or(false)
+    }
+    let part = cache_dir.join(cache_key);
+    rai_in(&part)
+        || std::fs::read_dir(&part)
+            .map(|rd| rd.flatten().any(|e| e.path().is_dir() && rai_in(&e.path())))
+            .unwrap_or(false)
 }
 
 /// Build one strict-NPU VitisAI session for `model`. `config_file` points
@@ -515,5 +576,83 @@ mod tests {
         assert_eq!(text.trim(), "He hoped there would be stew");
         assert_eq!(tk.token_to_id(SOT_TOKEN), Some(SOT));
         assert_eq!(tk.token_to_id(EOT_TOKEN), Some(EOT));
+    }
+
+    /// BUG-20260927-0910: a partition directory holding only the AIE
+    /// compiler's scratch files (`gops.csv`, `graph_nodes.json`,
+    /// `vaiml_par_0/`) is *not* a compiled partition. The throttled compile
+    /// that motivated this gate left exactly those files behind, so a
+    /// directory-existence check would have called it prepared.
+    #[test]
+    fn vaip_partition_compiled_requires_the_rai_bitstream() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let part = dir.path().join("whisper_medium_encoder");
+
+        // Nothing there at all.
+        assert!(!vaip_partition_compiled(
+            dir.path(),
+            "whisper_medium_encoder"
+        ));
+
+        // Compiler scratch only — the state a killed compile leaves behind.
+        std::fs::create_dir_all(part.join("vaiml_par_0")).expect("mkdir");
+        std::fs::write(part.join("gops.csv"), b"noop").expect("write");
+        std::fs::write(part.join("graph_nodes.json"), b"{}").expect("write");
+        std::fs::write(part.join("vaiml_par_0/input_output_shape.json"), b"{}").expect("write");
+        assert!(
+            !vaip_partition_compiled(dir.path(), "whisper_medium_encoder"),
+            "scratch files must not count as a compiled partition"
+        );
+
+        // The real artefact.
+        std::fs::write(part.join("whisper_medium_encoder.rai"), [0u8; 4]).expect("write rai");
+        assert!(vaip_partition_compiled(
+            dir.path(),
+            "whisper_medium_encoder"
+        ));
+    }
+
+    /// The runtime worker must never start the AIE compile: it costs 19.5 GiB
+    /// of peak RSS in a cgroup capped at `MemoryHigh`, which the kernel
+    /// answers by parking the threads in direct reclaim forever. `load()` has
+    /// to fail fast and point at prep instead.
+    #[test]
+    fn stt_load_refuses_a_cold_vaip_compile_with_an_actionable_error() {
+        let _guard = crate::aiplane::TEST_ENV_LOCK
+            .lock()
+            .expect("TEST_ENV_LOCK poisoned");
+        let dir = tempfile::tempdir().expect("tmpdir");
+        // Every artefact prep produces, minus the compiled partitions.
+        for rel in [
+            "amd-src/encoder_model.onnx",
+            "amd-src/decoder_model.onnx",
+            "amd-src/decoder_model.onnx.data",
+            "tokenizer/tokenizer.json",
+            "tokenizer/preprocessor_config.json",
+            "vitisai_config_whisper_encoder.json",
+            "vitisai_config_whisper_decoder.json",
+        ] {
+            let p = dir.path().join(rel);
+            std::fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+            std::fs::write(&p, b"placeholder").expect("write artefact");
+        }
+        std::env::set_var("SY_STT_MODEL_DIR", dir.path());
+
+        let w = SttWorkload::new();
+        let res = w.load(&SessionPool::new());
+
+        std::env::remove_var("SY_STT_MODEL_DIR");
+        let err = match res {
+            Ok(()) => panic!("load() must not attempt an on-demand AIE compile"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(
+            err.contains("prep_npu_workload.py"),
+            "error must name the prep command, got: {err}"
+        );
+        assert!(
+            err.to_lowercase().contains("compil"),
+            "error must explain that the partition needs compiling, got: {err}"
+        );
     }
 }

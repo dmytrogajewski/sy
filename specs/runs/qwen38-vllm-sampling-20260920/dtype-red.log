@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "<stdin>", line 19, in <module>
+  File "/usr/local/lib/python3.12/dist-packages/sy_qwen38_sampling.py", line 13, in warmup_sampling
+    apply_top_k_top_p(logits[:rows].clone(), k, p)
+  File "/usr/local/lib/python3.12/dist-packages/vllm/v1/sample/ops/topk_topp_sampler.py", line 361, in apply_top_k_top_p
+    return apply_top_k_top_p_triton(logits, k, p)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/vllm/v1/sample/ops/topk_topp_triton.py", line 882, in apply_top_k_top_p_triton
+    assert logits.dtype == torch.float32
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

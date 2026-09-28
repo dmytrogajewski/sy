@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/home/dmitriy/sources/sy/specs/runs/qwen38-vllm-optimization-20260920/qualify.py", line 91, in <module>
+    result, _ = generate({'input': 'The access code is ' + code + '.\n' + ' xqz' * 87000
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dmitriy/sources/sy/specs/runs/qwen38-vllm-optimization-20260920/qualify.py", line 58, in generate
+    assert document is not None and document.get('status') != 'failed', document
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'error': {'code': 'server_error', 'message': 'upstream stream failed'}, 'id': 'resp_01m3016xfg4g1e0xkjxz9084fx', 'model': 'huggingface:RadixArk/Qwen3.8-Flash-Next-NVFP4@7b719225242aacd3dbd3f9407468c2ee9a9d2594#sha256:069e380200041a5b7249a952e005de0a1b50c83f38fdd473282d189c5610e683', 'object': 'response', 'output': [], 'status': 'failed'}

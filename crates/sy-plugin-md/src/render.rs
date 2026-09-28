@@ -47,11 +47,17 @@ pub mod palette {
 }
 
 /// Pinned layout constants. Mirrors `style.toml`.
+/// Width of the rendered content area in pixels.
 pub const CONTENT_WIDTH_PX: u32 = 800;
+/// Outer margin around rendered content in pixels.
 pub const MARGIN_PX: u32 = 32;
+/// Body text size in pixels.
 pub const BODY_FONT_PX: f32 = 16.0;
+/// Fenced-code text size in pixels.
 pub const CODE_FONT_PX: f32 = 14.0;
+/// Multiplier applied to the body font size to calculate line height.
 pub const LINE_HEIGHT_SCALE: f32 = 1.4;
+/// Vertical spacing between paragraphs in pixels.
 pub const PARAGRAPH_SPACING_PX: f32 = 8.0;
 /// One scroll "unit" in pixels — SPEC §4.2.4 `scroll_skip` is in
 /// lines, so a unit ≈ body font × line height ≈ 22 px; round to 24

@@ -5,6 +5,7 @@
 //   * Step 4 — `notify` plumbing (sd_notify) lands later.
 
 pub mod apply;
+pub mod log_scope;
 pub mod logs;
 pub mod service;
 pub mod status;

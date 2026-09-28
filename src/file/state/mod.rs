@@ -6,19 +6,25 @@
 //!
 //! [roadmap]: ../../../../specs/roadmaps/sy-file-manager/ROADMAP.md
 
+#[cfg(feature = "gui-iced")]
 pub mod commandbar;
+#[cfg(feature = "gui-iced")]
 pub mod knowledge;
 pub mod ops;
 pub mod panes;
+#[cfg(feature = "gui-iced")]
 pub mod preview;
 pub mod selection;
 
+#[cfg(feature = "gui-iced")]
 pub use commandbar::CommandBar;
 #[cfg(feature = "gui-iced")]
 pub use commandbar::CommandMode;
+#[cfg(feature = "gui-iced")]
 pub use knowledge::KnowledgeState;
 pub use ops::{ConflictPolicy, OpEvent, Operation};
 pub use panes::{Entry, EntryKind, Pane, PaneId, Panes};
+#[cfg(feature = "gui-iced")]
 pub use preview::PreviewState;
 #[cfg(feature = "gui-iced")]
 pub use preview::{HighlightedLine, HighlightedSpan, PreviewPayload};
@@ -36,6 +42,7 @@ pub use selection::{EntryId, SelectionSet};
 /// journey verbs so a future MCP consumer (Step 21+) can drive the
 /// same wire shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(feature = "gui-iced")]
 pub enum ClipboardMode {
     /// Paste should `Operation::Copy` the clipboard srcs into cwd.
     Copy,
@@ -85,19 +92,21 @@ pub struct State {
     /// Command-bar slice — `/` filter + `:` palette state. Step 25
     /// (SPEC §3.3 item 4 + item 7) lands the surface; the reducer in
     /// `app::update` is the only mutation path.
+    #[cfg(feature = "gui-iced")]
     pub commandbar: CommandBar,
     /// Preview-pane slice — Step 26 (SPEC §3.3 item 8). Carries the
     /// path of the currently-previewed entry so the async image-load
     /// `Task` can reconcile `Message::PreviewLoaded` with the cursor
-    /// when the user has moved on before the decode finishes. Pure
-    /// data (no I/O) so `--no-default-features` builds still see it.
+    /// when the user has moved on before the decode finishes. Only the
+    /// GUI reducer consumes this view-owned state.
+    #[cfg(feature = "gui-iced")]
     pub preview: PreviewState,
-    /// Step 27 — plugin-routed previewer bridge. `None` for headless /
-    /// non-GUI contexts (the Step 23-26 callers keep working without
-    /// having to opt-in); `Some` once `app::run` has discovered the
+    /// Step 27 — plugin-routed previewer bridge. `None` before GUI
+    /// initialization; `Some` once `app::run` has discovered the
     /// registry and wrapped a [`crate::file::plugin_bridge::PluginBridge`]
     /// in an `Arc`. The reducer reads this on `HoverEntry` to decide
     /// whether to spawn an async preview task against a plugin.
+    #[cfg(feature = "gui-iced")]
     pub plugin_bridge: Option<std::sync::Arc<crate::file::plugin_bridge::PluginBridge>>,
     /// Step 28 — clipboard slot. `Some(...)` after the user presses
     /// `y` (copy) or `x` (move); `p` (paste) drives the matching
@@ -105,11 +114,13 @@ pub struct State {
     /// second paste needs a fresh `y` / `x` (the yazi convention the
     /// journey-J5 brief follows). Holds the cwd-relative source paths
     /// so the paste reducer doesn't need a fresh pane snapshot.
+    #[cfg(feature = "gui-iced")]
     pub clipboard: Option<(ClipboardMode, Vec<std::path::PathBuf>)>,
     /// Step 28 — anchor cursor for `<Shift>+arrow` range selection.
     /// Set when the user first holds Shift; subsequent arrow moves
     /// drive `SelectionSet::add_range(anchor, cursor)`. Cleared when
     /// Shift releases or the user toggles individually with Space.
+    #[cfg(feature = "gui-iced")]
     pub range_anchor: Option<EntryId>,
     /// Step 29 — wayland `wl_data_device` drag-source state.
     /// `Some(DragSource)` while the user holds a drag in flight (from
@@ -124,9 +135,9 @@ pub struct State {
     /// [`crate::file::app::Message::KnowledgeStatusChanged`] arm and
     /// `last_hits` from the [`crate::file::app::Message::KnowledgeHits`]
     /// arm; the statusbar chip + commandbar `:index .` hint both
-    /// read from here. Not `gui-iced`-gated because the slice is
-    /// pure data and the headless harness reads it during the
-    /// journey-J4 reducer trace.
+    /// read from here. Shared IPC knowledge search retains its own
+    /// diagnostic outcome independently of this GUI state.
+    #[cfg(feature = "gui-iced")]
     pub knowledge: KnowledgeState,
     /// Step 31 — `b<key>` bookmarks + `recently-used.xbel` log
     /// (SPEC §3.3 item 15). `None` for headless / unit-test contexts
@@ -141,6 +152,7 @@ pub struct State {
     /// the `BookmarkPin` (write) or `BookmarkJump` (read) reducer arm
     /// and clears the chord. Pure data — Escape clears it without
     /// firing a chord arm.
+    #[cfg(feature = "gui-iced")]
     pub pending_key_chord: Option<char>,
     /// Step 32 (SPEC §3.3 item 14) — mountinfo snapshot. Populated by
     /// the [`crate::file::app::Message::MountsLoaded`] arm after the
@@ -148,6 +160,7 @@ pub struct State {
     /// 3-pane sidebar paints it and the `:m` palette filters against
     /// it. Pure data so headless unit tests can plant a fixture
     /// without touching `/proc`.
+    #[cfg(feature = "gui-iced")]
     pub mounts: Vec<crate::file::fs::mounts::Mount>,
     /// Step 34 (SPEC §3.3 item 17 + item 18) — live keymap loaded from
     /// `$XDG_CONFIG_HOME/sy/file-keymap.toml`. The daemon's SIGHUP

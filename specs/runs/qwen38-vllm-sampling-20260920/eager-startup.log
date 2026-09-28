@@ -1,0 +1,619 @@
+(APIServer pid=7) INFO 09-20 17:54:47 [api_utils.py:333] 
+(APIServer pid=7) INFO 09-20 17:54:47 [api_utils.py:333]        █     █     █▄   ▄█
+(APIServer pid=7) INFO 09-20 17:54:47 [api_utils.py:333]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.1.dev20073+g8e685d198
+(APIServer pid=7) INFO 09-20 17:54:47 [api_utils.py:333]   █▄█▀ █     █     █     █  model   /models/snapshots/7b719225242aacd3dbd3f9407468c2ee9a9d2594
+(APIServer pid=7) INFO 09-20 17:54:47 [api_utils.py:333]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=7) INFO 09-20 17:54:47 [api_utils.py:333] 
+(APIServer pid=7) INFO 09-20 17:54:47 [api_utils.py:272] non-default args: {'model_tag': '/models/snapshots/7b719225242aacd3dbd3f9407468c2ee9a9d2594', 'enable_auto_tool_choice': True, 'tool_call_parser': 'qwen3_coder', 'host': '0.0.0.0', 'model': '/models/snapshots/7b719225242aacd3dbd3f9407468c2ee9a9d2594', 'max_model_len': 262144, 'served_model_name': ['Qwen3.8-Flash-Next-NVFP4'], 'load_format': 'safetensors', 'reasoning_parser': 'qwen3', 'kv_cache_memory_bytes': 12884901888, 'enable_prefix_caching': True, 'max_num_batched_tokens': 8192, 'max_num_seqs': 8, 'enable_chunked_prefill': True, 'enable_flashinfer_autotune': False, 'speculative_config': {'method': 'mtp', 'num_speculative_tokens': 3}, 'compilation_config': {'mode': None, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': [], 'ir_enable_torch_wrap': None, 'splitting_ops': ['vllm::unified_attention_with_output', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::qwen3_8_flash_next_ple_short_conv', 'vllm::qwen3_8_flash_next_qsa_with_output', 'vllm::linear_attention', 'vllm::qwen_gdn_attention_core', 'vllm::qwen_gdn_attention_core_fused_norm_packed', 'vllm::sparse_attn_indexer', 'vllm::ple_mmap_lookup'], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': None, 'compile_ranges_endpoints': None, 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.PIECEWISE: 1>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': None, 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': None, 'pass_config': {}, 'max_cudagraph_capture_size': None, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': None, 'static_all_moe_layers': []}}
+(APIServer pid=7) WARNING 09-20 17:54:47 [envs.py:2224] Unknown vLLM environment variable detected: VLLM_PLE_MMAP
+(APIServer pid=7) WARNING 09-20 17:54:47 [envs.py:2224] Unknown vLLM environment variable detected: VLLM_PLE_MMAP_WORKERS
+(APIServer pid=7) WARNING 09-20 17:54:47 [envs.py:2224] Unknown vLLM environment variable detected: VLLM_PLE_MMAP_FAST_ROWS
+(APIServer pid=7) WARNING 09-20 17:54:47 [envs.py:2224] Unknown vLLM environment variable detected: VLLM_PLE_MMAP_MADVISE
+(APIServer pid=7) WARNING 09-20 17:54:47 [envs.py:2224] Unknown vLLM environment variable detected: VLLM_MTP_DRAFT_VOCAB
+(APIServer pid=7) WARNING 09-20 17:54:47 [envs.py:2224] Unknown vLLM environment variable detected: VLLM_QSA_DET_TOPK
+(APIServer pid=7) WARNING 09-20 17:54:47 [envs.py:2224] Unknown vLLM environment variable detected: VLLM_PLE_MMAP_PREWARM
+(APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=7) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=7) INFO 09-20 17:54:47 [model.py:672] Resolved architecture: Qwen4ExpForConditionalGeneration
+(APIServer pid=7) INFO 09-20 17:54:47 [model.py:1965] Using max model len 262144
+[17:54:53.087][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:54:53.087][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:54:53.087][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:54:53.087][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:54:53.087][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:54:53.087][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:54:54.929][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:54:54.929][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:54:54.929][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:54:54.934][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:54:54.934][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:54:54.934][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:54:59.401][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:54:59.401][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:54:59.401][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:08.111][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:08.111][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:08.111][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:08.111][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:08.111][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:08.111][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:31.229][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:31.229][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:31.229][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:31.235][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:31.235][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:31.235][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:31.245][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:31.245][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:31.245][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:31.260][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:31.260][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:31.260][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:31.261][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:31.261][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:31.261][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:31.264][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:31.270][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:31.270][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:49.217][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:49.217][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:49.217][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:51.480][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:51.480][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:51.480][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:51.481][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:51.481][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:51.481][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:51.481][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:51.481][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:51.481][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:51.482][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:51.482][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:51.482][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:51.483][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:51.483][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:51.483][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:59.123][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:59.123][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:59.123][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:55:59.126][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:55:59.126][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:55:59.126][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:56:30.717][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:56:30.717][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:56:30.717][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:56:30.717][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:56:30.717][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:56:30.717][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:56:30.739][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:56:30.739][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:56:30.739][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:56:30.739][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:56:30.739][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:56:30.739][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:56:30.740][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:56:30.740][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:56:30.740][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:56:31.250][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:56:31.250][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:56:31.250][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:56:31.250][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:56:31.250][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:56:31.250][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:56:42.034][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:56:42.034][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:56:42.034][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:56:42.051][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:56:42.051][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:56:42.051][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:56:42.052][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:56:42.052][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:56:42.052][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:57:26.727][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:57:26.727][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:57:26.727][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:57:26.727][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:57:26.727][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:57:26.728][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:57:26.730][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:57:26.730][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:57:26.730][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:57:28.935][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:57:28.935][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:57:28.935][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:57:28.939][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:57:28.939][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:57:28.939][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:57:28.939][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:57:28.939][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:57:28.939][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:57:28.940][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:57:28.940][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:57:28.940][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:57:28.940][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:57:28.940][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:57:28.940][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:57:28.944][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:57:28.944][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:57:28.944][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:57:28.944][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:57:28.944][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:57:28.944][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:57:28.946][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:57:28.947][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:57:28.947][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:57:40.332][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:57:40.332][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:57:40.332][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:58:29.828][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:58:29.828][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:58:29.828][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:58:29.838][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:58:29.838][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:58:29.838][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:58:29.844][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:58:29.844][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:58:29.844][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[17:58:29.844][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[17:58:29.844][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[17:58:29.844][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:00:24.594][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:00:24.594][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:00:24.594][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.540][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.540][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.540][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.540][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.540][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.540][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.542][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.542][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.542][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.542][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.542][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.542][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.543][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.543][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.543][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.544][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.544][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.544][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.544][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.544][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.544][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.544][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.544][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.544][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.544][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.544][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.544][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.544][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.544][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.544][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.544][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.544][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.544][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.544][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.545][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.545][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.545][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.545][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.545][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.545][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.545][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.545][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.545][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.545][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.545][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.545][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.561][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.561][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.561][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.566][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.566][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.566][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:04.573][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:04.573][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:04.573][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:06.490][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:06.490][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:06.490][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:06.494][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:06.494][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:06.494][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:48.039][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:48.039][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:48.039][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:48.047][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:48.047][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:48.047][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:48.047][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:48.047][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:48.047][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:48.051][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:48.051][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:48.051][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:48.052][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:48.052][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:48.052][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:48.055][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:48.055][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:48.056][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:48.060][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:48.060][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:48.060][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:01:48.061][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:01:48.061][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:01:48.061][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:09.215][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:09.215][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:09.215][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:29.145][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:29.145][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:29.145][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:29.146][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:29.146][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:29.146][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:29.149][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:29.149][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:29.149][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:29.149][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:29.149][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:29.149][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:29.159][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:29.159][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:29.159][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:29.163][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:29.163][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:29.163][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:29.163][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:29.163][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:29.163][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:37.313][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:37.313][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:37.313][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:37.313][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:37.313][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:37.313][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:37.314][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:37.315][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:37.315][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:37.315][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:37.315][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:37.315][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:37.316][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:37.316][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:37.316][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:37.317][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:37.318][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:37.318][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:37.318][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:37.318][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:37.318][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:37.319][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:37.319][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:37.319][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:37.319][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:37.319][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:37.319][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:47.510][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:47.510][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:47.510][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:47.516][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:47.516][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:47.516][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:47.517][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:47.517][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:47.517][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:47.517][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:47.517][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:47.517][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:47.517][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:47.518][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:47.518][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:47.518][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:47.518][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:47.518][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:49.865][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:49.865][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:49.865][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:02:49.870][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:02:49.870][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:02:49.870][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:22.041][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:22.041][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:22.041][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:22.050][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:22.050][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:22.050][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:22.051][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:22.051][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:22.051][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:27.536][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:27.536][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:27.536][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:27.536][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:27.536][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:27.536][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:32.225][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:32.225][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:32.225][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:32.228][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:32.228][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:32.228][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:32.229][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:32.229][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:32.229][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:48.272][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:48.272][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:48.272][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:48.279][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:48.279][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:48.279][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:48.299][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:48.299][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:48.299][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:48.322][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:48.322][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:48.322][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:48.322][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:48.322][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:48.322][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:48.322][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:48.322][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:48.322][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:48.323][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:48.323][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:48.323][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:48.341][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:48.341][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:48.341][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:48.343][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:48.343][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:48.343][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:48.346][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:48.346][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:48.346][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:48.360][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:48.360][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:48.360][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:03:57.546][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:03:57.546][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:03:57.546][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:04:19.415][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:04:19.415][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:04:19.415][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:04:19.439][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:04:19.439][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:04:19.439][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:04:42.142][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:04:42.142][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:04:42.142][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:04:42.142][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:04:42.142][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:04:42.142][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:05:19.468][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:05:19.469][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:05:19.469][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:05:19.469][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:05:19.469][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:05:19.469][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:05:36.565][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:05:36.565][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:05:36.565][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:05:36.594][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:05:36.594][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:05:36.594][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:05:36.606][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:05:36.607][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:05:36.607][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:05:51.932][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:05:51.932][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:05:51.932][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:05:57.416][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:05:57.416][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:05:57.416][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:05:57.422][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:05:57.422][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:05:57.422][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:05:57.429][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:05:57.429][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:05:57.429][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:05:57.431][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:05:57.431][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:05:57.431][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:05:57.435][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:05:57.435][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:05:57.435][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:05:57.436][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:05:57.436][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:05:57.436][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:06:06.814][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:06:06.814][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:06:06.814][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:06:06.820][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:06:06.820][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:06:06.820][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:06:06.821][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:06:06.821][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:06:06.821][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:06:06.826][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:06:06.826][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:06:06.826][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:06:06.826][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:06:06.826][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:06:06.826][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:06:06.827][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:06:06.828][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:06:06.828][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:06:06.828][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:06:06.828][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:06:06.828][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:06:06.830][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:06:06.830][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:06:06.830][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:06:06.835][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:06:06.836][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:06:06.836][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:06:56.373][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:06:56.374][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:06:56.374][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:06:56.378][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:06:56.378][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:06:56.378][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:06:56.407][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:06:56.407][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:06:56.407][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:07:33.947][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:07:33.947][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:07:33.947][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:07:45.628][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:07:45.628][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:07:45.628][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:07:45.632][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:07:45.632][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:07:45.632][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:07:45.637][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:07:45.638][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:07:45.638][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:07:45.642][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:07:45.642][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:07:45.642][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:07:47.570][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:07:47.570][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:07:47.570][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:07:47.585][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:07:47.585][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:07:47.585][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:07:47.591][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:07:47.591][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:07:47.591][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:07:47.592][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:07:47.592][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:07:47.592][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:08:03.765][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:08:03.765][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:08:03.765][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:08:32.565][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:08:32.565][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:08:32.565][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:08:32.582][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:08:32.582][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:08:32.582][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:08:32.583][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:08:32.583][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:08:32.583][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:08:32.586][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:08:32.586][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:08:32.586][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:08:34.943][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:08:34.943][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:08:34.943][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:08:34.943][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:08:34.943][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:08:34.943][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:02.531][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:02.531][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:02.532][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:02.534][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:02.535][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:02.535][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:02.540][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:02.541][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:02.541][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:02.541][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:02.541][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:02.541][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:02.541][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:02.542][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:02.542][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:02.545][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:02.545][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:02.545][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:02.547][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:02.547][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:02.547][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:02.549][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:02.549][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:02.549][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:02.550][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:02.550][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:02.550][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:19.617][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:19.617][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:19.617][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:19.620][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:19.620][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:19.620][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:28.567][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:28.567][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:28.567][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:28.568][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:28.568][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:28.568][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:28.575][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:28.575][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:28.575][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:28.575][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:28.575][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:28.575][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:28.578][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:28.578][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:28.578][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:28.587][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:28.587][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:28.587][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:44.149][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:44.149][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:44.149][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:48.395][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:48.395][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:48.395][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:48.398][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:48.398][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:48.398][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:09:48.398][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:09:48.398][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:09:48.398][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:10:00.691][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:10:00.691][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:10:00.691][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:10:00.693][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:10:00.694][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:10:00.694][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:10:00.698][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:10:00.698][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:10:00.698][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:10:00.698][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:10:00.698][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:10:00.698][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:10:00.699][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:10:00.699][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:10:00.699][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:10:20.413][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:10:20.413][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:10:20.413][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:10:20.416][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:10:20.416][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:10:20.416][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:10:28.574][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:10:28.574][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:10:28.574][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:10:28.574][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:10:28.574][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:10:28.574][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:10:28.590][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:10:28.590][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:10:28.590][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:10:28.590][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:10:28.590][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:10:28.590][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:10:39.766][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:10:39.766][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:10:39.766][256894175246112][CUDA][E] No device code available for GPU ISA 121
+[18:10:51.095][256894175246112][CUDA][E] Error handling fatbinary, to get more information when using CUDA Driver APIs use the CU_JIT_ERROR_LOG_BUFFER and CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES parameters
+[18:10:51.095][256894175246112][CUDA][E] No available relocatable PTX entries for GPU
+[18:10:51.096][256894175246112][CUDA][E] No device code available for GPU ISA 121

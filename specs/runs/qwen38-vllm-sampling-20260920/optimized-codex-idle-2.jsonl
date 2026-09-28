@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"01a0c049-7cb3-7361-a4d9-30a614894592"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"The user is asking for a simple text response without any tool usage.\n"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"\n\nHello! Understood — inference-only mode, no tools, no file reads, no changes. Ready for your smoke test. If I cannot prove it end-to-end, I assume it does not work — but today we're just checking that the lights come on. 🚦"}}
+{"type":"turn.completed","usage":{"input_tokens":21595,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":74,"reasoning_output_tokens":0}}

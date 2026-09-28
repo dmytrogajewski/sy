@@ -36,6 +36,7 @@ pub enum WorkloadKind {
 }
 
 impl WorkloadKind {
+    /// Public method in the sy core data model.
     pub fn as_str(self) -> &'static str {
         match self {
             WorkloadKind::Embed => "embed",
@@ -50,6 +51,7 @@ impl WorkloadKind {
         }
     }
 
+    /// Public associated constant in the sy core data model.
     pub const ALL: [WorkloadKind; 9] = [
         WorkloadKind::Embed,
         WorkloadKind::Rerank,
@@ -90,26 +92,71 @@ impl FromStr for WorkloadKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum WorkloadInput {
-    Text { text: String },
-    TextPair { a: String, b: String },
-    Audio { pcm: Vec<i16>, sr: u32 },
-    Image { bytes: Vec<u8> },
+    /// A single text input.
+    Text {
+        /// Input text.
+        text: String,
+    },
+    /// Two text inputs for pairwise workloads.
+    TextPair {
+        /// First text input.
+        a: String,
+        /// Second text input.
+        b: String,
+    },
+    /// PCM audio input.
+    Audio {
+        /// PCM samples.
+        pcm: Vec<i16>,
+        /// Sample rate in hertz.
+        sr: u32,
+    },
+    /// Encoded image input.
+    Image {
+        /// Encoded image bytes.
+        bytes: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
+/// Public enum in the sy core data model.
 pub enum WorkloadOutput {
-    Vector { vector: Vec<f32> },
-    Score { score: f32 },
-    Text { text: String },
-    Spans { spans: Vec<SpeechSpan> },
-    Bytes { bytes: Vec<u8> },
+    /// A vector result.
+    Vector {
+        /// Result vector.
+        vector: Vec<f32>,
+    },
+    /// A scalar score result.
+    Score {
+        /// Result score.
+        score: f32,
+    },
+    /// A text result.
+    Text {
+        /// Transcribed or generated text.
+        text: String,
+    },
+    /// Timestamped speech result.
+    Spans {
+        /// Timestamped speech spans.
+        spans: Vec<SpeechSpan>,
+    },
+    /// An opaque byte result.
+    Bytes {
+        /// Opaque result bytes.
+        bytes: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Public struct in the sy core data model.
 pub struct SpeechSpan {
+    /// Public struct field in the sy core data model.
     pub start_ms: u32,
+    /// Public struct field in the sy core data model.
     pub end_ms: u32,
+    /// Public struct field in the sy core data model.
     pub prob: f32,
 }
 
@@ -153,17 +200,24 @@ pub enum WorkloadState {
     Loading,
     /// Session attached, serving requests. `backend` carries the
     /// effective execution provider for status display.
-    Ready { backend: String },
+    Ready {
+        /// Effective execution backend.
+        backend: String,
+    },
     /// Load attempted and failed. The daemon won't auto-retry; the
     /// user must either fix the cause (re-prep the model, free the
     /// HW context) and restart the worker, or accept the degraded
     /// state. `reason` is the underlying error chain rendered.
-    Failed { reason: String },
+    Failed {
+        /// Human-readable failure reason.
+        reason: String,
+    },
     /// Explicitly disabled in sy.toml `[aiplane] enabled_workloads`.
     Unavailable,
 }
 
 impl WorkloadState {
+    /// Public method in the sy core data model.
     pub fn is_ready(&self) -> bool {
         matches!(self, WorkloadState::Ready { .. })
     }

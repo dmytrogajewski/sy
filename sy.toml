@@ -1,5 +1,14 @@
 theme = "black"
 
+[integrations.sparkplane]
+enabled = true
+
+[integrations.sparkplane.release]
+version = "0.1.6"
+target = "x86_64-unknown-linux-gnu"
+sha256 = "aa0da0792dc4dd4ced603fc64ab17d76d08f324b1ce1d34f64a448ac762049b9"
+public_key = "RWSk6P8o3nKpWSKd11i8ybaXvRwSyr7wv6qqXeaBrrIzl79Ra041/fJw"
+
 # --- Knowledge plane -------------------------------------------------------
 # Vector-search index over the user's files, served by `sy knowledge daemon`
 # (which supervises qdrant). Two ways to register content:

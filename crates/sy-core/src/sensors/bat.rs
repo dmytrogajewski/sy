@@ -22,10 +22,15 @@ use serde::{Deserialize, Serialize};
 /// glyph per state without re-parsing a `String`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BatteryStatus {
+    /// Public variant in the sy core data model.
     Charging,
+    /// Public variant in the sy core data model.
     Discharging,
+    /// Public variant in the sy core data model.
     Full,
+    /// Public variant in the sy core data model.
     NotCharging,
+    /// Public variant in the sy core data model.
     Unknown,
 }
 
@@ -54,6 +59,7 @@ pub struct BatterySample {
     /// Directory name (`BAT0`, `BAT1`, …). Lets a multi-battery
     /// laptop disambiguate downstream.
     pub name: String,
+    /// Public struct field in the sy core data model.
     pub status: BatteryStatus,
     /// State of charge, 0..=100.
     pub capacity_pct: u8,
@@ -72,6 +78,7 @@ pub struct BatterySample {
 /// `BAT*` directory was found — the typical desktop case.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BatSample {
+    /// Public struct field in the sy core data model.
     pub batteries: Vec<BatterySample>,
 }
 
