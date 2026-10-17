@@ -1,0 +1,11 @@
+[package]
+name = "sy-theme"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+iced.workspace = true
+serde.workspace = true
+toml.workspace = true

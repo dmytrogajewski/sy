@@ -50,7 +50,7 @@ ExecStart=/usr/bin/bash -c ' \
   # to non-Ryzen-AI boxes without failing multi-user.target. The class \
   # filter (11:80, "Signal processing controller / Other") matches the \
   # PCI alias amdxdna registers: pci:v00001022d*sv*sd*bc11sc80i*. \
-  if ! lspci -d 1022:: -n 2>/dev/null | awk "{print \$2}" | grep -q "^1180:"; then \
+  if ! lspci -d 1022:: -n 2>/dev/null | cut -d " " -f 2 | grep -q "^1180:"; then \
     echo "sy-amdxdna-load: no AMD signal-processing PCI device, skipping" >&2; \
     exit 0; \
   fi; \

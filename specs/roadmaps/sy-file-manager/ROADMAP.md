@@ -1026,7 +1026,7 @@ mtime / size / mime hint / symlink target / readability bit.
 - `Cargo.toml` (modified) — verify `nix` is in workspace or add it.
 
 **Tests:**
-- `fs::walk::tests::happy_path_5k_entries_under_50ms` — synthetic dir of 5000 files; asserts wall-clock budget.
+- `fs::walk::tests::happy_path_5k_entries_under_50ms` — synthetic dir of 5000 files; always verifies the listing and enforces the 50 ms wall-clock budget with `SY_PERF_TESTS=1` on an idle host.
 - `fs::walk::tests::handles_symlinks_without_following` — symlink to non-existent target stays in the listing with a broken-link flag.
 - `fs::walk::tests::perm_denied_subdir_skipped_with_warn`.
 - `fs::walk::tests::hidden_filter_respected`.

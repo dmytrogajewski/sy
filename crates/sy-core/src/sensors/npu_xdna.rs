@@ -152,10 +152,10 @@ fn parse_cache(raw: &str) -> Option<(u64, u64)> {
 }
 
 fn cache_path() -> PathBuf {
-    if let Ok(d) = std::env::var("XDG_RUNTIME_DIR") {
-        if !d.is_empty() {
-            return PathBuf::from(d).join("sy-npu.last");
-        }
+    if let Ok(d) = std::env::var("XDG_RUNTIME_DIR")
+        && !d.is_empty()
+    {
+        return PathBuf::from(d).join("sy-npu.last");
     }
     // Fall back to /tmp when XDG_RUNTIME_DIR is unset. Avoids the
     // libc::getuid() unsafe call that the legacy waybar module
@@ -193,11 +193,11 @@ fn find_holders() -> Vec<String> {
         };
         let mut hit = false;
         for fd in fds.flatten() {
-            if let Ok(target) = std::fs::read_link(fd.path()) {
-                if target.to_string_lossy() == ACCEL_DEV {
-                    hit = true;
-                    break;
-                }
+            if let Ok(target) = std::fs::read_link(fd.path())
+                && target.to_string_lossy() == ACCEL_DEV
+            {
+                hit = true;
+                break;
             }
         }
         if hit {

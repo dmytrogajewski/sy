@@ -14,7 +14,7 @@
 //! The runtime is the same `define_plugin!` macro Step 11's PDK
 //! canary uses, so a regression in either side breaks both.
 
-use sy_plugin_md::render::{render_to_png, RenderOpts, CONTENT_WIDTH_PX};
+use sy_plugin_md::render::{CONTENT_WIDTH_PX, RenderOpts, render_to_png};
 use sy_plugin_pdk::prelude::*;
 
 define_plugin! {

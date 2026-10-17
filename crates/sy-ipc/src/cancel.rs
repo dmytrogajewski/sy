@@ -108,10 +108,10 @@ impl CancelGuard {
 impl Drop for CancelGuard {
     fn drop(&mut self) {
         let mut inner = self.inner.lock().expect("cancel registry poisoned");
-        if let Some(e) = inner.get(&self.id) {
-            if e.epoch == self.epoch {
-                inner.remove(&self.id);
-            }
+        if let Some(e) = inner.get(&self.id)
+            && e.epoch == self.epoch
+        {
+            inner.remove(&self.id);
         }
     }
 }

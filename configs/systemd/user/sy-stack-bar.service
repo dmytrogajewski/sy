@@ -24,7 +24,8 @@
 
 [Unit]
 Description=sy stack bar (iced layer-shell tile rail)
-After=graphical-session.target
+After=graphical-session.target sy-waybar.service
+Wants=sy-waybar.service
 PartOf=sy.target
 
 [Service]
@@ -32,7 +33,7 @@ Type=notify
 NotifyAccess=main
 WatchdogSec=300s
 TimeoutStartSec=300s
-# Wait for waybar (also a niri spawn-at-startup, not a systemd unit)
+# Wait for waybar
 # to register its top exclusive zone before our wlr-layer-shell
 # surface attaches. Otherwise niri hasn't deducted waybar's 24-px
 # strip yet, and the bar's `Right | Top | Bottom` anchor straddles

@@ -60,7 +60,7 @@ layout {
 
     struts {
         left   0
-        right  0
+        right  28
         top    0
         bottom 0
     }
@@ -69,21 +69,19 @@ layout {
 // --- Autostart --------------------------------------------------------------
 spawn-at-startup "lxpolkit"
 spawn-at-startup "mako"
-spawn-at-startup "{{ home }}/.local/bin/sy" "notif" "watch"
+spawn-at-startup "{{ sy_bin }}" "notif" "watch"
 spawn-at-startup "wlsunset" "-t" "3800" "-T" "6500" "-l" "50.45" "-S" "06:00" "-s" "20:30"
-spawn-at-startup "waybar"
-// sy stack bar is owned by `sy-stack-bar.service`
-// (WantedBy=graphical-session.target). The waybar wait-loop that
-// used to live here now lives in the unit's ExecStartPre so there
-// is exactly one owner with Restart=on-failure supervision.
+// Waybar and the stack bar are supervised by sy user services.
 // Wallpaper daemon: re-applies whatever `sy wallpaper <path>` last saved.
-spawn-at-startup "{{ home }}/.local/bin/sy" "wallpaper" "--start"
+spawn-at-startup "{{ sy_bin }}" "wallpaper" "--start"
 // sy-agentd: long-lived daemon owning ACP child sessions.
-spawn-at-startup "{{ home }}/.local/bin/sy" "agt" "daemon"
+{% if features.agent %}
+spawn-at-startup "{{ sy_bin }}" "agt" "daemon"
+{% endif %}
 // Silent hours: watches the clock + pactl events to enforce quiet mode.
-spawn-at-startup "{{ home }}/.local/bin/sy" "silent" "watch"
+spawn-at-startup "{{ sy_bin }}" "silent" "watch"
 // Login jingle — silent-gated; no-op during quiet hours.
-spawn-at-startup "{{ home }}/.local/bin/sy" "snd" "login"
+spawn-at-startup "{{ sy_bin }}" "snd" "login"
 // Clipboard history (cliphist)
 spawn-at-startup "sh" "-c" "command -v cliphist >/dev/null && wl-paste --type text  --watch cliphist store"
 spawn-at-startup "sh" "-c" "command -v cliphist >/dev/null && wl-paste --type image --watch cliphist store"
@@ -206,18 +204,25 @@ binds {
     // redundant. Operators who relied on the floating cheatsheet can
     // still reach it via `waybar -c ~/.config/waybar/cheatsheet.jsonc`
     // by hand; the productivised binding is the file manager now.
-    Mod+Slash        { spawn "{{ home }}/.local/bin/sy" "file" "--ipc" "open" "~"; }
+{% if features.filemanager %}
+    Mod+Slash        { spawn "{{ sy_bin }}" "file" "--ipc" "open" "~"; }
+{% endif %}
 
     // Launchers
     Mod+Return       { spawn "foot"; }
     Mod+D            { spawn "fuzzel"; }
     Mod+Shift+D      { spawn-sh "fuzzel --dmenu --prompt='» '"; }
     Mod+C            { spawn-sh "cliphist list | fuzzel --dmenu --prompt='clip » ' | cliphist decode | wl-copy"; }
-    Mod+A            { spawn "{{ home }}/.local/bin/sy" "agt" "run"; }
-    Mod+P            { spawn "{{ home }}/.local/bin/sy" "stack" "toggle"; }
-    Mod+S            { spawn "{{ home }}/.local/bin/sy" "silent"; }
-    Mod+M hotkey-overlay-title="sy mon — system dashboard" { spawn "{{ home }}/.local/bin/sy" "popup" "mon"; }
+{% if features.agent %}
+    Mod+A            { spawn "{{ sy_bin }}" "agt" "run"; }
+{% endif %}
+    Mod+P            { spawn "{{ sy_bin }}" "stack" "toggle"; }
+    Mod+S            { spawn "{{ sy_bin }}" "silent"; }
+    Mod+M hotkey-overlay-title="sy mon — system dashboard" { spawn "{{ sy_bin }}" "popup" "mon"; }
     Mod+Escape allow-inhibiting=false { spawn "swaylock" "-f"; }
+{% if features.power %}
+    Mod+Shift+Escape allow-inhibiting=false { spawn "{{ sy_bin }}" "power"; }
+{% endif %}
 
     // Session
     Mod+Shift+Q      { close-window; }
@@ -229,8 +234,10 @@ binds {
     // `Mod+Shift+G` (symmetric with the new column-centre on `Mod+G`
     // below; G is "go" — go-home / go-quit). Logout jingle plays
     // first; the sound itself is the confirmation cue.
-    Mod+Shift+E      { spawn "{{ home }}/.local/bin/sy" "file" "--ipc" "open" "."; }
-    Mod+Shift+G      { spawn-sh "{{ home }}/.local/bin/sy snd logout && niri msg action quit --skip-confirmation"; }
+{% if features.filemanager %}
+    Mod+Shift+E      { spawn "{{ sy_bin }}" "file" "--ipc" "open" "."; }
+{% endif %}
+    Mod+Shift+G      { spawn-sh "{{ sy_bin }} snd logout && niri msg action quit --skip-confirmation"; }
 
     // Focus
     Mod+H            { focus-column-left; }
@@ -289,7 +296,9 @@ binds {
     // on the keyboard and free of any other binding. Operators rolling
     // their own keymap can swap back in `~/.config/niri/config.kdl`
     // (which `sy apply` only rewrites when the contents drift).
-    Mod+E            { spawn "{{ home }}/.local/bin/sy" "file" "--ipc" "open" "~"; }
+{% if features.filemanager %}
+    Mod+E            { spawn "{{ sy_bin }}" "file" "--ipc" "open" "~"; }
+{% endif %}
     Mod+G            { center-column; }
     Mod+F            { maximize-column; }
     Mod+Shift+F      { fullscreen-window; }
@@ -303,15 +312,15 @@ binds {
     Mod+Equal        { set-column-width "+10%"; }
 
     // --- Media & utility keys -------------------------------------------
-    XF86AudioMute         allow-when-locked=true { spawn-sh "{{ home }}/.local/bin/sy vol mute"; }
-    XF86AudioLowerVolume  allow-when-locked=true { spawn-sh "{{ home }}/.local/bin/sy vol down"; }
-    XF86AudioRaiseVolume  allow-when-locked=true { spawn-sh "{{ home }}/.local/bin/sy vol up"; }
-    XF86AudioMicMute      allow-when-locked=true { spawn-sh "{{ home }}/.local/bin/sy vol mic-mute"; }
+    XF86AudioMute         allow-when-locked=true { spawn-sh "{{ sy_bin }} vol mute"; }
+    XF86AudioLowerVolume  allow-when-locked=true { spawn-sh "{{ sy_bin }} vol down"; }
+    XF86AudioRaiseVolume  allow-when-locked=true { spawn-sh "{{ sy_bin }} vol up"; }
+    XF86AudioMicMute      allow-when-locked=true { spawn-sh "{{ sy_bin }} vol mic-mute"; }
     XF86AudioPlay         allow-when-locked=true { spawn "playerctl" "play-pause"; }
     XF86AudioNext         allow-when-locked=true { spawn "playerctl" "next"; }
     XF86AudioPrev         allow-when-locked=true { spawn "playerctl" "previous"; }
-    XF86MonBrightnessDown allow-when-locked=true { spawn-sh "{{ home }}/.local/bin/sy bright down"; }
-    XF86MonBrightnessUp   allow-when-locked=true { spawn-sh "{{ home }}/.local/bin/sy bright up"; }
+    XF86MonBrightnessDown allow-when-locked=true { spawn-sh "{{ sy_bin }} bright down"; }
+    XF86MonBrightnessUp   allow-when-locked=true { spawn-sh "{{ sy_bin }} bright up"; }
 
     // --- Screenshots ----------------------------------------------------
     Print            { screenshot; }

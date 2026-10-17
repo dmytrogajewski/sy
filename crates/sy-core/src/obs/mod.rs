@@ -46,7 +46,7 @@ use tracing_subscriber::{EnvFilter, Layer};
 
 use otel_fmt::OtelFormatter;
 pub use trace_ctx::{
-    current_trace_ctx, with_trace_id, with_trace_id_async, TraceCtx, TraceCtxLayer,
+    TraceCtx, TraceCtxLayer, current_trace_ctx, with_trace_id, with_trace_id_async,
 };
 
 /// Which subscriber stack `init` builds. CLI binaries want a
@@ -303,10 +303,10 @@ fn non_blocking_appender_for(
 /// the current dir if `HOME` is also unset (defensive — a daemon
 /// would have failed long before this point).
 fn state_logs_dir() -> PathBuf {
-    if let Some(x) = std::env::var_os("XDG_STATE_HOME") {
-        if !x.is_empty() {
-            return PathBuf::from(x).join("sy/logs");
-        }
+    if let Some(x) = std::env::var_os("XDG_STATE_HOME")
+        && !x.is_empty()
+    {
+        return PathBuf::from(x).join("sy/logs");
     }
     if let Some(home) = std::env::var_os("HOME") {
         return PathBuf::from(home).join(".local/state/sy/logs");
@@ -325,8 +325,8 @@ pub(crate) mod testing {
 
     use anyhow::{Context, Result};
     use tracing_appender::non_blocking::WorkerGuard;
-    use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::layer::SubscriberExt;
 
     /// Build a test-local subscriber that writes JSON to `dir/file`
     /// via the rolling appender. Returns `(dispatch, guard)`; bind

@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use tempfile::TempDir;
 use tokio::runtime::Builder;
 
@@ -71,7 +71,8 @@ impl IsolatedRuntimeDir {
         let temp = tempfile::tempdir()?;
         let path = temp.path().to_path_buf();
         let prev_xdg = env::var_os("XDG_RUNTIME_DIR");
-        env::set_var("XDG_RUNTIME_DIR", &path);
+        // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+        unsafe { env::set_var("XDG_RUNTIME_DIR", &path) };
         Ok(Self {
             _temp: temp,
             path,
@@ -91,8 +92,10 @@ impl IsolatedRuntimeDir {
 impl Drop for IsolatedRuntimeDir {
     fn drop(&mut self) {
         match self.prev_xdg.take() {
-            Some(v) => env::set_var("XDG_RUNTIME_DIR", v),
-            None => env::remove_var("XDG_RUNTIME_DIR"),
+            // SAFETY: self._guard still owns TEST_ENV_LOCK during restoration.
+            Some(v) => unsafe { env::set_var("XDG_RUNTIME_DIR", v) },
+            // SAFETY: self._guard still owns TEST_ENV_LOCK during restoration.
+            None => unsafe { env::remove_var("XDG_RUNTIME_DIR") },
         }
         // `_temp.drop()` removes the directory.
         // `_guard.drop()` releases TEST_ENV_LOCK.

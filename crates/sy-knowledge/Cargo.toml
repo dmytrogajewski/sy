@@ -1,0 +1,41 @@
+[package]
+name = "sy-knowledge"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "sy-system-knowledge"
+path = "src/main.rs"
+
+[features]
+default = ["mon-exporter"]
+mon-exporter = ["sy-aiplane/mon-exporter", "sy-core/mon-exporter"]
+
+[dependencies]
+anyhow.workspace = true
+blake3.workspace = true
+chrono.workspace = true
+clap.workspace = true
+globset.workspace = true
+html2text.workspace = true
+ignore.workspace = true
+libc.workspace = true
+notify.workspace = true
+notify-debouncer-mini.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yml.workspace = true
+sy-aiplane = { path = "../sy-aiplane", default-features = false }
+sy-core = { path = "../sy-core" }
+tokio.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+tracing.workspace = true
+two_timer.workspace = true
+which.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tracing-test = { version = "0.2", features = ["no-env-filter"] }

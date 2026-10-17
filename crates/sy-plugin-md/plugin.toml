@@ -44,7 +44,7 @@ network = []
 exec = []
 
 [limits]
-memory_mb = 256
+memory_mb = 512
 cpu_seconds = 30
 nofile = 256
 spawn_timeout_ms = 2000

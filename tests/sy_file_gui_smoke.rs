@@ -36,13 +36,13 @@
 // at the crate root, so we declare `state` and `theme` modules at the
 // crate-root level with the shapes the app reads.
 
-#[path = "../src/file/state/ops.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/ops.rs"]
 #[allow(dead_code)]
 mod ops;
-#[path = "../src/file/state/panes.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/panes.rs"]
 #[allow(dead_code)]
 mod panes;
-#[path = "../src/file/state/selection.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/selection.rs"]
 #[allow(dead_code)]
 mod selection;
 // Step 25 — command-bar state slice. `app.rs` reaches for
@@ -50,12 +50,12 @@ mod selection;
 // reducer arms; the smoke test mirrors the same surface so the
 // integration-test binary's `super::state::…` resolution lands at
 // the test-crate root the same way as in production.
-#[path = "../src/file/state/commandbar.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/commandbar.rs"]
 #[allow(dead_code)]
 mod commandbar;
 // Step 25 — `nucleo`-backed fuzzy filename matcher referenced from
 // `app.rs::update`'s `Message::CommandQueryChanged` arm.
-#[path = "../src/file/search/filename.rs"]
+#[path = "../crates/sy-filemanager/src/file/search/filename.rs"]
 #[allow(dead_code)]
 mod file_search_filename;
 // Step 30 — knowledge search module. `app.rs` reaches for
@@ -64,29 +64,29 @@ mod file_search_filename;
 // integration-test build resolves the same types. The mirror itself
 // imports `crate::knowledge::{ipc::HitRow, cli::search_hits}`; the
 // `mod knowledge` shim below provides the minimal surface.
-#[path = "../src/file/search/knowledge.rs"]
+#[path = "../crates/sy-filemanager/src/file/search/knowledge.rs"]
 #[allow(dead_code)]
 pub mod file_search_knowledge;
 // Step 30 — `KnowledgeState` slice. `app.rs::update` reads
 // `state.knowledge.*` from the `KnowledgeQuery` / `KnowledgeHits` arms.
-#[path = "../src/file/state/knowledge.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/knowledge.rs"]
 #[allow(dead_code)]
 mod state_knowledge;
 // Step 31 — bookmarks + `recently-used.xbel`. `app.rs::update`'s
 // `BookmarkPin` / `BookmarkJump` arms lock `state.bookmarks`.
-#[path = "../src/file/bookmarks.rs"]
+#[path = "../crates/sy-filemanager/src/file/bookmarks.rs"]
 #[allow(dead_code)]
 mod bookmarks;
 // Step 32 — mountinfo parser + udisks2 probe. `app.rs::run`'s boot
 // `Task::perform` reaches for `super::fs::mounts::{load,
 // filter_user_visible}`; mirror the production source so the
 // integration-test build resolves.
-#[path = "../src/file/fs/mounts.rs"]
+#[path = "../crates/sy-filemanager/src/file/fs/mounts.rs"]
 #[allow(dead_code)]
 mod mounts;
 // `app.rs` boot path spawns `fs::walk::walk` to populate the panes;
 // mirror the source so the integration-test build resolves.
-#[path = "../src/file/fs/walk.rs"]
+#[path = "../crates/sy-filemanager/src/file/fs/walk.rs"]
 #[allow(dead_code)]
 mod walk;
 /// Step 32 — `super::fs::mounts` shim for the `#[path]`-imported
@@ -134,7 +134,7 @@ pub mod knowledge {
 /// Step 25 grew `State` with a `commandbar: CommandBar` field — the
 /// shim mirrors that so the headless harness's reducer trace can
 /// observe the bar slice the same way as production.
-#[path = "../src/file/state/preview.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/preview.rs"]
 #[allow(dead_code)]
 mod state_preview;
 
@@ -513,11 +513,11 @@ mod plugin {
 /// `app.rs` reducer arm's `super::dnd::…` resolution lands on the
 /// same wire shape the bin uses. Pure-Rust + `iced::keyboard::
 /// Modifiers` only — no compositor dependency.
-#[path = "../src/file/dnd.rs"]
+#[path = "../crates/sy-filemanager/src/file/dnd.rs"]
 #[allow(dead_code)]
 mod dnd;
 
-#[path = "../src/file/app.rs"]
+#[path = "../crates/sy-filemanager/src/file/app.rs"]
 #[allow(dead_code)]
 mod app;
 

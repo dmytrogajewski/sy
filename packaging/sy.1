@@ -1,0 +1,29 @@
+.TH SY 1 "October 2026" "sy 0.1.0" "User Commands"
+.SH NAME
+sy \- Fedora desktop environment and agent tools
+.SH SYNOPSIS
+.B sy
+\fICOMMAND\fR [OPTIONS]
+.SH DESCRIPTION
+.B sy
+manages the desktop, AI plane, agent runner, and knowledge services.
+Run \fBsy --help\fR or \fBsy COMMAND --help\fR for complete options and examples.
+.SH COMMANDS
+.TP
+.B apply
+Render desktop configuration and sync user systemd units. Use \fB--dry-run\fR to preview.
+.TP
+.B power
+Open the session power menu or run a named action. Use \fB--dry-run\fR to preview.
+.TP
+.B aiplane
+Inspect or run registered inference workloads through the AI daemon.
+.TP
+.B doctor
+Check desktop and service health; \fB--json\fR emits a machine-readable report.
+.SH FILES
+.TP
+.I /usr/share/sy
+Packaged configuration, themes, and system integration scripts.
+.SH SEE ALSO
+.B sy --help

@@ -18,7 +18,7 @@
 //! that bumped them.
 
 use std::path::PathBuf;
-use sy_plugin_md::render::{render_to_png, RenderOpts};
+use sy_plugin_md::render::{RenderOpts, render_to_png};
 
 fn main() -> Result<(), String> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -27,18 +27,28 @@ fn main() -> Result<(), String> {
         .and_then(|p| p.parent())
         .ok_or_else(|| "repo root not found".to_string())?
         .to_path_buf();
+    let output_dir = std::env::var_os("SY_GOLDEN_OUTPUT_DIR").map(PathBuf::from);
 
     let sample_md = std::fs::read_to_string(manifest.join("tests/fixtures/preview-sample.md"))
         .map_err(|e| format!("read fixture: {e}"))?;
     let png = render_to_png(&sample_md, &RenderOpts::default())?;
-    let sample_dst = manifest.join("tests/fixtures/preview-sample.golden.png");
+    let sample_dst = output_dir
+        .as_ref()
+        .map(|dir| dir.join("preview-sample.golden.png"))
+        .unwrap_or_else(|| manifest.join("tests/fixtures/preview-sample.golden.png"));
+    if let Some(parent) = sample_dst.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {parent:?}: {e}"))?;
+    }
     std::fs::write(&sample_dst, &png).map_err(|e| format!("write {sample_dst:?}: {e}"))?;
     eprintln!("wrote {} ({} bytes)", sample_dst.display(), png.len());
 
     let readme = std::fs::read_to_string(repo_root.join("README.md"))
         .map_err(|e| format!("read README: {e}"))?;
     let png_readme = render_to_png(&readme, &RenderOpts::default())?;
-    let readme_dst = repo_root.join("tests/fixtures/sy-plugin-md-readme.golden.png");
+    let readme_dst = output_dir
+        .as_ref()
+        .map(|dir| dir.join("sy-plugin-md-readme.golden.png"))
+        .unwrap_or_else(|| repo_root.join("tests/fixtures/sy-plugin-md-readme.golden.png"));
     if let Some(parent) = readme_dst.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {parent:?}: {e}"))?;
     }

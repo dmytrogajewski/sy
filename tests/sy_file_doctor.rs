@@ -14,7 +14,7 @@
 //! (they pin `discovered_plugin_ids` to a fixture vec).
 //!
 //! [roadmap]: ../specs/roadmaps/sy-file-manager/ROADMAP.md
-#[path = "../src/file/doctor.rs"]
+#[path = "../crates/sy-filemanager/src/file/doctor.rs"]
 mod doctor;
 
 // `doctor.rs`'s `discover_plugin_ids_via_registry` references
@@ -47,8 +47,8 @@ use std::os::unix::net::UnixListener;
 use std::path::Path;
 
 use crate::doctor::{
-    exit_code_for, file_doctor_checks, render_human, render_json, CheckStatus, DoctorOpts,
-    SCHEMA_DOCTOR,
+    CheckStatus, DoctorOpts, SCHEMA_DOCTOR, exit_code_for, file_doctor_checks, render_human,
+    render_json,
 };
 
 /// Build a minimal niri config that binds `Mod+E` / `Mod+Shift+E` /

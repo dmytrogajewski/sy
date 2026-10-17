@@ -12,7 +12,7 @@ use std::io::{self, Read, Write};
 
 use ulid::Ulid;
 
-use crate::envelope::{Request, Response, SpanId, TraceId, SCHEMA_VERSION};
+use crate::envelope::{Request, Response, SCHEMA_VERSION, SpanId, TraceId};
 use crate::stream::Event;
 use sy_core::Priority;
 

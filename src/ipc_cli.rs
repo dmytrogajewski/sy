@@ -7,13 +7,13 @@
 
 use std::{path::PathBuf, time::Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Subcommand;
 use serde_json::Value;
 use sy_core::Priority;
 use sy_ipc::{
-    paths::{for_endpoint, ENDPOINTS},
     CallOpts, Client, Response,
+    paths::{ENDPOINTS, for_endpoint},
 };
 
 /// CLI exit codes (SPEC §4.7). Documented stable per CLIG. `2`
@@ -242,21 +242,24 @@ fn exit_code_for(state: &str) -> i32 {
 mod tests {
     use super::*;
 
-    /// `crate::aiplane::TEST_ENV_LOCK` is the contract: every test in this
+    /// `crate::TEST_ENV_LOCK` is the contract: every test in this
     /// binary that mutates `XDG_RUNTIME_DIR` rendezvouses there, or the
     /// aiplane socket-binding smoke tests bind on one path and connect on
     /// another (`ENOENT` flakes in `aiplane::ipc::tests`). A private mutex
     /// here looks safe and is not — it only serialises against itself.
     fn with_runtime_dir<F: FnOnce()>(dir: &str, f: F) {
-        let _guard = crate::aiplane::TEST_ENV_LOCK
+        let _guard = crate::TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let prev = std::env::var("XDG_RUNTIME_DIR").ok();
-        std::env::set_var("XDG_RUNTIME_DIR", dir);
+        // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir) };
         f();
         match prev {
-            Some(v) => std::env::set_var("XDG_RUNTIME_DIR", v),
-            None => std::env::remove_var("XDG_RUNTIME_DIR"),
+            // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+            Some(v) => unsafe { std::env::set_var("XDG_RUNTIME_DIR", v) },
+            // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+            None => unsafe { std::env::remove_var("XDG_RUNTIME_DIR") },
         }
     }
 

@@ -23,7 +23,7 @@
 
 use std::io::{self, Read, Write};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// SPEC §4.2.2 — `-32097 LIMIT_EXCEEDED`. Surfaced by the
 /// `rlimit_breach` trigger after a `Vec::try_reserve_exact` on a
@@ -71,10 +71,10 @@ fn try_reserve_breach(bytes: usize) -> Result<(), String> {
         first.write(0);
     }
     let len = spare.len();
-    if len > 0 {
-        if let Some(last) = spare.get_mut(len - 1) {
-            last.write(0);
-        }
+    if len > 0
+        && let Some(last) = spare.get_mut(len - 1)
+    {
+        last.write(0);
     }
     // Force LLVM to keep the allocation observable. Without this the
     // `--release` profile elides the whole call (the Vec is dropped

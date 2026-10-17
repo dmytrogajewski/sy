@@ -1,0 +1,13 @@
+[package]
+name = "sy-launcher"
+version.workspace = true
+edition.workspace = true
+publish = false
+license = "MIT"
+
+[[bin]]
+name = "sy-launcher"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile.workspace = true

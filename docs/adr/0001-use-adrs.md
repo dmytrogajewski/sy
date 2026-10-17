@@ -142,7 +142,7 @@ ADR in the same change.
 ## Links
 
 - Template: [MADR 4.0](https://adr.github.io/madr/).
-- Companion: [Nygard's original ADR template](https://github.com/joelparkerhenderson/architecture-decision-record/blob/main/locales/en/templates/decision-record-template-by-michael-nygard/index.md).
+- Companion: [Nygard's original ADR article and template](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions).
 - Audit row: `specs/docs-audit/AUDIT-full.md#r-adr-01--should`.
 - Roadmap item: `specs/docs-audit/PLAN-full.md` Item 16.
 - Skill: `.agents/skills/documenter/SKILL.md`.

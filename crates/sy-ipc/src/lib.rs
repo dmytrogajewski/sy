@@ -1,35 +1,30 @@
-//! sy-ipc: IPC v1 envelope + framing for the sy workspace.
-//!
-//! Step 1 of `specs/roadmaps/arch-ipc-v1/ROADMAP.md` — pure types +
-//! codec, no I/O, no daemon plumbing. The wire shape lives in
-//! `envelope.rs` and matches SPEC §4.2 byte-for-byte; the framing
-//! lives in `codec.rs` and wraps `tokio_util::codec::LengthDelimitedCodec`
-//! per the same SPEC section.
-//!
-//! Server/Client + reserved methods land in Steps 2 and 3; consumers
-//! (knowledge, aiplane, agt, stack) migrate in Steps 4–6.
+//! Shared IPC types, framing, clients, and servers for the sy workspace.
+//! `envelope` carries IPC v1; `aiplane` carries legacy workload payloads
+//! used by the knowledge bridge. Neither payload module depends on a daemon.
 
+pub mod aiplane;
 pub mod blocking;
 pub mod cancel;
 pub mod client;
 pub mod codec;
 pub mod envelope;
+pub mod knowledge;
 pub mod paths;
 pub mod reserved;
 pub mod server;
 pub mod stream;
 
-pub use cancel::{dispatch_with_cancel, CancelGuard, CancelRegistry, Dispatched};
+pub use cancel::{CancelGuard, CancelRegistry, Dispatched, dispatch_with_cancel};
 pub use client::{CallOpts, Client};
 pub use codec::{RequestCodec, ResponseCodec};
 pub use envelope::{
-    parse_request_strict, BlobKind, BlobRef, ErrorBody, ParseRequestError, Request, Response,
-    SpanId, TraceId, SCHEMA_VERSION,
+    BlobKind, BlobRef, ErrorBody, ParseRequestError, Request, Response, SCHEMA_VERSION, SpanId,
+    TraceId, parse_request_strict,
 };
 pub use reserved::{
-    BuildInfo, Capabilities, HealthFn, HealthSnapshot, HealthState, MonHistoryParams,
-    MonSnapshotParams, MonSubscribeParams, SystemMethods, MON_SECONDS_MAX, MON_SECONDS_MIN,
-    PROTOCOL_VERSION, SYSTEM_METHODS,
+    BuildInfo, Capabilities, HealthFn, HealthSnapshot, HealthState, MON_SECONDS_MAX,
+    MON_SECONDS_MIN, MonHistoryParams, MonSnapshotParams, MonSubscribeParams, PROTOCOL_VERSION,
+    SYSTEM_METHODS, SystemMethods,
 };
 pub use server::{Handler, PeerAuthorizer, PeerCredentials, SameEuidAuthorizer, Server};
 pub use stream::{Event, EventCodec, KIND_CLOSED};

@@ -1,7 +1,7 @@
 [package]
 name = "sy-plugin-pdk-third-party"
 version = "0.0.1"
-edition = "2021"
+edition = "2024"
 publish = false
 license = "MIT"
 description = "Third-party-shaped previewer fixture for the sy-file-manager Step 11 journey E2E. Built outside the sy workspace to prove the PDK works for any cargo project."

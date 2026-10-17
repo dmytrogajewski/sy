@@ -414,9 +414,10 @@ mod tests {
             Capabilities::baseline(),
             vec![DAEMON_METHOD.into()],
         );
-        assert!(sys
-            .try_handle(&request(DAEMON_METHOD, serde_json::Value::Null))
-            .is_none());
+        assert!(
+            sys.try_handle(&request(DAEMON_METHOD, serde_json::Value::Null))
+                .is_none()
+        );
     }
 
     #[test]

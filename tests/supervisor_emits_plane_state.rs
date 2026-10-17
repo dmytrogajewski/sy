@@ -18,8 +18,8 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use metrics::Key;
-use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
 use metrics_util::CompositeKey;
+use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
 
 /// Budget for the gauge transition from `ready` to `failed`. The
 /// emission path is synchronous so this is a generous ceiling — but

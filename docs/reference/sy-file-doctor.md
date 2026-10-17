@@ -5,7 +5,7 @@ JSON envelopes for `sy file doctor --json` and
 documents. For the first-time window, see
 [browse files with sy file](../tutorials/browse-your-files.md).
 
-Source of truth: `src/file/doctor.rs` and `src/plugin/cli.rs`.
+Source of truth: `crates/sy-filemanager/src/file/doctor.rs` and `crates/sy-filemanager/src/plugin/cli.rs`.
 
 For `--json`, exit codes, and env vars in general, see
 [the CLI reference](cli.md).

@@ -20,7 +20,7 @@
 // (SPEC §3.3 item 10) — same rationale as `src/file/search/mod.rs`'s
 // "NOT `#[cfg(feature = "gui-iced")]` gated" docstring.
 
-#[path = "../src/file/search/knowledge.rs"]
+#[path = "../crates/sy-filemanager/src/file/search/knowledge.rs"]
 mod file_search_knowledge;
 
 /// Step 30 — minimal `crate::knowledge` shim. The `#[path]`-imported
@@ -58,7 +58,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::file_search_knowledge::{
-    merge, query, KnowledgeBackend, KnowledgeStatus, RealKnowledgeBackend, KNOWLEDGE_QUERY_BUDGET,
+    KNOWLEDGE_QUERY_BUDGET, KnowledgeBackend, KnowledgeStatus, RealKnowledgeBackend, merge, query,
 };
 use crate::knowledge::ipc::HitRow;
 
@@ -103,7 +103,7 @@ async fn end_to_end_with_stubbed_qdrant() {
         HitRow {
             score: 0.83,
             chunk_id: String::new(),
-            file_path: "/sources/sy/src/file/app.rs".to_owned(),
+            file_path: "/sources/../crates/sy-filemanager/src/file/app.rs".to_owned(),
             chunk_index: 0,
             chunk_text: "Step 30 reducer arm".to_owned(),
             embed_score: Some(0.81),
@@ -177,7 +177,7 @@ async fn end_to_end_with_stubbed_qdrant() {
     );
     assert_eq!(
         merged_paths[1],
-        &PathBuf::from("/sources/sy/src/file/app.rs"),
+        &PathBuf::from("/sources/../crates/sy-filemanager/src/file/app.rs"),
         "second qdrant hit must rank second"
     );
     assert_eq!(

@@ -24,7 +24,7 @@ are scaffolded — each prints the recipe and exits 2 so the user (or the
 ``/workload`` skill) can fill in the export wrapper.
 
 The VAIP ``cache_key`` must match, byte for byte, the key the Rust
-worker asks ORT for (``src/aiplane/workloads/<kind>.rs``); a mismatch
+worker asks ORT for (``crates/sy-aiplane/src/aiplane/workloads/<kind>.rs``); a mismatch
 compiles a partition the daemon never looks up, so the first daemon
 start pays the full AIE codegen cost again. See ``cache_key_for``.
 """

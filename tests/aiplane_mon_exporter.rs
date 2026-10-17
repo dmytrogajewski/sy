@@ -30,7 +30,7 @@ use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 
 use sy_core::metrics::CORE_METRICS;
-use sy_core::obs::mon_exporter::{install, InstallError};
+use sy_core::obs::mon_exporter::{InstallError, install};
 
 /// Two integration tests in this file mutate the process-global
 /// `metrics` recorder via `mon_exporter::install`. Serialise them so

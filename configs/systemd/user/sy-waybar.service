@@ -1,0 +1,13 @@
+[Unit]
+Description=sy top panel (Waybar)
+PartOf=sy.target graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/waybar
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=graphical-session.target

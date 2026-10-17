@@ -1,0 +1,41 @@
+[package]
+name = "sy-agent"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "sy-system-agent"
+path = "src/main.rs"
+
+[features]
+default = ["mon-exporter"]
+mon-exporter = ["sy-core/mon-exporter"]
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+globset.workspace = true
+landlock.workspace = true
+libc.workspace = true
+libsystemd.workspace = true
+rustix.workspace = true
+seccompiler.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sy-core = { path = "../sy-core" }
+sy-ipc = { path = "../sy-ipc" }
+tokio.workspace = true
+tokio-util.workspace = true
+toml.workspace = true
+tracing.workspace = true
+ulid.workspace = true
+uuid.workspace = true
+which.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

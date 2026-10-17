@@ -9,7 +9,16 @@
 #   - `make lint` is the gate before any commit. The Stop hook
 #     (.claude/hooks/stop-verify.sh) re-runs the lint subset.
 
-.PHONY: build release test test-npu eval lint fmt fmt-check audit bench install install-system-npu install-system-syauth-selinux docs-lint docs-site help
+.PHONY: build release test test-npu eval lint fmt fmt-check audit bench install install-system-npu install-system-syauth-selinux docs-lint docs-site help rpm rpm-native reinstall-rpm
+
+rpm:
+	./scripts/build-rpms.sh $(FEDORA)
+
+rpm-native:
+	./scripts/build-rpms.sh --native
+
+reinstall-rpm:
+	./scripts/reinstall-rpms.sh $(RPM_ARGS) $(DRY_RUN)
 
 build:
 	cargo build --workspace
@@ -18,6 +27,7 @@ release:
 	cargo build --workspace --release
 
 test:
+	cargo build -p sy-plugin-fake --bin sy-plugin-fake
 	cargo test --workspace --all-targets
 
 .PHONY: test-spark
@@ -38,6 +48,7 @@ eval:
 
 lint:
 	./scripts/check_main_rs_loc.sh 1118
+	cargo fmt --all --check
 	cargo clippy --workspace --all-targets -- -D warnings
 
 .PHONY: lint-spark
@@ -61,11 +72,13 @@ bench:
 	cargo bench --all-targets
 
 install: release
+	mkdir -p ~/.local/bin
 	cp --remove-destination target/release/sy ~/.local/bin/sy
+	cp --remove-destination target/release/sy-system-power ~/.local/bin/sy-system-power
 	@if [ "$$(getenforce 2>/dev/null)" = "Enforcing" ]; then \
-		if restorecon -v ~/.local/bin/sy 2>/dev/null; then :; \
-		elif command -v sudo >/dev/null && sudo restorecon -v ~/.local/bin/sy; then :; \
-		else echo "  ! could not relabel ~/.local/bin/sy — run: sudo restorecon -v ~/.local/bin/sy"; exit 1; fi; \
+		if restorecon -v ~/.local/bin/sy ~/.local/bin/sy-system-power 2>/dev/null; then :; \
+		elif command -v sudo >/dev/null && sudo restorecon -v ~/.local/bin/sy ~/.local/bin/sy-system-power; then :; \
+		else echo "  ! could not relabel local sy executables — run sudo restorecon on them"; exit 1; fi; \
 	fi
 
 # Productivized recovery for the initramfs-too-early amdxdna probe
@@ -136,6 +149,9 @@ help:
 	@echo "Targets:"
 	@echo "  build       — debug build"
 	@echo "  release     — release build"
+	@echo "  rpm         — build Fedora 43/44/45 RPMs (FEDORA=43 selects one)"
+	@echo "  rpm-native  — build an RPM for the running Fedora with host tools"
+	@echo "  reinstall-rpm — reinstall host-matching RPMs, apply config, check AI plane"
 	@echo "  test        — unit + integration tests (no NPU)"
 	@echo "  test-npu    — also run NPU-backed tests (daemon must be stopped)"
 	@echo "  eval        — retrieval-eval golden set (recall@1/5, MRR,"

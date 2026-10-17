@@ -38,12 +38,11 @@ fn service_values(raw: &str) -> HashMap<&str, Vec<&str>> {
             section = name;
             continue;
         }
-        if section == "Service" {
-            if let Some((key, value)) = line.split_once('=') {
-                if key.trim() == "MemoryHigh" {
-                    out.entry("MemoryHigh").or_default().push(value.trim());
-                }
-            }
+        if section == "Service"
+            && let Some((key, value)) = line.split_once('=')
+            && key.trim() == "MemoryHigh"
+        {
+            out.entry("MemoryHigh").or_default().push(value.trim());
         }
     }
     out

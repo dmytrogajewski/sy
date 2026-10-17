@@ -47,4 +47,4 @@ StandardError=journal
 SyslogIdentifier=sy-agentd
 
 [Install]
-WantedBy=sy.target
+WantedBy=default.target

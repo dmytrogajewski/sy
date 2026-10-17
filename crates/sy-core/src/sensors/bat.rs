@@ -179,7 +179,7 @@ pub fn sample() -> Option<BatSample> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_power_supply, BatteryStatus};
+    use super::{BatteryStatus, parse_power_supply};
     use std::collections::HashMap;
 
     #[test]

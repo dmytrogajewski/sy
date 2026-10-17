@@ -52,9 +52,9 @@ pub mod __priv {
 /// previewer needs.
 pub mod prelude {
     pub use crate::define_plugin;
-    pub use crate::runtime::{run, PluginInfo};
+    pub use crate::runtime::{PluginInfo, run};
     pub use crate::types::{
-        host, Capability, HandlerError, PreviewImage, PreviewReq, PreviewResp, RpcError,
+        Capability, HandlerError, PreviewImage, PreviewReq, PreviewResp, RpcError, host,
     };
     pub use anyhow::Result;
 }

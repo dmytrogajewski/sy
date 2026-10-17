@@ -187,12 +187,12 @@ async fn serve_connection<H: Handler>(
 mod tests {
     use super::*;
     use crate::client::{CallOpts, Client};
-    use crate::envelope::{SpanId, TraceId, SCHEMA_VERSION};
+    use crate::envelope::{SCHEMA_VERSION, SpanId, TraceId};
     use std::sync::{Arc as StdArc, Mutex, OnceLock};
-    use sy_core::obs::{TraceCtx, TraceCtxLayer};
     use sy_core::Priority;
-    use tracing_subscriber::layer::SubscriberExt;
+    use sy_core::obs::{TraceCtx, TraceCtxLayer};
     use tracing_subscriber::Registry;
+    use tracing_subscriber::layer::SubscriberExt;
     use ulid::Ulid;
 
     /// Install a process-global `Registry + TraceCtxLayer` once so

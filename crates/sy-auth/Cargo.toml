@@ -1,0 +1,20 @@
+[package]
+name = "sy-auth"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "sy-system-auth"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

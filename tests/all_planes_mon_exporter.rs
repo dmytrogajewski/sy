@@ -31,7 +31,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 
-use sy_core::obs::mon_exporter::{install, InstallError};
+use sy_core::obs::mon_exporter::{InstallError, install};
 
 /// Plane names rolled by Step 20. Mirrors `KNOWN_PLANES` in
 /// `src/mon/collect/tick.rs` minus `wallpaper` (wallpaper is a
