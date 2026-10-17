@@ -219,6 +219,8 @@ pub fn run() -> Result<()> {
 
     #[cfg(feature = "mon-exporter")]
     let _knowledge_mon_exporter = if ipc::dedicated_installed() {
+        let path = crate::mon_exporter::socket_path_for("knowledge")?;
+        remove_legacy_knowledge_metrics_link(&path)?;
         Some(crate::mon_exporter::spawn("knowledge").context("knowledge metrics socket")?)
     } else {
         None
@@ -1313,10 +1315,20 @@ fn run_full_resync(
 /// computable but the symlink call fails (EACCES on the runtime dir
 /// or `sym_target` is itself missing).
 ///
-/// The symlink is best-effort cleaned up on daemon shutdown by the
-/// caller binding the return value into a guard — but it lives under
-/// `$XDG_RUNTIME_DIR/sy/knowledge/`, which is a tmpfs subtree, so a
-/// stale symlink across a reboot is harmless.
+/// The symlink is best-effort cleaned up on daemon shutdown. A same-session
+/// upgrade to the dedicated knowledge daemon removes it before binding.
+#[cfg(feature = "mon-exporter")]
+fn remove_legacy_knowledge_metrics_link(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            std::fs::remove_file(path).with_context(|| format!("unlink {}", path.display()))
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("stat {}", path.display())),
+    }
+}
+
 #[cfg(feature = "mon-exporter")]
 fn install_knowledge_metrics_symlink(sym_target: Option<&Path>) -> Result<Option<PathBuf>> {
     let Some(target) = sym_target else {
@@ -1910,6 +1922,29 @@ mod parking_lot_like_mutex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "mon-exporter")]
+    #[test]
+    fn legacy_metrics_link_is_removed_without_touching_aiplane_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("aiplane.sock");
+        let link = dir.path().join("knowledge.sock");
+        std::fs::write(&target, b"alive").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        remove_legacy_knowledge_metrics_link(&link).unwrap();
+        assert!(std::fs::symlink_metadata(&link).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"alive");
+    }
+
+    #[cfg(feature = "mon-exporter")]
+    #[test]
+    fn legacy_metrics_cleanup_preserves_existing_socket_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("knowledge.sock");
+        std::fs::write(&path, b"owned").unwrap();
+        remove_legacy_knowledge_metrics_link(&path).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"owned");
+    }
 
     /// knowledge-retrieval-iter1 Step 3: a live collection that predates the
     /// v2 named-vector schema (old flat unnamed `{size,distance}` vectors) must

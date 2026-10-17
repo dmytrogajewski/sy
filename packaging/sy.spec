@@ -2,7 +2,7 @@
 
 Name:           sy
 Version:        0.1.0
-Release:        14%{?dist}
+Release:        16%{?dist}
 Summary:        Desktop environment and agent tools for Fedora
 License:        MIT
 URL:            https://github.com/dmytrogajewski/sy
@@ -97,6 +97,7 @@ Summary:        Optional desktop shell applets for sy
 Requires:       sy = %{version}-%{release}
 Requires:       fuzzel
 Requires:       foot
+Requires:       waybar
 
 %description desktop-shell
 Standalone desktop bar, applets, and shell CLI.
@@ -116,7 +117,7 @@ cargo build --release --locked --workspace --bins
 cp target/release/sy target/release/sy-all
 
 %check
-target/release/sy-launcher --help | grep -q 'Optional packages'
+SY_FEATURE_BIN_DIR=/nonexistent target/release/sy-launcher --help | grep -q 'Optional packages'
 SY_FEATURE_BIN_DIR=target/release target/release/sy-launcher --help | grep -q 'apply'
 SY_FEATURE_BIN_DIR=target/release target/release/sy-launcher --help | grep -q '^Usage: sy '
 SY_FEATURE_BIN_DIR=target/release target/release/sy-launcher power reboot --dry-run --json | grep -q '"dry_run":true'
@@ -165,6 +166,7 @@ install -D -m 0644 configs/systemd/user/sy-qdrant.service %{buildroot}%{_useruni
 sed -i 's|%h/.local/bin/sy |/usr/bin/sy |g' %{buildroot}%{_userunitdir}/sy-knowledge.service %{buildroot}%{_userunitdir}/sy-qdrant.service
 install -D -m 0644 configs/systemd/user/sy-mon-collect.service %{buildroot}%{_userunitdir}/sy-mon-collect.service
 install -D -m 0644 configs/systemd/user/sy-stack-bar.service %{buildroot}%{_userunitdir}/sy-stack-bar.service
+install -D -m 0644 configs/systemd/user/sy-waybar.service %{buildroot}%{_userunitdir}/sy-waybar.service
 sed -i 's|%h/.local/bin/sy |/usr/bin/sy |g' %{buildroot}%{_userunitdir}/sy-mon-collect.service %{buildroot}%{_userunitdir}/sy-stack-bar.service
 install -D -m 0644 configs/systemd/user/sy-file.service %{buildroot}%{_userunitdir}/sy-file.service
 install -D -m 0644 configs/systemd/user/sy-file.socket %{buildroot}%{_userunitdir}/sy-file.socket
@@ -204,6 +206,7 @@ install -m 0755 scripts/check-npu-upgrade.sh scripts/install-system-npu.sh \
 %exclude %{_datadir}/sy/configs/systemd/user/sy-qdrant.service
 %exclude %{_datadir}/sy/configs/systemd/user/sy-mon-collect.service
 %exclude %{_datadir}/sy/configs/systemd/user/sy-stack-bar.service
+%exclude %{_datadir}/sy/configs/systemd/user/sy-waybar.service
 %exclude %{_datadir}/sy/configs/systemd/user/sy.target.wants/sy-mon-collect.service
 %exclude %{_datadir}/sy/configs/waybar/modules/sy-mon.json
 %exclude %{_datadir}/sy/configs/dracut
@@ -260,7 +263,9 @@ install -m 0755 scripts/check-npu-upgrade.sh scripts/install-system-npu.sh \
 %files desktop-shell
 %{_libexecdir}/sy/sy-desktop-shell
 %{_userunitdir}/sy-stack-bar.service
+%{_userunitdir}/sy-waybar.service
 %{_datadir}/sy/configs/systemd/user/sy-stack-bar.service
+%{_datadir}/sy/configs/systemd/user/sy-waybar.service
 
 %files system-aiplane-ryzenai
 %{_datadir}/sy/configs/dracut

@@ -1,115 +1,41 @@
-//! Waybar control surface. Right now it only owns the `sy apply`
-//! post-step that puts the bar's new `config.jsonc` / `style.css`
-//! into effect after a deploy. Future home for unifying the
-//! `pkill -RTMIN+N waybar` per-applet refresh signals scattered
-//! across the per-applet modules (`src/bright.rs`, `src/silent.rs`,
-//! …).
+//! Keep Waybar under the user manager so `sy apply` can safely restart it.
 
-use std::{
-    process::{Command, Stdio},
-    thread,
-    time::Duration,
-};
+use std::process::Command;
 
-/// Put a new waybar config into effect after `sy apply` rendered
-/// `configs/waybar/*` to disk.
-///
-/// Why not `pkill -SIGUSR2 waybar` (the signal waybar's docs
-/// nominally bind to "reload config"): on Waybar 0.14 the in-place
-/// reload re-parses CSS reliably but does NOT re-apply
-/// `modules-left` / `modules-center` / `modules-right` membership
-/// changes — tiles added or removed from those arrays stay frozen
-/// on the rail until the process is replaced. Killing and
-/// respawning is the only reliable path for the `sy apply` flow,
-/// which is exactly the case where the rail composition is most
-/// likely to have moved.
-///
-/// niri's `spawn-at-startup "waybar"` only fires once at compositor
-/// boot, so a respawn here has to do its own `Command::new("waybar")`
-/// with the user's wayland env restored from the previous waybar
-/// process. No-op when no waybar is running.
+/// Enable the bar for future sessions and restart it in the current one.
 pub fn reload() {
-    // Snapshot first — once pkill fires, /proc/<pid>/environ is gone.
-    let Some(env) = peek_waybar_env() else {
-        // No live waybar to mirror — nothing to do. Stay quiet so
-        // idempotent `sy apply` runs don't grow noise.
-        return;
-    };
-    let killed = Command::new("pkill")
-        .args(["-TERM", "-x", "waybar"])
+    let enable = Command::new("systemctl")
+        .args(["--user", "enable", "sy-waybar.service"])
         .status();
-    match killed {
-        Ok(s) if s.success() => {}
-        Ok(_) => return, // race: waybar exited between peek and pkill
-        Err(e) => {
-            eprintln!("  ! waybar restart: pkill failed: {e}");
-            return;
-        }
+    if !matches!(enable, Ok(status) if status.success()) {
+        eprintln!("  ! could not enable sy-waybar.service");
+        return;
     }
-    // Brief wait so waybar releases its wayland layer-shell surface
-    // before the respawn binds a new one — otherwise the new bar
-    // sometimes lands behind a stale surface and renders empty.
-    thread::sleep(Duration::from_millis(300));
 
-    let spawn = Command::new("setsid")
-        .arg("waybar")
-        .env_clear()
-        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    match spawn {
-        Ok(_) => println!("  ↻ waybar restarted"),
-        Err(e) => eprintln!("  ! waybar respawn failed: {e}"),
+    let session = Command::new("systemctl")
+        .args(["--user", "is-active", "--quiet", "graphical-session.target"])
+        .status();
+    if !matches!(session, Ok(status) if status.success()) {
+        return;
     }
-}
 
-/// Snapshot the full env of a currently-running waybar so a respawn
-/// inherits the exact environment niri's `spawn-at-startup` gave it
-/// at compositor boot. Returns `None` when no waybar PID can be
-/// found. Reads `/proc/<pid>/environ` — the process is owned by the
-/// invoking user, so the read is permitted.
-///
-/// A previous attempt whitelisted only WAYLAND_DISPLAY +
-/// XDG_RUNTIME_DIR + DISPLAY + the dbus address, but that dropped
-/// `NIRI_SOCKET` (the IPC socket waybar's `niri/workspaces` and
-/// `niri/window` modules need to talk to the compositor) and the
-/// workspace + window-title tiles silently disappeared from the
-/// rail after every `sy apply`. The full-env copy is the smallest
-/// safe surface: whatever niri set is what the respawn gets, no
-/// per-module knowledge required here.
-fn peek_waybar_env() -> Option<Vec<(String, String)>> {
-    let pid = first_waybar_pid()?;
-    let raw = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
-    let mut out: Vec<(String, String)> = Vec::new();
-    for entry in raw.split(|b| *b == 0) {
-        let Ok(s) = std::str::from_utf8(entry) else {
-            continue;
-        };
-        if let Some((k, v)) = s.split_once('=') {
-            out.push((k.to_string(), v.to_string()));
+    let restart = Command::new("systemctl")
+        .args(["--user", "restart", "sy-waybar.service"])
+        .status();
+    if matches!(restart, Ok(status) if status.success()) {
+        println!("  ↻ waybar restarted");
+        let stack_active = Command::new("systemctl")
+            .args(["--user", "is-active", "--quiet", "sy-stack-bar.service"])
+            .status();
+        if matches!(stack_active, Ok(status) if status.success()) {
+            let stack_restart = Command::new("systemctl")
+                .args(["--user", "restart", "sy-stack-bar.service"])
+                .status();
+            if !matches!(stack_restart, Ok(status) if status.success()) {
+                eprintln!("  ! could not restart sy-stack-bar.service");
+            }
         }
+    } else {
+        eprintln!("  ! could not restart sy-waybar.service");
     }
-    if out.is_empty() { None } else { Some(out) }
-}
-
-/// Lowest PID matching exactly `waybar`. Avoids `pgrep -x` plus a
-/// subprocess for one filesystem walk.
-fn first_waybar_pid() -> Option<u32> {
-    let rd = std::fs::read_dir("/proc").ok()?;
-    let mut pids: Vec<u32> = Vec::new();
-    for ent in rd.flatten() {
-        let name = ent.file_name();
-        let Some(s) = name.to_str() else { continue };
-        let Ok(pid) = s.parse::<u32>() else { continue };
-        let Ok(comm) = std::fs::read_to_string(format!("/proc/{pid}/comm")) else {
-            continue;
-        };
-        if comm.trim() == "waybar" {
-            pids.push(pid);
-        }
-    }
-    pids.sort();
-    pids.into_iter().next()
 }

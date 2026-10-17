@@ -50,9 +50,8 @@ use crate::stack::{
 };
 
 /// Width of the bar's vertical strip on the right edge.
-/// `configs/waybar/config.jsonc` reserves the same width via
-/// `"margin-right": 28` so waybar and the bar share the screen without
-/// fighting for the top-right corner.
+/// Niri's right strut reserves this width for tiled windows. The surface
+/// itself does not reserve a layer-shell zone, so Waybar spans the top edge.
 const BAR_WIDTH: u32 = 28;
 /// Waybar's `"height"` from `configs/waybar/config.jsonc`. Used by
 /// the hover-preview surface to translate the bar-local cursor y
@@ -62,8 +61,8 @@ const WAYBAR_HEIGHT_PX: i32 = 24;
 /// `margin` request. Held at 0 because niri DOES deduct waybar's
 /// 24-px top exclusive zone from this surface's top edge (the bar
 /// is anchored `Right | Top | Bottom`, waybar anchors `Top | Left |
-/// Right`, so they share the top edge). The niri spawn-at-startup
-/// for `sy stack bar` waits until waybar is up before launching
+/// Right`, so they share the top edge). The stack bar service
+/// waits until waybar is up before launching
 /// the bar — guaranteeing the deduction is in place at registration
 /// time. Any non-zero value here on top of niri's deduction
 /// double-counts and the bar ends up at y=24+margin.
@@ -345,12 +344,9 @@ pub fn run() -> anyhow::Result<()> {
     .settings(Settings {
         layer_settings: LayerShellSettings {
             size: Some((BAR_WIDTH, 0)),
-            // Reserve the 28-px right strip so niri's tiling and
-            // fullscreen don't put windows under the bar. Niri
-            // accepts a positive value for our anchor combo
-            // (`Right | Top | Bottom` — one edge + two
-            // perpendiculars).
-            exclusive_zone: BAR_WIDTH as i32,
+            // Niri's right strut reserves tiled space. Reserving a
+            // layer-shell zone here would shorten Waybar at the top.
+            exclusive_zone: 0,
             anchor: Anchor::Right | Anchor::Top | Anchor::Bottom,
             // (top, right, bottom, left) per layershellev's
             // `LayerSurface::set_margin` signature.
@@ -397,7 +393,7 @@ fn update(bar: &mut Bar, msg: Msg) -> Task<Msg> {
                                     (
                                         Anchor::Right | Anchor::Top | Anchor::Bottom,
                                         (BAR_WIDTH, 0),
-                                        BAR_WIDTH as i32,
+                                        0,
                                     )
                                 } else {
                                     (Anchor::Right | Anchor::Top | Anchor::Bottom, (1, 1), 0)

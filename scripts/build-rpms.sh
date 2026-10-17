@@ -45,6 +45,14 @@ for fedora in "${releases[@]}"; do
     echo "native build only supports the host Fedora release ($fedora requested)" >&2
     exit 2
   fi
+  repo_url=${SY_RPM_REPO_URL:-}
+  if [[ $native == false && $fedora == 45 && -z $repo_url ]]; then
+    release_url=https://dl.fedoraproject.org/pub/fedora/linux/releases/45/Everything/x86_64/os
+    if ! curl -fsSI --max-time 10 "$release_url/repodata/repomd.xml" >/dev/null; then
+      repo_url=https://dl.fedoraproject.org/pub/fedora/linux/development/45/Everything/x86_64/os/
+      echo "Fedora 45 release repository unavailable; using $repo_url"
+    fi
+  fi
   work=$(mktemp -d)
   trap 'rm -rf "$work"' EXIT
   mkdir -p "$work/SOURCES" "$work/RPMS" "$work/SRPMS"
@@ -64,7 +72,7 @@ for fedora in "${releases[@]}"; do
     "$container" run --rm --network=host -v "$work:/build:Z" \
       -v "$cache_dir:/var/cache/libdnf5:Z" \
       -v "$cargo_cache_dir:/root/.cargo:Z" \
-      -e SY_RPM_REPO_URL="${SY_RPM_REPO_URL:-}" \
+      -e SY_RPM_REPO_URL="$repo_url" \
       -e SY_RPM_FEDORA="$fedora" \
       -e CARGO_NET_OFFLINE="${CARGO_NET_OFFLINE:-false}" \
       "${SY_RPM_CONTAINER_IMAGE:-fedora:$fedora}" bash -euc '

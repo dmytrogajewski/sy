@@ -76,6 +76,9 @@ render packaged configs and sync user units. RPM configs call `/usr/bin/sy`,
 and `sy apply` does not copy the packaged binary into `~/.local/bin`.
 Waybar tiles and niri bindings for optional packages appear only when those
 packages are installed at apply time.
+The top panel runs as `sy-waybar.service` in the graphical user session.
+`sy apply` enables it and restarts the panel and right strip after unit sync;
+`systemctl --user status sy-waybar.service sy-stack-bar.service` checks both.
 After a feature RPM is removed, `sy apply` removes stale user-unit links
 and copied config files it last wrote. It keeps files edited since the
 previous apply.
@@ -344,7 +347,7 @@ cargo build --release
 
 # Reload running session
 niri msg action load-config-file
-killall -SIGUSR2 waybar
+systemctl --user restart sy-waybar.service sy-stack-bar.service
 makoctl reload
 ```
 
@@ -360,8 +363,8 @@ start a TTY session with `niri --session`.
 
 `sy apply` symlinks user-level systemd units under
 `~/.config/systemd/user/` and runs `systemctl --user daemon-reload`.
-`systemctl --user enable --now sy.target` brings every plane (aiplane,
-knowledge, power, stack-bar, agentd) up under the user manager.
+`systemctl --user enable --now sy.target` brings the AI and agent services up
+under the user manager. The graphical session starts Waybar and the right bar.
 
 ### NPU one-time setup
 

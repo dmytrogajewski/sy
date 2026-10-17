@@ -72,7 +72,8 @@ fn render_does_not_spawn_chrome_or_keyring() {
 /// Drive the renderer under `strace -f -e trace=connect` and assert
 /// no connect attempt touches `gnome-keyring`. Skips with a logged
 /// note on hosts without strace (CI runners frequently lack it). The
-/// strace child invokes the `regen_goldens` example so we exercise
+/// strace child invokes the `regen_goldens` example in a temporary output
+/// directory so we exercise
 /// the real renderer path rather than a `cargo test` harness which
 /// would also tracerse rustc / linker stages.
 #[test]
@@ -115,6 +116,7 @@ fn strace_render_makes_no_keyring_connect() {
         );
         return;
     }
+    let output_dir = tempfile::tempdir().expect("temporary golden output");
     let out = Command::new(strace)
         .args([
             "-f",
@@ -124,6 +126,7 @@ fn strace_render_makes_no_keyring_connect() {
             "/dev/stderr",
             target_root.to_str().expect("utf8 path"),
         ])
+        .env("SY_GOLDEN_OUTPUT_DIR", output_dir.path())
         .output()
         .expect("strace render");
     // We don't require strace's success — some kernels/seccomp policies

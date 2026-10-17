@@ -501,7 +501,11 @@ fn run(cli: Cli) -> Result<()> {
             let dry = dry_run || diff;
             sparkplane_bridge::apply_cli(syf.integrations.sparkplane.as_ref(), dry, false)?;
             apply(&root, &target, &ctx, &name, dry)?;
-            apply_units(&root, dry, json || diff, yes)
+            apply_units(&root, dry, json || diff, yes)?;
+            if !dry && root.join("configs/systemd/user/sy-waybar.service").exists() {
+                waybar::reload();
+            }
+            Ok(())
         }
         Cmd::Themes => {
             let (root, _, _) = resolve_repo()?;
@@ -620,7 +624,6 @@ fn apply(root: &Path, target: &Path, ctx: &toml::Table, theme: &str, dry: bool) 
 
     let mut changed = 0usize;
     let mut unchanged = 0usize;
-    let mut waybar_touched = false;
     let mut applied = desktop_paths::AppliedConfigs::new(target);
     for entry in WalkDir::new(&source).min_depth(1) {
         let entry = entry.context("walk")?;
@@ -628,6 +631,9 @@ fn apply(root: &Path, target: &Path, ctx: &toml::Table, theme: &str, dry: bool) 
             continue;
         }
         let rel = entry.path().strip_prefix(&source).context("strip_prefix")?;
+        if rel.starts_with("systemd/user") {
+            continue;
+        }
         let dest = target.join(rel);
         let raw =
             fs::read(entry.path()).with_context(|| format!("read {}", entry.path().display()))?;
@@ -660,16 +666,9 @@ fn apply(root: &Path, target: &Path, ctx: &toml::Table, theme: &str, dry: bool) 
             fs::write(&dest, &rendered).with_context(|| format!("write {}", dest.display()))?;
             println!("  + {}", rel.display());
         }
-        waybar_touched |= rel.starts_with("waybar");
         changed += 1;
     }
-    waybar_touched |= applied.finish(dry)?;
-    // A waybar/* change is invisible until the bar re-reads its
-    // files; without this the operator had to chase SIGUSR2 by
-    // hand after every `sy apply` (CLAUDE.md "no snowflakes").
-    if waybar_touched && !dry {
-        waybar::reload();
-    }
+    applied.finish(dry)?;
     println!();
     if desktop_paths::is_packaged_root(root) {
         println!("binary: /usr/bin/sy (RPM owned)");

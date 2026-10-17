@@ -412,6 +412,7 @@ pub fn serve_with_dispatch(
         daemon_cancel,
         aiplane,
         BridgeMode::Knowledge,
+        !dedicated_installed(),
     )
 }
 
@@ -429,6 +430,7 @@ pub fn serve_aiplane_with_dispatch_at(
         Arc::new(AtomicBool::new(false)),
         aiplane,
         BridgeMode::Aiplane,
+        true,
     )
 }
 
@@ -449,6 +451,7 @@ fn serve_at(
     daemon_cancel: Arc<AtomicBool>,
     aiplane: Arc<dyn AiplaneDispatch>,
     mode: BridgeMode,
+    aiplane_enabled: bool,
 ) -> Result<()> {
     if mode == BridgeMode::Aiplane
         && path.exists()
@@ -480,6 +483,7 @@ fn serve_at(
         daemon_cancel,
         aiplane,
         mode,
+        aiplane_enabled,
     ));
     thread::Builder::new()
         .name(match mode {
@@ -670,8 +674,8 @@ impl KnowledgeBridge {
         daemon_cancel: Arc<AtomicBool>,
         aiplane: Arc<dyn AiplaneDispatch>,
         mode: BridgeMode,
+        aiplane_enabled: bool,
     ) -> Self {
-        let aiplane_enabled = mode == BridgeMode::Aiplane || !dedicated_installed();
         let cancel_registry = Arc::new(CancelRegistry::new());
         let (scheduler, dispatcher) = crate::aiplane::scheduler::Scheduler::new();
         let scheduler = Arc::new(scheduler);
@@ -1524,6 +1528,25 @@ pub fn try_method_to_req(method: &str, params: &serde_json::Value) -> Result<Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // These cases exercise the legacy combined wire surface regardless of
+    // which optional RPMs happen to be installed on the test machine.
+    fn serve_with_dispatch(
+        ops_tx: mpsc::Sender<Op>,
+        req_tx: mpsc::Sender<(Req, oneshot::Sender<Resp>)>,
+        daemon_cancel: Arc<AtomicBool>,
+        aiplane: Arc<dyn AiplaneDispatch>,
+    ) -> Result<()> {
+        serve_at(
+            &socket_path(),
+            ops_tx,
+            req_tx,
+            daemon_cancel,
+            aiplane,
+            BridgeMode::Knowledge,
+            true,
+        )
+    }
 
     #[test]
     fn op_roundtrip_all_variants() {
