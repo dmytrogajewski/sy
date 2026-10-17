@@ -912,14 +912,10 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn higher_class_never_starves_to_lower() {
-        // Enqueue a batch of Background, then a single Interactive.
-        // The dispatcher serialises through a single ORT-like worker
-        // (per-call delay = 5 ms), so the Interactive must complete
-        // before the bulk of the Background backlog: order of
-        // executed requests should show the Interactive within the
-        // first 3 entries (the dispatcher may have pulled 1-2
-        // Background already before the Interactive arrived).
+    async fn higher_class_drains_before_background_backlog() {
+        // Queue both classes before starting the dispatcher. This proves
+        // strict priority without assuming the test thread wakes within
+        // a few milliseconds of the dispatcher under CPU load.
         //
         // See `background_delays_then_runs` for why `TEST_ENV_LOCK`
         // is held here: it serialises sibling scheduler tests against
@@ -929,10 +925,9 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         const N_BG: usize = 20;
-        let dispatch = CountingDispatch::new(Duration::from_millis(5));
+        let dispatch = CountingDispatch::new(Duration::ZERO);
         let (scheduler, dispatcher) = Scheduler::new();
         let scheduler = Arc::new(scheduler);
-        let handle = dispatcher.run(Arc::clone(&dispatch) as Arc<dyn AiplaneDispatch>);
 
         let mut bg_rxs = Vec::with_capacity(N_BG);
         for _ in 0..N_BG {
@@ -940,14 +935,9 @@ mod tests {
             scheduler.admit(req).expect("admit bg");
             bg_rxs.push(rx);
         }
-        // Tiny gap so the dispatcher pulls at most one Background
-        // before the Interactive request arrives. Larger than the
-        // per-call delay so at least one Background completes first;
-        // smaller than the full backlog so the Interactive still
-        // preempts.
-        tokio::time::sleep(Duration::from_millis(8)).await;
         let (req, interactive_rx) = build_labelled_request(Priority::Interactive);
         scheduler.admit(req).expect("admit interactive");
+        let handle = dispatcher.run(Arc::clone(&dispatch) as Arc<dyn AiplaneDispatch>);
 
         // Wait for the Interactive to finish.
         let _ = tokio::time::timeout(Duration::from_secs(5), interactive_rx)
@@ -969,10 +959,7 @@ mod tests {
             .iter()
             .position(|p| *p == Priority::Interactive)
             .expect("interactive ran");
-        assert!(
-            interactive_idx < 3,
-            "interactive must preempt the bulk of background: order={order:?}"
-        );
+        assert_eq!(interactive_idx, 0, "interactive must run first: {order:?}");
         assert!(dispatch.calls() > N_BG);
     }
 
