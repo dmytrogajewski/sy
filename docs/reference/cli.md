@@ -98,7 +98,7 @@ agent callers cannot accidentally rewrite an agent's MCP config.
 constants live in the source under each plane's `exit` module
 (`src/doctor/mod.rs`, `src/knowledge/mod.rs`, `src/supervision/service.rs`,
 `src/ipc_cli.rs`, `src/crash/mod.rs`,
-`src/agt/protocol.rs`).
+`crates/sy-agent/src/agt/protocol.rs`).
 
 | Code | Meaning                  | Source of truth                                                           |
 |------|--------------------------|---------------------------------------------------------------------------|
@@ -278,7 +278,7 @@ sy render --theme gruvbox-material niri/config.kdl
 ## `sy aiplane`
 
 The NPU inference plane. Owns `/dev/accel/accel0`. Source:
-`src/aiplane/cli.rs`.
+`crates/sy-aiplane/src/aiplane/cli.rs`.
 
 ### Subcommands
 
@@ -476,7 +476,7 @@ sy knowledge sync --yes        # destructive — drops the collection
 
 ## `sy agt`
 
-Sandboxed agent runner. Source: `src/agt/mod.rs`.
+Sandboxed agent runner. Source: `crates/sy-agent/src/agt/mod.rs`.
 
 ### Subcommands
 
@@ -541,7 +541,7 @@ direct human use.
 - `2` — `NO_SESSION` (session id not found).
 - `4` — `DAEMON_UNAVAILABLE` (daemon socket down or unexpected reply).
 
-(Defined in `src/agt/protocol.rs::exit`.)
+(Defined in `crates/sy-agent/src/agt/protocol.rs::exit`.)
 
 ### Examples
 
@@ -563,7 +563,7 @@ sy agt diag --json
 ## `sy policy`
 
 Operator surface for the SPEC §4.4 step 2 sandbox-policy resolver.
-Source: `src/agt/policy/cli.rs`.
+Source: `crates/sy-agent/src/agt/policy/cli.rs`.
 
 ### Subcommands
 
@@ -1025,7 +1025,7 @@ See [installation and release pins](../how-to/install-spark.md) and the
 
 Native niri-tiled file manager (iced). Bare `sy file [PATH]` opens
 the window (prints `scaffold` then enters the GUI when stdout is a
-TTY and `gui-iced` is on). Source: `src/file/cli.rs`.
+TTY and `gui-iced` is on). Source: `crates/sy-filemanager/src/file/cli.rs`.
 
 ### Synopsis
 
@@ -1087,7 +1087,7 @@ sy file waybar
 ## `sy plugin`
 
 Discover, install, and inspect previewer plugins for `sy file`.
-Source: `src/plugin/cli.rs`.
+Source: `crates/sy-filemanager/src/plugin/cli.rs`.
 
 ### Synopsis
 
@@ -1192,7 +1192,8 @@ sy mon waybar
 ## `sy syauth`
 
 Phone-as-key sudo applet. Wraps upstream `syauth`. Source:
-`src/syauth.rs`.
+`crates/sy-auth/src/syauth.rs`. Install `sy-system-auth` alongside the base
+`sy` RPM to use this command without the desktop bundle.
 
 ### Synopsis
 

@@ -101,10 +101,10 @@ pub(crate) fn write_crash_record(dir: &Path, record: &serde_json::Value) -> Opti
 /// Mirrors `state_logs_dir` in `obs::mod` so logs and crash records
 /// share the same root.
 pub fn crash_dir() -> PathBuf {
-    if let Some(x) = std::env::var_os("XDG_STATE_HOME") {
-        if !x.is_empty() {
-            return PathBuf::from(x).join("sy/crash");
-        }
+    if let Some(x) = std::env::var_os("XDG_STATE_HOME")
+        && !x.is_empty()
+    {
+        return PathBuf::from(x).join("sy/crash");
     }
     if let Some(home) = std::env::var_os("HOME") {
         return PathBuf::from(home).join(".local/state/sy/crash");
@@ -232,7 +232,8 @@ mod tests {
         let prev_xdg = std::env::var_os("XDG_STATE_HOME");
         // Safety: ENV_LOCK serialises the env mutation; restore on
         // the way out.
-        std::env::set_var("XDG_STATE_HOME", tmp.path());
+        // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path()) };
 
         let prev_hook = std::panic::take_hook();
         install_panic_hook();
@@ -257,8 +258,10 @@ mod tests {
         );
 
         match prev_xdg {
-            Some(v) => std::env::set_var("XDG_STATE_HOME", v),
-            None => std::env::remove_var("XDG_STATE_HOME"),
+            // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+            Some(v) => unsafe { std::env::set_var("XDG_STATE_HOME", v) },
+            // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+            None => unsafe { std::env::remove_var("XDG_STATE_HOME") },
         }
     }
 }

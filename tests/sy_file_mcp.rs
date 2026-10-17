@@ -16,7 +16,7 @@
 //! `#[path]` — same pattern `tests/sy_file_journey_e2e.rs` uses for
 //! the rest of the file plane.
 
-#[path = "../src/file/mcp.rs"]
+#[path = "../crates/sy-filemanager/src/file/mcp.rs"]
 #[allow(dead_code)]
 mod file_mcp;
 
@@ -39,9 +39,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use file_mcp::{run_with, FileDaemonClient};
+use file_mcp::{FileDaemonClient, run_with};
 
 /// Canned-response stub. The test seeds `(method, response)` pairs;
 /// every `call(method, _)` pops one entry and asserts the request

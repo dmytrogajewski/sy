@@ -88,14 +88,16 @@ pub fn stopping() {
 /// intended lifecycle).
 pub fn spawn_watchdog() -> Option<JoinHandle<()>> {
     let interval = sd_notify::watchdog_enabled().map(compute_ping_interval)?;
-    Some(thread::spawn(move || loop {
-        thread::sleep(interval);
-        if let Err(e) = sd_notify::notify(&[NotifyState::Watchdog]) {
-            tracing::debug!(
-                target: "sy::notify",
-                error = %e,
-                "sd_notify(Watchdog) failed"
-            );
+    Some(thread::spawn(move || {
+        loop {
+            thread::sleep(interval);
+            if let Err(e) = sd_notify::notify(&[NotifyState::Watchdog]) {
+                tracing::debug!(
+                    target: "sy::notify",
+                    error = %e,
+                    "sd_notify(Watchdog) failed"
+                );
+            }
         }
     }))
 }
@@ -123,11 +125,13 @@ mod tests {
         // result and panic in `cargo run`.
         let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = std::env::var_os("NOTIFY_SOCKET");
-        std::env::remove_var("NOTIFY_SOCKET");
+        // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+        unsafe { std::env::remove_var("NOTIFY_SOCKET") };
         ready();
         stopping();
         if let Some(v) = prev {
-            std::env::set_var("NOTIFY_SOCKET", v);
+            // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+            unsafe { std::env::set_var("NOTIFY_SOCKET", v) };
         }
     }
 
@@ -140,8 +144,10 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev_usec = std::env::var_os("WATCHDOG_USEC");
         let prev_pid = std::env::var_os("WATCHDOG_PID");
-        std::env::remove_var("WATCHDOG_USEC");
-        std::env::remove_var("WATCHDOG_PID");
+        // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+        unsafe { std::env::remove_var("WATCHDOG_USEC") };
+        // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+        unsafe { std::env::remove_var("WATCHDOG_PID") };
 
         let handle = spawn_watchdog();
         assert!(
@@ -150,10 +156,12 @@ mod tests {
         );
 
         if let Some(v) = prev_usec {
-            std::env::set_var("WATCHDOG_USEC", v);
+            // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+            unsafe { std::env::set_var("WATCHDOG_USEC", v) };
         }
         if let Some(v) = prev_pid {
-            std::env::set_var("WATCHDOG_PID", v);
+            // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+            unsafe { std::env::set_var("WATCHDOG_PID", v) };
         }
     }
 

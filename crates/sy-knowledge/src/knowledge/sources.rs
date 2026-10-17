@@ -1,0 +1,757 @@
+//! Read/write [[knowledge.sources]] in sy.toml.
+//!
+//! sy.toml is the source of truth for which paths are indexed. `sy
+//! knowledge add/rm/schedule` rewrite it atomically (temp + rename, same
+//! pattern as `src/stack/state.rs:save`). The daemon also reads sy.toml on
+//! `RefreshSources` IPC events.
+
+use std::{
+    env,
+    fs::{self, File},
+    io::Write,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+
+use super::DEFAULT_SCHEDULE;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KnowledgeSection {
+    #[serde(default)]
+    pub schedule: Option<String>,
+    #[serde(default)]
+    pub embedding_model: Option<String>,
+    #[serde(default)]
+    pub qdrant_port: Option<u16>,
+    /// Whether to auto-discover `qdr.toml` files in `$HOME` at depth ≤ 2.
+    /// Default `true`. Disable to opt out of the shallow-home convenience
+    /// watcher; explicit `mode = "discover"` sources still work.
+    #[serde(default)]
+    pub discover_home: Option<bool>,
+    /// Sleep this many ms after each embed-batch upsert during scheduled
+    /// daemon passes. 0 = off. Has no effect on user-driven `sy knowledge
+    /// index/sync/search` (they should stay snappy).
+    #[serde(default)]
+    pub cpu_throttle_ms: Option<u64>,
+    /// Adaptive CPU cap: 1..100 = the daemon polls its own `/proc/self/stat`
+    /// after each batch and inserts a sleep proportional to overshoot to
+    /// keep average usage near this percentage. 0 / unset = no cap.
+    #[serde(default)]
+    pub cpu_max_percent: Option<u8>,
+    /// Process nice level applied at daemon startup. Default 10 (lower
+    /// priority than interactive shells). Range -20..19 per setpriority(2).
+    #[serde(default)]
+    pub nice: Option<i32>,
+    /// Whether `sy auto-configure` (and `sy knowledge mcp-enable/disable`)
+    /// should keep `sy-knowledge` registered in each known agent's
+    /// MCP-server config. Default `true`. Honours `SY_KNOWLEDGE_MCP_ENABLED`.
+    #[serde(default)]
+    pub mcp_enabled: Option<bool>,
+    #[serde(default, rename = "sources")]
+    pub sources: Vec<Source>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SourceMode {
+    /// Walk the entire subtree and index everything (subject to .gitignore
+    /// and the global file-size cap). Backwards-compatible with pre-qdr.toml
+    /// behaviour.
+    #[default]
+    Explicit,
+    /// Walk the subtree looking for `qdr.toml` files. Each manifested
+    /// folder becomes its own indexed source under the manifest's rules.
+    Discover,
+}
+
+/// What kind of corpus a source holds. Drives per-kind indexing
+/// pipelines (later steps) and default-scope exclusion (e.g.
+/// `claude-transcripts` is excluded from default search). Auto-classified
+/// from the path on insert; see [`classify_kind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+#[clap(rename_all = "kebab-case")]
+pub enum SourceKind {
+    Telegram,
+    ClaudeTranscripts,
+    /// Session logs / history / caches under an agent's dotfile home
+    /// (`~/.claude`, `~/.codex`, `~/.cursor`, `~/.gemini`, `~/.agents`,
+    /// `~/.antigravity`, `~/.hermes`). This is the agent's OWN output, so it
+    /// is default-excluded from search to prevent self-poisoning — the model
+    /// quoting its own prior answers as if they were the user's data. Still
+    /// searchable on explicit opt-in (`kind:["agent-history"]`).
+    AgentHistory,
+    Email,
+    Slack,
+    Notes,
+    Code,
+    #[default]
+    Generic,
+}
+
+impl SourceKind {
+    /// Kebab-case wire string (matches the serde `rename_all` form). This is
+    /// what lands in the qdrant `kind` payload and what Step 11
+    /// default-excludes (`claude-transcripts`).
+    pub fn as_kebab(self) -> &'static str {
+        match self {
+            SourceKind::Telegram => "telegram",
+            SourceKind::ClaudeTranscripts => "claude-transcripts",
+            SourceKind::AgentHistory => "agent-history",
+            SourceKind::Email => "email",
+            SourceKind::Slack => "slack",
+            SourceKind::Notes => "notes",
+            SourceKind::Code => "code",
+            SourceKind::Generic => "generic",
+        }
+    }
+}
+
+/// Kinds a *search* may be filtered to. Identical to [`SourceKind`] plus the
+/// kind overrides a pipeline stamps per record but no registry entry owns —
+/// today only `telegram-voice`
+/// ([`crate::knowledge::pipeline::telegram::VOICE_KIND`]).
+///
+/// That override was previously unselectable: `sy knowledge search --kind`
+/// accepted the `SourceKind` enum only, so on a host where voice notes are
+/// 4 132 of the 6 141 search-visible chunks, two thirds of that corpus could
+/// not be filtered from the CLI even though the qdrant filter has always
+/// matched on the free-form payload string. Kept as a separate enum rather
+/// than a new `SourceKind` variant because `SourceKind` drives *indexing*
+/// decisions (pipeline selection, auto-classification of a path) that a
+/// per-record override must not participate in; the drift test
+/// `search_kind_covers_every_source_kind` pins the two lists together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum SearchKind {
+    Telegram,
+    ClaudeTranscripts,
+    AgentHistory,
+    Email,
+    Slack,
+    Notes,
+    Code,
+    Generic,
+    /// Transcribed Telegram voice notes / round videos: a per-record
+    /// override, not a source kind.
+    TelegramVoice,
+}
+
+impl SearchKind {
+    /// Kebab wire string, delegated to [`SourceKind::as_kebab`] for every
+    /// registry kind so the two enums cannot drift apart on the wire.
+    pub fn as_kebab(self) -> &'static str {
+        match self {
+            SearchKind::Telegram => SourceKind::Telegram.as_kebab(),
+            SearchKind::ClaudeTranscripts => SourceKind::ClaudeTranscripts.as_kebab(),
+            SearchKind::AgentHistory => SourceKind::AgentHistory.as_kebab(),
+            SearchKind::Email => SourceKind::Email.as_kebab(),
+            SearchKind::Slack => SourceKind::Slack.as_kebab(),
+            SearchKind::Notes => SourceKind::Notes.as_kebab(),
+            SearchKind::Code => SourceKind::Code.as_kebab(),
+            SearchKind::Generic => SourceKind::Generic.as_kebab(),
+            SearchKind::TelegramVoice => crate::knowledge::pipeline::telegram::VOICE_KIND,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Source {
+    pub path: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub mode: SourceMode,
+    /// Stable, human-friendly identifier (used by `include_sources` /
+    /// `exclude_sources`). Defaults to the path's last component.
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub kind: SourceKind,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Auto-classify a source by its path. Heuristics are intentionally
+/// narrow this iteration: only `claude-transcripts` (path contains
+/// `.claude/projects`) and `telegram` (path contains `telegram`, or a
+/// `result.json` / `ChatExport` export marker) are precise; everything
+/// else is [`SourceKind::Generic`].
+pub(crate) fn classify_kind(path: &str) -> SourceKind {
+    let lower = path.to_ascii_lowercase();
+    if lower.contains(".claude/projects") {
+        return SourceKind::ClaudeTranscripts;
+    }
+    // Any file under a known agent dotfile home is that agent's own session
+    // history / cache → AgentHistory (default-excluded from search). Checked
+    // before the telegram/Generic fall-through so e.g. a `result.json` an
+    // agent happened to write under `~/.codex` is still treated as agent
+    // history, not a Telegram export.
+    const AGENT_HOMES: &[&str] = &[
+        "/.claude/",
+        "/.codex/",
+        "/.cursor/",
+        "/.gemini/",
+        "/.agents/",
+        "/.antigravity/",
+        "/.hermes/",
+    ];
+    if AGENT_HOMES.iter().any(|home| lower.contains(home)) {
+        return SourceKind::AgentHistory;
+    }
+    if lower.contains("telegram") || lower.contains("result.json") || lower.contains("chatexport") {
+        return SourceKind::Telegram;
+    }
+    SourceKind::Generic
+}
+
+/// Derive a stable, deterministic source name from a path: its last
+/// non-empty component, or the whole path if it has none.
+fn default_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|c| c.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(path)
+        .to_string()
+}
+
+/// Locate the sy repo root. Walks up from cwd; falls back to ~/sources/sy.
+pub fn find_root() -> Result<PathBuf> {
+    if let Ok(r) = env::var("SY_ROOT")
+        && !r.is_empty()
+    {
+        return Ok(PathBuf::from(r));
+    }
+    let mut cur = env::current_dir().context("cwd")?;
+    loop {
+        if cur.join("sy.toml").exists()
+            && cur.join("configs").is_dir()
+            && cur.join("themes").is_dir()
+        {
+            return Ok(cur);
+        }
+        match cur.parent() {
+            Some(p) => cur = p.to_path_buf(),
+            None => {
+                if let Ok(home) = env::var("HOME") {
+                    let guess = PathBuf::from(home).join("sources/sy");
+                    if guess.exists() {
+                        return Ok(guess);
+                    }
+                }
+                anyhow::bail!(
+                    "could not find sy repo root (set SY_ROOT or run from inside the repo)"
+                )
+            }
+        }
+    }
+}
+
+pub fn sy_toml_path() -> Result<PathBuf> {
+    if let Some(path) = env::var_os("SY_KNOWLEDGE_CONFIG_PATH") {
+        return Ok(PathBuf::from(path));
+    }
+    if env::var_os("SY_ROOT").is_none()
+        && env::current_exe()
+            .ok()
+            .is_some_and(|exe| exe.starts_with("/usr/libexec/sy"))
+    {
+        let config_home = env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+            .context("neither XDG_CONFIG_HOME nor HOME is set")?;
+        return Ok(config_home.join("sy/sy.toml"));
+    }
+    Ok(find_root()?.join("sy.toml"))
+}
+
+pub fn load() -> Result<KnowledgeSection> {
+    let p = sy_toml_path()?;
+    if !p.exists() {
+        return Ok(KnowledgeSection::default());
+    }
+    let s = fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
+
+    #[derive(Deserialize, Default)]
+    struct Top {
+        #[serde(default)]
+        knowledge: KnowledgeSection,
+    }
+    let top: Top = toml::from_str(&s).with_context(|| format!("parse {}", p.display()))?;
+    Ok(top.knowledge)
+}
+
+pub fn schedule_interval() -> String {
+    load()
+        .ok()
+        .and_then(|k| k.schedule)
+        .unwrap_or_else(|| DEFAULT_SCHEDULE.to_string())
+}
+
+/// Add a source. Returns true if newly added, false if already present.
+pub fn add(path: &Path, disabled: bool, mode: SourceMode) -> Result<bool> {
+    let abs = canonicalize_for_storage(path)?;
+    let mut k = load()?;
+    if k.sources.iter().any(|s| same_path(&s.path, &abs)) {
+        return Ok(false);
+    }
+    k.sources.push(Source {
+        name: default_name(&abs),
+        kind: classify_kind(&abs),
+        path: abs,
+        enabled: !disabled,
+        mode,
+    });
+    write(&k)?;
+    Ok(true)
+}
+
+/// Remove a source. Returns true if it was removed, false if not present.
+pub fn remove(path: &Path) -> Result<bool> {
+    let abs = canonicalize_for_storage(path)?;
+    let mut k = load()?;
+    let before = k.sources.len();
+    k.sources.retain(|s| !same_path(&s.path, &abs));
+    if k.sources.len() == before {
+        return Ok(false);
+    }
+    write(&k)?;
+    Ok(true)
+}
+
+/// Set the schedule interval. Validates the format.
+pub fn set_schedule(interval: &str) -> Result<()> {
+    parse_interval(interval).with_context(|| format!("invalid interval '{interval}'"))?;
+    let mut k = load()?;
+    k.schedule = Some(interval.to_string());
+    write(&k)
+}
+
+/// Parse a schedule string like `15m`, `30s`, `1h` into seconds.
+pub fn parse_interval(s: &str) -> Result<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        anyhow::bail!("empty interval");
+    }
+    let (num, unit) = match s.find(|c: char| !c.is_ascii_digit()) {
+        Some(i) => s.split_at(i),
+        None => (s, "s"),
+    };
+    let n: u64 = num.parse().context("interval is not a number")?;
+    let secs = match unit {
+        "" | "s" => n,
+        "m" => n * 60,
+        "h" => n * 3600,
+        "d" => n * 86400,
+        other => anyhow::bail!("unknown unit '{other}' (expected s/m/h/d)"),
+    };
+    if secs == 0 {
+        anyhow::bail!("interval must be > 0");
+    }
+    Ok(secs)
+}
+
+/// Expand `~` and resolve relative paths to absolute. Does NOT require the
+/// path to exist (we want to allow registering paths that haven't been
+/// created yet).
+pub fn expand(path: &str) -> Result<PathBuf> {
+    if let Some(rest) = path.strip_prefix("~/") {
+        let home = env::var("HOME").context("HOME not set")?;
+        return Ok(PathBuf::from(home).join(rest));
+    }
+    if path == "~" {
+        return Ok(PathBuf::from(env::var("HOME").context("HOME not set")?));
+    }
+    let p = PathBuf::from(path);
+    if p.is_absolute() {
+        return Ok(p);
+    }
+    Ok(env::current_dir()?.join(p))
+}
+
+fn canonicalize_for_storage(path: &Path) -> Result<String> {
+    // Store absolute path; use canonicalize where possible so duplicates
+    // (different ways of writing the same path) collapse.
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()?.join(path)
+    };
+    let canon = fs::canonicalize(&abs).unwrap_or(abs);
+    // Reverse-substitute $HOME → "~/" for storage, so sy.toml stays
+    // portable across machines if HOME differs.
+    if let Ok(home) = env::var("HOME") {
+        let home_p = PathBuf::from(&home);
+        if let Ok(stripped) = canon.strip_prefix(&home_p) {
+            return Ok(format!("~/{}", stripped.display()));
+        }
+    }
+    Ok(canon.display().to_string())
+}
+
+fn same_path(a: &str, b: &str) -> bool {
+    let pa = expand(a).unwrap_or_else(|_| PathBuf::from(a));
+    let pb = expand(b).unwrap_or_else(|_| PathBuf::from(b));
+    fs::canonicalize(&pa).unwrap_or(pa) == fs::canonicalize(&pb).unwrap_or(pb)
+}
+
+/// Atomically rewrite sy.toml's `[knowledge]` section in-place, preserving
+/// every comment, blank line, and ordering. We edit existing fields in
+/// place where possible and only insert/remove keys that actually changed,
+/// so leading-comment decoration on the `[knowledge]` table itself survives.
+fn write(section: &KnowledgeSection) -> Result<()> {
+    use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
+
+    let p = sy_toml_path()?;
+    let body = if p.exists() {
+        fs::read_to_string(&p)?
+    } else {
+        String::new()
+    };
+    let mut doc: DocumentMut = body
+        .parse()
+        .with_context(|| format!("parse {}", p.display()))?;
+
+    // Get-or-create the [knowledge] table without dropping its decoration.
+    if doc.get("knowledge").is_none() {
+        doc.insert("knowledge", Item::Table(Table::new()));
+    }
+    let k = doc["knowledge"]
+        .as_table_mut()
+        .context("[knowledge] is not a table")?;
+
+    // Scalar fields: set if Some, remove if None.
+    set_or_remove(k, "schedule", section.schedule.as_deref().map(value));
+    set_or_remove(
+        k,
+        "embedding_model",
+        section.embedding_model.as_deref().map(value),
+    );
+    set_or_remove(
+        k,
+        "qdrant_port",
+        section.qdrant_port.map(|p| value(p as i64)),
+    );
+
+    // [[knowledge.sources]] — rebuild the array of tables. Preserves the
+    // KEY's decoration (the comment block above `[[knowledge.sources]]`),
+    // only the entries themselves get rewritten.
+    set_or_remove(k, "discover_home", section.discover_home.map(value));
+    set_or_remove(
+        k,
+        "cpu_throttle_ms",
+        section.cpu_throttle_ms.map(|n| value(n as i64)),
+    );
+    set_or_remove(
+        k,
+        "cpu_max_percent",
+        section.cpu_max_percent.map(|n| value(n as i64)),
+    );
+    set_or_remove(k, "nice", section.nice.map(|n| value(n as i64)));
+    set_or_remove(k, "mcp_enabled", section.mcp_enabled.map(value));
+
+    if section.sources.is_empty() {
+        k.remove("sources");
+    } else {
+        let mut arr = ArrayOfTables::new();
+        for s in &section.sources {
+            let mut t = Table::new();
+            t.insert("path", value(s.path.clone()));
+            t.insert("enabled", value(s.enabled));
+            // Only emit `name`/`kind` when set / non-default, so pre-existing
+            // `[[knowledge.sources]]` rows stay byte-identical on rewrite.
+            if !s.name.is_empty() {
+                t.insert("name", value(s.name.clone()));
+            }
+            if s.kind != SourceKind::Generic {
+                t.insert("kind", value(s.kind.as_kebab()));
+            }
+            // Only emit `mode` when non-default, to keep sy.toml tidy for
+            // pre-existing `[[knowledge.sources]]` entries.
+            if s.mode != SourceMode::Explicit {
+                let m = match s.mode {
+                    SourceMode::Explicit => "explicit",
+                    SourceMode::Discover => "discover",
+                };
+                t.insert("mode", value(m));
+            }
+            arr.push(t);
+        }
+        k.insert("sources", Item::ArrayOfTables(arr));
+    }
+
+    let serialised = doc.to_string();
+    if let Some(parent) = p.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    let tmp = p.with_extension("toml.tmp");
+    {
+        let mut f = File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
+        f.write_all(serialised.as_bytes())?;
+        f.sync_all()?;
+    }
+    fs::rename(&tmp, &p).with_context(|| format!("rename to {}", p.display()))?;
+    Ok(())
+}
+
+fn set_or_remove(t: &mut toml_edit::Table, key: &str, new: Option<toml_edit::Item>) {
+    match new {
+        Some(v) => {
+            t.insert(key, v);
+        }
+        None => {
+            t.remove(key);
+        }
+    }
+}
+
+/// Notify the daemon that sources or schedule changed (best-effort).
+pub fn notify_daemon_refresh() {
+    let _ = super::ipc::send(&super::ipc::Op::RefreshSources);
+}
+
+/// Return the list of enabled, expanded source roots in `Explicit` mode.
+/// Manifest-discovered roots are NOT returned here — they're enumerated
+/// dynamically by `manifest::discover_all()`.
+pub fn enabled_paths() -> Result<Vec<PathBuf>> {
+    Ok(load()?
+        .sources
+        .into_iter()
+        .filter(|s| s.enabled && s.mode == SourceMode::Explicit)
+        .map(|s| expand(&s.path).unwrap_or_else(|_| PathBuf::from(s.path)))
+        .collect())
+}
+
+/// Enabled, expanded `mode = "discover"` roots. The daemon walks each of
+/// these recursively (gitignore-aware) for `qdr.toml` files.
+pub fn discover_roots() -> Result<Vec<PathBuf>> {
+    Ok(load()?
+        .sources
+        .into_iter()
+        .filter(|s| s.enabled && s.mode == SourceMode::Discover)
+        .map(|s| expand(&s.path).unwrap_or_else(|_| PathBuf::from(s.path)))
+        .collect())
+}
+
+/// Resolve the [`SourceKind`] for an (expanded) source root. Prefers a
+/// registered source's stored `kind`; falls back to path classification so
+/// manifest-discovered / ad-hoc roots still get a kind. Defaults to
+/// [`SourceKind::Generic`] when nothing matches.
+pub fn kind_for_path(root: &Path) -> SourceKind {
+    if let Ok(k) = load() {
+        for s in &k.sources {
+            if same_path(&s.path, &root.display().to_string()) {
+                return s.kind;
+            }
+        }
+    }
+    classify_kind(&root.display().to_string())
+}
+
+/// Whether shallow-`$HOME` (depth ≤ 2) auto-discovery is on. Defaults to
+/// true when `[knowledge].discover_home` is unset. Honours
+/// `SY_KNOWLEDGE_DISCOVER_HOME=0|1`.
+pub fn discover_home_enabled() -> bool {
+    if let Ok(v) = env::var("SY_KNOWLEDGE_DISCOVER_HOME") {
+        return matches!(v.as_str(), "1" | "true" | "yes" | "on");
+    }
+    load().ok().and_then(|k| k.discover_home).unwrap_or(true)
+}
+
+/// CPU throttle between embed batches (scheduled daemon passes only).
+/// Honours `SY_KNOWLEDGE_CPU_THROTTLE_MS`.
+pub fn cpu_throttle() -> Duration {
+    if let Ok(v) = env::var("SY_KNOWLEDGE_CPU_THROTTLE_MS")
+        && let Ok(n) = v.parse::<u64>()
+    {
+        return Duration::from_millis(n);
+    }
+    let ms = load().ok().and_then(|k| k.cpu_throttle_ms).unwrap_or(0);
+    Duration::from_millis(ms)
+}
+
+/// Adaptive CPU cap target as a fraction (0.0..1.0). `None` = uncapped.
+/// Honours `SY_KNOWLEDGE_CPU_MAX_PERCENT`.
+pub fn cpu_max_percent() -> Option<u8> {
+    if let Ok(v) = env::var("SY_KNOWLEDGE_CPU_MAX_PERCENT")
+        && let Ok(n) = v.parse::<u8>()
+    {
+        return if (1..=100).contains(&n) {
+            Some(n)
+        } else {
+            None
+        };
+    }
+    load()
+        .ok()
+        .and_then(|k| k.cpu_max_percent)
+        .filter(|n| (1..=100).contains(n))
+}
+
+/// Nice level applied at daemon startup. Defaults to 10. Honours
+/// `SY_KNOWLEDGE_NICE`.
+pub fn nice_level() -> i32 {
+    if let Ok(v) = env::var("SY_KNOWLEDGE_NICE")
+        && let Ok(n) = v.parse::<i32>()
+    {
+        return n;
+    }
+    load().ok().and_then(|k| k.nice).unwrap_or(10)
+}
+
+/// Whether `sy-knowledge` should be registered in agents' MCP configs.
+/// Default `true`. Honours `SY_KNOWLEDGE_MCP_ENABLED=0|1|true|false`.
+pub fn mcp_enabled() -> bool {
+    if let Ok(v) = env::var("SY_KNOWLEDGE_MCP_ENABLED") {
+        return matches!(v.as_str(), "1" | "true" | "yes" | "on");
+    }
+    load().ok().and_then(|k| k.mcp_enabled).unwrap_or(true)
+}
+
+/// Persist the `mcp_enabled` flag in sy.toml (round-trip via `toml_edit`).
+pub fn set_mcp_enabled(value: bool) -> Result<()> {
+    let mut k = load()?;
+    k.mcp_enabled = Some(value);
+    write(&k)
+}
+
+#[cfg(test)]
+mod tests {
+    /// The two kind enums must stay in step: every registry kind stays
+    /// selectable from the CLI, and the only addition may be the per-record
+    /// `telegram-voice` override. Without this, adding a `SourceKind` variant
+    /// would silently leave it unfilterable from `sy knowledge search`.
+    #[test]
+    fn search_kind_covers_every_source_kind() {
+        use clap::ValueEnum;
+        let source: Vec<&str> = <SourceKind as ValueEnum>::value_variants()
+            .iter()
+            .map(|k| k.as_kebab())
+            .collect();
+        let search: Vec<&str> = <SearchKind as ValueEnum>::value_variants()
+            .iter()
+            .map(|k| k.as_kebab())
+            .collect();
+        for k in &source {
+            assert!(search.contains(k), "{k} is not selectable in search");
+        }
+        assert!(
+            search.contains(&crate::knowledge::pipeline::telegram::VOICE_KIND),
+            "the per-record voice kind must be selectable"
+        );
+        assert_eq!(
+            search.len(),
+            source.len() + 1,
+            "exactly one record-level override expected: {search:?} vs {source:?}"
+        );
+    }
+
+    use super::*;
+
+    #[test]
+    fn kind_auto_classifies_claude_projects() {
+        assert_eq!(
+            classify_kind("~/.claude/projects/foo/bar.jsonl"),
+            SourceKind::ClaudeTranscripts
+        );
+    }
+
+    #[test]
+    fn kind_auto_classifies_telegram_export() {
+        assert_eq!(
+            classify_kind("~/knowledge/telegram/ChatExport_2024/result.json"),
+            SourceKind::Telegram
+        );
+    }
+
+    #[test]
+    fn kind_defaults_to_generic_for_unknown_paths() {
+        assert_eq!(classify_kind("~/notes/journal"), SourceKind::Generic);
+    }
+
+    #[test]
+    fn classify_transcript_file_under_projects() {
+        // A transcript file deep under a `~/.claude` manifest root must
+        // classify as ClaudeTranscripts from its OWN full path (REQ-1
+        // regression: per-file kind, not per-job-root kind).
+        assert_eq!(
+            classify_kind("/home/dmitriy/.claude/projects/abc/sess.jsonl"),
+            SourceKind::ClaudeTranscripts
+        );
+    }
+
+    #[test]
+    fn classify_claude_settings_is_agent_history_not_transcripts() {
+        // A non-projects file directly under `.claude` is NOT a transcript,
+        // but it IS the agent's own dotfile content → AgentHistory (default-
+        // excluded from search), not Generic.
+        assert_eq!(
+            classify_kind("/home/dmitriy/.claude/settings.json"),
+            SourceKind::AgentHistory
+        );
+    }
+
+    #[test]
+    fn classify_agent_dotfile_homes_as_agent_history() {
+        for p in [
+            "/home/dmitriy/.claude/paste-cache/x.txt",
+            "/home/dmitriy/.codex/.tmp/plugins/y.md",
+            "/home/dmitriy/.cursor/projects/p/agent-tools/z.txt",
+            "/home/dmitriy/.gemini/history/h.jsonl",
+            "/home/dmitriy/.hermes/sessions/s.json",
+        ] {
+            assert_eq!(classify_kind(p), SourceKind::AgentHistory, "{p}");
+        }
+        // A real personal Telegram export is unaffected.
+        assert_eq!(
+            classify_kind("/home/dmitriy/knowledge/telegram/result.json"),
+            SourceKind::Telegram
+        );
+    }
+
+    #[test]
+    fn classify_telegram_file_path() {
+        assert_eq!(
+            classify_kind("/home/dmitriy/knowledge/telegram/export/result.json"),
+            SourceKind::Telegram
+        );
+    }
+
+    #[test]
+    fn default_name_is_last_path_component() {
+        assert_eq!(default_name("~/knowledge/telegram"), "telegram");
+    }
+
+    #[test]
+    fn source_toml_roundtrips_with_name_and_kind() {
+        let src = Source {
+            path: "~/knowledge/telegram".to_string(),
+            enabled: true,
+            mode: SourceMode::Explicit,
+            name: "telegram".to_string(),
+            kind: SourceKind::Telegram,
+        };
+        let serialised = toml::to_string(&src).expect("serialise");
+        let back: Source = toml::from_str(&serialised).expect("deserialise");
+        assert_eq!(back.name, "telegram");
+        assert_eq!(back.kind, SourceKind::Telegram);
+    }
+
+    #[test]
+    fn old_source_row_without_name_or_kind_still_loads() {
+        // A pre-Step-1 sy.toml row: only path/enabled/mode.
+        let old = r#"path = "~/docs"
+enabled = true
+"#;
+        let src: Source = toml::from_str(old).expect("back-compat deserialise");
+        assert_eq!(src.name, "");
+        assert_eq!(src.kind, SourceKind::Generic);
+        assert!(src.enabled);
+    }
+}

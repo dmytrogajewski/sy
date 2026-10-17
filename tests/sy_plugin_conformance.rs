@@ -27,23 +27,23 @@
 // pulls the production sources in via `#[path]`. Keeps the conformance
 // test driving the EXACT same supervisor / capability / install code
 // the bin runs in production.
-#[path = "../src/plugin/capability.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/capability.rs"]
 mod capability;
-#[path = "../src/plugin/host_fns.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/host_fns.rs"]
 mod host_fns;
-#[path = "../src/plugin/install.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/install.rs"]
 mod install;
-#[path = "../src/plugin/manifest.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/manifest.rs"]
 mod manifest;
-#[path = "../src/plugin/proc.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/proc.rs"]
 mod proc_mod;
-#[path = "../src/plugin/registry.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/registry.rs"]
 mod registry;
-#[path = "../src/plugin/rpc.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/rpc.rs"]
 mod rpc;
-#[path = "../src/plugin/sandbox.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/sandbox.rs"]
 mod sandbox;
-#[path = "../src/plugin/transport.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/transport.rs"]
 mod transport;
 
 /// Side-shim re-exports so the `#[path]`-imported source files'
@@ -107,7 +107,7 @@ fn locate_fake_binary() -> PathBuf {
     // Walk up to `…/target/<profile>/`.
     current.pop(); // sy_plugin_conformance-<hash>
     current.pop(); // deps
-                   // Now we're at `<profile>/`. The fake bin sits next to us.
+    // Now we're at `<profile>/`. The fake bin sits next to us.
     let candidate = current.join("sy-plugin-fake");
     if !candidate.is_file() {
         // Fallback: build the missing binary directly. `make test`

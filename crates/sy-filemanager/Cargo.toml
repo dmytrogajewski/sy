@@ -1,0 +1,53 @@
+[package]
+name = "sy-filemanager"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "sy-filemanager"
+path = "src/main.rs"
+
+[features]
+default = ["gui-iced", "file-iouring"]
+gui-iced = ["dep:iced", "dep:iced_layershell", "dep:syntect", "dep:sy-theme"]
+file-iouring = ["dep:tokio-uring"]
+
+[dependencies]
+anyhow.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+globset.workspace = true
+iced = { workspace = true, optional = true }
+iced_layershell = { workspace = true, optional = true }
+image.workspace = true
+libc.workspace = true
+minisign-verify.workspace = true
+nix = { workspace = true, features = ["resource"] }
+notify.workspace = true
+nucleo.workspace = true
+quick-xml.workspace = true
+sd-notify.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sy-core = { path = "../sy-core" }
+sy-ipc = { path = "../sy-ipc" }
+sy-theme = { path = "../sy-theme", optional = true }
+syntect = { workspace = true, optional = true }
+tokio.workspace = true
+tokio-stream.workspace = true
+tokio-util.workspace = true
+tokio-uring = { version = "0.5", optional = true }
+toml.workspace = true
+tracing.workspace = true
+trash.workspace = true
+tree_magic_mini.workspace = true
+ulid.workspace = true
+which.workspace = true
+xdg-mime.workspace = true
+zbus.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

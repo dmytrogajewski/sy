@@ -24,22 +24,22 @@
 // test crate has no access to the bin's `crate::file::…` paths so the
 // shim modules below mirror what `src/file/mod.rs` would expose.
 
-#[path = "../src/file/state/ops.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/ops.rs"]
 #[allow(dead_code)]
 mod ops;
-#[path = "../src/file/state/panes.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/panes.rs"]
 #[allow(dead_code)]
 mod panes;
-#[path = "../src/file/state/selection.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/selection.rs"]
 #[allow(dead_code)]
 mod selection;
 // Step 25 — command-bar state slice + nucleo-backed filename matcher,
 // mirrored at the test-crate root so `app.rs`'s `super::state::…` and
 // `super::search::…` lookups resolve under the integration-test build.
-#[path = "../src/file/state/commandbar.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/commandbar.rs"]
 #[allow(dead_code)]
 mod commandbar;
-#[path = "../src/file/search/filename.rs"]
+#[path = "../crates/sy-filemanager/src/file/search/filename.rs"]
 #[allow(dead_code)]
 mod file_search_filename;
 // Step 30 — knowledge integration. `app.rs::handle_knowledge_query`
@@ -50,17 +50,17 @@ mod file_search_filename;
 // `crate::knowledge::{ipc::HitRow, cli::search_hits}`, so a sibling
 // `mod knowledge` shim is declared further below with the minimum
 // surface those references resolve through.
-#[path = "../src/file/search/knowledge.rs"]
+#[path = "../crates/sy-filemanager/src/file/search/knowledge.rs"]
 #[allow(dead_code)]
 pub mod file_search_knowledge;
 // Step 30 — `KnowledgeState` slice of `State`. `app.rs::update`
 // reads `state.knowledge.{last_query, last_hits, status}` so the
 // production source needs to be reachable under `crate::knowledge`.
-#[path = "../src/file/state/knowledge.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/knowledge.rs"]
 #[allow(dead_code)]
 mod state_knowledge;
 // Step 31 — bookmarks module mirror.
-#[path = "../src/file/bookmarks.rs"]
+#[path = "../crates/sy-filemanager/src/file/bookmarks.rs"]
 #[allow(dead_code)]
 mod bookmarks;
 // Step 32 — mountinfo parser + udisks2 probe. `app.rs::run` reaches
@@ -68,12 +68,12 @@ mod bookmarks;
 // `Task::perform`; the integration-test build mirrors the production
 // source so the `#[path]`-imported `app.rs` resolves under the test
 // crate's `crate::fs::mounts` path.
-#[path = "../src/file/fs/mounts.rs"]
+#[path = "../crates/sy-filemanager/src/file/fs/mounts.rs"]
 #[allow(dead_code)]
 mod mounts;
 // `app.rs` boot path spawns `fs::walk::walk` to populate the panes;
 // mirror the source so the integration-test build resolves.
-#[path = "../src/file/fs/walk.rs"]
+#[path = "../crates/sy-filemanager/src/file/fs/walk.rs"]
 #[allow(dead_code)]
 mod walk;
 /// Step 32 — `super::fs::mounts` shim for the `#[path]`-imported
@@ -114,7 +114,7 @@ pub mod knowledge {
     }
 }
 
-#[path = "../src/file/state/preview.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/preview.rs"]
 #[allow(dead_code)]
 mod state_preview;
 
@@ -488,11 +488,11 @@ mod plugin {
 /// Step 29 — `dnd.rs` shim. Same `#[path]`-import as the production
 /// path so the `#[path]`-imported `app.rs`'s `super::dnd::…`
 /// resolution lands on the real wire helpers.
-#[path = "../src/file/dnd.rs"]
+#[path = "../crates/sy-filemanager/src/file/dnd.rs"]
 #[allow(dead_code)]
 mod dnd;
 
-#[path = "../src/file/app.rs"]
+#[path = "../crates/sy-filemanager/src/file/app.rs"]
 #[allow(dead_code)]
 mod app;
 

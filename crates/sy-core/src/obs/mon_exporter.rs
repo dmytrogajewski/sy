@@ -52,7 +52,7 @@ use metrics::{KeyName, Recorder, SharedString, Unit};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use tokio::task::JoinHandle;
 
-use crate::metrics::{CoreMetric, MetricKind, CORE_METRICS};
+use crate::metrics::{CORE_METRICS, CoreMetric, MetricKind};
 
 /// 0700 — owner-only, matches every other `$XDG_RUNTIME_DIR/sy/*`
 /// socket directory created by the workspace (e.g. sy-ipc's
@@ -174,10 +174,10 @@ impl Drop for UdsGuard {
 /// run in fresh processes (or accept the AlreadyInstalled error on
 /// subsequent installs within the same test binary).
 pub fn install(path: PathBuf) -> Result<UdsGuard, InstallError> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            create_runtime_dir(parent)?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        create_runtime_dir(parent)?;
     }
 
     let (recorder, exporter_future) = PrometheusBuilder::new()

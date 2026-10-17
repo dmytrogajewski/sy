@@ -126,9 +126,8 @@ with `memfd` over `SCM_RIGHTS` for media buffers ([PipeWire native
 protocol][pw1]); Wayland's `wl_shm` is the canonical
 SCM_RIGHTS+mmap pattern ([wayland-book/surfaces/shared-memory][wb1]).
 LSP `$/cancelRequest` is the canonical cancellation pattern; the
-race-free implementation requires registering `request_id →
-CancellationToken` before spawning the work ([SourceKit-LSP
-cancellation pattern][skl1]).
+request handling tracks a task by request ID so a cancellation
+notification can find and cancel it ([SourceKit-LSP request tracker][skl1]).
 
 **NPU/inference admission** — Triton has the most production-mature
 model: numeric priority, per-level `ModelQueuePolicy` with
@@ -181,7 +180,7 @@ needed.
 [nu1]: https://deepwiki.com/nushell/nushell
 [pw1]: https://docs.pipewire.org/page_native_protocol.html
 [wb1]: https://wayland-book.com/surfaces/shared-memory.html
-[skl1]: https://deepwiki.com/swiftlang/sourcekit-lsp/3.4-request-handling-and-cancellation
+[skl1]: https://raw.githubusercontent.com/swiftlang/sourcekit-lsp/main/Sources/SKTestSupport/CustomBuildServerTestProject.swift
 [t1]: https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/protocol/extension_schedule_policy.html
 [v1]: https://docs.vllm.ai/en/stable/api/vllm/v1/core/sched/scheduler/
 [rai1]: https://ryzenai.docs.amd.com/en/latest/modelrun.html

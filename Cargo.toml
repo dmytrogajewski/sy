@@ -5,12 +5,12 @@
 # vocabulary crate, lockstep-versioned, `publish = false`, with
 # `sy-core` kept deliberately minimal so it never becomes a hub-
 # rebuild bottleneck.
-members = [".", "crates/sy-core", "crates/sy-ipc", "crates/sy-testutils", "crates/sy-plugin-fake", "crates/sy-plugin-pdk", "crates/sy-plugin-md"]
+members = [".", "crates/sy-core", "crates/sy-ipc", "crates/sy-testutils", "crates/sy-plugin-fake", "crates/sy-plugin-pdk", "crates/sy-plugin-md", "crates/sy-power", "crates/sy-launcher", "crates/sy-agent", "crates/sy-aiplane", "crates/sy-theme", "crates/sy-filemanager", "crates/sy-auth", "crates/sy-knowledge", "crates/sy-monitor", "crates/sy-desktop-shell"]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [workspace.dependencies]
 # Versions + feature sets live here so future workspace members
@@ -338,7 +338,7 @@ default = ["gui-iced", "mon-exporter", "file-iouring"]
 # niri spawn-at-startup is fire-and-forget and silently swallows a
 # missing-feature stub. Disable with `--no-default-features` if you need
 # a CLI/MCP-only build.
-gui-iced = ["dep:iced", "dep:iced_layershell", "dep:syntect"]
+gui-iced = ["dep:iced", "dep:iced_layershell", "dep:syntect", "dep:sy-theme", "sy-filemanager/gui-iced", "sy-monitor/gui-iced", "sy-desktop-shell/gui-iced"]
 # Backwards-compat alias from the pre-Step-23 era when this feature was
 # `sy stack bar`-only. Kept for one release cycle so external builds
 # pinning `--features bar-iced` keep working; new call sites should use
@@ -359,7 +359,7 @@ test-npu = []
 # `sy_core::obs::mon_exporter::install(path)` when this feature is on
 # (Steps 10 + 20). Pure rollout switch — no behavioural change at the
 # workspace root until a daemon binds.
-mon-exporter = ["sy-core/mon-exporter"]
+mon-exporter = ["sy-core/mon-exporter", "sy-aiplane/mon-exporter", "sy-knowledge/mon-exporter", "sy-monitor/mon-exporter", "sy-desktop-shell/mon-exporter"]
 # sy-file-manager Step 17 (SPEC §3.2 row 4 — bulk-copy win): switch
 # `fs::copy` onto `tokio-uring` when the batch crosses the threshold
 # (>100 files OR >256 MiB). Default-on on Linux; the runtime degrades
@@ -367,7 +367,7 @@ mon-exporter = ["sy-core/mon-exporter"]
 # `tokio_uring::Runtime::new()` returns Err (old kernels, sandbox
 # without io_uring). Drop the feature (e.g. on non-Linux cross builds)
 # and the dep + io_uring dispatch fall out entirely.
-file-iouring = ["dep:tokio-uring"]
+file-iouring = ["dep:tokio-uring", "sy-filemanager/file-iouring"]
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
@@ -408,6 +408,14 @@ libc.workspace = true
 toml_edit.workspace = true
 sy-core = { version = "=0.1.0", path = "crates/sy-core" }
 sy-ipc = { version = "=0.1.0", path = "crates/sy-ipc" }
+sy-agent = { version = "=0.1.0", path = "crates/sy-agent" }
+sy-auth = { version = "=0.1.0", path = "crates/sy-auth" }
+sy-aiplane = { version = "=0.1.0", path = "crates/sy-aiplane", default-features = false }
+sy-knowledge = { version = "=0.1.0", path = "crates/sy-knowledge", default-features = false }
+sy-desktop-shell = { version = "=0.1.0", path = "crates/sy-desktop-shell", default-features = false }
+sy-monitor = { version = "=0.1.0", path = "crates/sy-monitor", default-features = false }
+sy-theme = { version = "=0.1.0", path = "crates/sy-theme", optional = true }
+sy-filemanager = { version = "=0.1.0", path = "crates/sy-filemanager", default-features = false }
 tokio-util.workspace = true
 # sy-file-manager Step 16 (`fs::copy`): `Stream<Item = OpEvent>` shim
 # over the executor-owned `mpsc::channel`. See workspace dep block.

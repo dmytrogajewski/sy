@@ -189,7 +189,7 @@ uses `multilingual-e5-base` (768-dim) instead of `-large`. See
 
 ### workload
 
-A `Workload` trait impl under `src/aiplane/workloads/` (`embed`,
+A `Workload` trait impl under `crates/sy-aiplane/src/aiplane/workloads/` (`embed`,
 `rerank`, `vad`, `stt`, `ocr`, `fake`) that declares an EP
 preference (`Vitisai | Cpu`), an input/output shape, and the ORT
 session bring-up logic; the aiplane registers each workload at

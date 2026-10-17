@@ -26,11 +26,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 
-use crate::types::{codes, Capability, HandlerError, RpcError};
+use crate::types::{Capability, HandlerError, RpcError, codes};
 
 /// Maximum frame payload in bytes (16 MiB). Mirrors
 /// `src/plugin/transport.rs::MAX_PAYLOAD_BYTES`.

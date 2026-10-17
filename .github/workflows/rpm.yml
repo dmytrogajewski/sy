@@ -1,0 +1,28 @@
+name: rpm
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        fedora: [43, 44, 45]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Podman
+        run: sudo apt-get update && sudo apt-get install -y podman
+      - name: Build RPMs
+        run: ./scripts/build-rpms.sh ${{ matrix.fedora }}
+      - name: Upload RPMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sy-fedora-${{ matrix.fedora }}
+          path: dist/rpm/f${{ matrix.fedora }}/*.rpm

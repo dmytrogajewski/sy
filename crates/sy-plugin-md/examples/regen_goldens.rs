@@ -18,7 +18,7 @@
 //! that bumped them.
 
 use std::path::PathBuf;
-use sy_plugin_md::render::{render_to_png, RenderOpts};
+use sy_plugin_md::render::{RenderOpts, render_to_png};
 
 fn main() -> Result<(), String> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

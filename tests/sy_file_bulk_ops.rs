@@ -19,44 +19,44 @@
 //!
 //! `#[path]` import pattern mirrors `tests/sy_file_ipc.rs`.
 
-#[path = "../src/file/state/ops.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/ops.rs"]
 #[allow(dead_code)]
 mod ops;
-#[path = "../src/file/state/panes.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/panes.rs"]
 #[allow(dead_code)]
 mod panes;
-#[path = "../src/file/state/selection.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/selection.rs"]
 #[allow(dead_code)]
 mod selection;
 
-#[path = "../src/file/fs/copy.rs"]
+#[path = "../crates/sy-filemanager/src/file/fs/copy.rs"]
 #[allow(dead_code)]
 mod file_fs_copy;
-#[path = "../src/file/fs/mime.rs"]
+#[path = "../crates/sy-filemanager/src/file/fs/mime.rs"]
 #[allow(dead_code)]
 mod file_fs_mime;
-#[path = "../src/file/fs/trash.rs"]
+#[path = "../crates/sy-filemanager/src/file/fs/trash.rs"]
 #[allow(dead_code)]
 mod file_fs_trash;
-#[path = "../src/file/fs/walk.rs"]
+#[path = "../crates/sy-filemanager/src/file/fs/walk.rs"]
 #[allow(dead_code)]
 mod file_fs_walk;
-#[path = "../src/file/fs/watch.rs"]
+#[path = "../crates/sy-filemanager/src/file/fs/watch.rs"]
 #[allow(dead_code)]
 mod file_fs_watch;
 
-#[path = "../src/file/ipc.rs"]
+#[path = "../crates/sy-filemanager/src/file/ipc.rs"]
 #[allow(dead_code)]
 mod ipc;
 
 // Step 31 — bookmarks module mirror so `ipc.rs::handle_open` resolves
 // `crate::file::bookmarks::Bookmarks` (the `state.bookmarks` slot).
-#[path = "../src/file/bookmarks.rs"]
+#[path = "../crates/sy-filemanager/src/file/bookmarks.rs"]
 #[allow(dead_code)]
 mod bookmarks;
 // Step 34 — keymap module mirror so the `#[path]`-imported `ipc.rs`'s
 // SIGHUP reload arm (`crate::file::keymap::…`) resolves.
-#[path = "../src/file/keymap.rs"]
+#[path = "../crates/sy-filemanager/src/file/keymap.rs"]
 #[allow(dead_code)]
 mod file_keymap;
 
@@ -67,7 +67,7 @@ mod file_keymap;
 // pulled in via `#[path]`; its `crate::knowledge::{ipc::HitRow,
 // cli::search_hits}` references resolve against the inline `knowledge`
 // shim below.
-#[path = "../src/file/search/knowledge.rs"]
+#[path = "../crates/sy-filemanager/src/file/search/knowledge.rs"]
 #[allow(dead_code)]
 mod file_search_knowledge;
 
@@ -158,7 +158,7 @@ use std::time::Duration;
 
 use file::state::State;
 use selection::SelectionSet;
-use tokio::sync::{oneshot, RwLock};
+use tokio::sync::{RwLock, oneshot};
 
 /// SPEC §3.3 row 5 + journey-J5 `<Shift>+arrow` beat: `add_range(a,
 /// b)` is inclusive on both endpoints (`{a, a+1, …, b}`) regardless of

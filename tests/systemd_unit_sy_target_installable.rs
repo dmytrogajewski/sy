@@ -34,11 +34,9 @@ fn sy_target_has_install_section_with_wantedby() {
             in_install = false;
             continue;
         }
-        if in_install {
-            if let Some(rest) = trimmed.strip_prefix("WantedBy=") {
-                saw_wantedby = true;
-                wantedby_value = Some(rest.to_string());
-            }
+        if in_install && let Some(rest) = trimmed.strip_prefix("WantedBy=") {
+            saw_wantedby = true;
+            wantedby_value = Some(rest.to_string());
         }
     }
 

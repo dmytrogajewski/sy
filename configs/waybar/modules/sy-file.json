@@ -1,9 +1,9 @@
 {
     "custom/sy-file": {
-        "exec":        "{{ home }}/.local/bin/sy file waybar",
+        "exec":        "{{ sy_bin }} file waybar",
         "return-type": "json",
         "interval":    2,
         "tooltip":     true,
-        "on-click":    "{{ home }}/.local/bin/sy file"
+        "on-click":    "{{ sy_bin }} file"
     }
 }

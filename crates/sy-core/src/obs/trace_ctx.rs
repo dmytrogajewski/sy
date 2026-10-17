@@ -208,8 +208,8 @@ fn build_trace_span(trace_id: &TraceId, parent: Option<&SpanId>) -> tracing::Spa
 mod tests {
     use super::*;
 
-    use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::Registry;
+    use tracing_subscriber::layer::SubscriberExt;
 
     const T_HEX: &str = "0af7651916cd43dd8448eb211c80319c";
     const PARENT_HEX: &str = "b7ad6b7169203331";

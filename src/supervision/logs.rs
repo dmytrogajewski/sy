@@ -20,7 +20,7 @@
 
 use std::os::unix::process::CommandExt;
 
-use crate::supervision::service::{exit, ServiceError};
+use crate::supervision::service::{ServiceError, exit};
 
 /// Options accepted by `logs()`. Constructed from the `ServiceCmd::Logs`
 /// variant in `service.rs::dispatch`.

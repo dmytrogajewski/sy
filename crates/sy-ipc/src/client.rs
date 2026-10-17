@@ -13,14 +13,14 @@ use std::path::Path;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{
-    unix::{OwnedReadHalf, OwnedWriteHalf},
     UnixStream,
+    unix::{OwnedReadHalf, OwnedWriteHalf},
 };
 use tokio_util::codec::{FramedRead, FramedWrite};
 use ulid::Ulid;
 
 use crate::codec::{RequestCodec, ResponseCodec};
-use crate::envelope::{Request, Response, SpanId, TraceId, SCHEMA_VERSION};
+use crate::envelope::{Request, Response, SCHEMA_VERSION, SpanId, TraceId};
 use crate::stream::EventCodec;
 use sy_core::Priority;
 
@@ -218,8 +218,8 @@ mod tests {
         // id. The precedence in `build_request` is
         // explicit-opts → ambient → fresh; this test pins the
         // ambient arm.
-        use tracing_subscriber::layer::SubscriberExt;
         use tracing_subscriber::Registry;
+        use tracing_subscriber::layer::SubscriberExt;
         const T: &str = "0af7651916cd43dd8448eb211c80319c";
         let subscriber = Registry::default().with(sy_core::obs::TraceCtxLayer::new());
         let dispatch = tracing::Dispatch::new(subscriber);

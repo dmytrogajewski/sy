@@ -1,0 +1,3 @@
+# Packaged desktop defaults. Personal knowledge sources and integration
+# credentials belong in the user's configuration, not in a shared RPM.
+theme = "black"

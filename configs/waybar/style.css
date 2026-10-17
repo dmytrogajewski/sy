@@ -196,7 +196,7 @@ tooltip {
 #custom-agents.awaiting { color: @red; }
 
 /* custom/sy-syauth — compact phone-as-key pill rendered by
- * `sy syauth --waybar` (see src/syauth.rs::render_pill). Text is
+ * `sy syauth --waybar` (see crates/sy-auth/src/syauth.rs::render_pill). Text is
  * always the 🔑 emoji (pair flow adds the 6-digit code beside it).
  * Color carries the state; full status goes to the tooltip.
  *   .ok            — phone reachable / in-flight challenge   → cyan

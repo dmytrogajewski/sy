@@ -29,7 +29,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::Serialize;
 use walkdir::WalkDir;
 
@@ -95,6 +95,8 @@ pub struct UnitDiff {
     pub updated: Vec<PathBuf>,
     /// Symlinks already pointing at the same source — no-op.
     pub unchanged: Vec<PathBuf>,
+    /// Stale sy-managed links whose source file was removed by a package upgrade.
+    pub removed: Vec<PathBuf>,
     /// Targets that are regular files (not symlinks); overwriting
     /// requires explicit `--yes`.
     pub update_requires_confirm: Vec<PathBuf>,
@@ -142,6 +144,26 @@ pub fn sync_units(opts: &ApplyOpts) -> Result<UnitDiff> {
         }
         classify_one(entry.path(), &opts.target_dir, &mut diff)?;
         collect_binds_to(entry.path(), &mut diff)?;
+    }
+
+    if opts.target_dir.is_dir() {
+        for entry in fs::read_dir(&opts.target_dir)? {
+            let entry = entry?;
+            let dest = entry.path();
+            if !entry.file_type()?.is_symlink() || opts.source_dir.join(entry.file_name()).exists()
+            {
+                continue;
+            }
+            let link = fs::read_link(&dest)?;
+            let source = if link.is_absolute() {
+                link
+            } else {
+                opts.target_dir.join(link)
+            };
+            if source.parent() == Some(opts.source_dir.as_path()) {
+                diff.removed.push(dest);
+            }
+        }
     }
 
     if opts.legacy_system_path.exists() {
@@ -276,6 +298,9 @@ fn apply_diff(opts: &ApplyOpts, diff: &UnitDiff) -> Result<()> {
     for dest in diff.created.iter().chain(diff.updated.iter()) {
         place_symlink(opts, dest)?;
     }
+    for dest in &diff.removed {
+        fs::remove_file(dest).with_context(|| format!("remove stale unit {}", dest.display()))?;
+    }
 
     if opts.yes {
         for dest in &diff.update_requires_confirm {
@@ -386,6 +411,9 @@ fn render_diff(diff: &UnitDiff, json: bool) -> Result<()> {
     }
     for p in &diff.unchanged {
         println!("  = {}", p.display());
+    }
+    for p in &diff.removed {
+        println!("  - {} (removed sy unit)", p.display());
     }
     for p in &diff.update_requires_confirm {
         println!(
@@ -515,6 +543,30 @@ mod tests {
     }
 
     #[test]
+    fn uninstalled_feature_unit_is_removed_but_foreign_link_is_preserved() {
+        let td = TempDir::new().unwrap();
+        let src = td.path().join("src");
+        let tgt = td.path().join("tgt");
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&tgt).unwrap();
+        let stale = tgt.join("sy-file.service");
+        std::os::unix::fs::symlink(src.join("sy-file.service"), &stale).unwrap();
+        std::os::unix::fs::symlink(
+            td.path().join("foreign.service"),
+            tgt.join("foreign.service"),
+        )
+        .unwrap();
+        let mut opts = ApplyOpts::for_test(src, tgt.clone(), empty_legacy(&td));
+        let diff = sync_units(&opts).unwrap();
+        assert_eq!(diff.removed, vec![stale.clone()]);
+        assert!(stale.symlink_metadata().is_ok());
+        opts.dry_run = false;
+        sync_units(&opts).unwrap();
+        assert!(stale.symlink_metadata().is_err());
+        assert!(tgt.join("foreign.service").symlink_metadata().is_ok());
+    }
+
+    #[test]
     fn diff_with_divergent_regular_file_requires_confirm() {
         let td = TempDir::new().unwrap();
         let src = td.path().join("src");
@@ -606,6 +658,7 @@ mod tests {
             "created",
             "updated",
             "unchanged",
+            "removed",
             "update_requires_confirm",
             "removed_stale_requires_confirm",
         ] {

@@ -5761,8 +5761,16 @@ dependencies = [
  "serde_json",
  "serde_yml",
  "sha2",
+ "sy-agent",
+ "sy-aiplane",
+ "sy-auth",
  "sy-core",
+ "sy-desktop-shell",
+ "sy-filemanager",
  "sy-ipc",
+ "sy-knowledge",
+ "sy-monitor",
+ "sy-theme",
  "syntect",
  "tempfile",
  "tiny-skia",
@@ -5785,6 +5793,77 @@ dependencies = [
  "xdg-mime",
  "zbus",
  "zstd",
+]
+
+[[package]]
+name = "sy-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "futures-util",
+ "globset",
+ "landlock",
+ "libc",
+ "libsystemd",
+ "rustix 1.1.4",
+ "seccompiler",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sy-core",
+ "sy-ipc",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "ulid",
+ "uuid",
+ "which",
+ "zstd",
+]
+
+[[package]]
+name = "sy-aiplane"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crossbeam-channel",
+ "futures-util",
+ "libc",
+ "metrics",
+ "metrics-util",
+ "ort",
+ "ort-sys",
+ "rustfft",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "sy-core",
+ "sy-ipc",
+ "tempfile",
+ "tokenizers",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-test",
+ "ulid",
+]
+
+[[package]]
+name = "sy-auth"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]
@@ -5812,6 +5891,75 @@ dependencies = [
 ]
 
 [[package]]
+name = "sy-desktop-shell"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "iced",
+ "iced_layershell",
+ "image",
+ "libc",
+ "sd-notify",
+ "serde",
+ "serde_json",
+ "sy-agent",
+ "sy-core",
+ "sy-ipc",
+ "sy-theme",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "ulid",
+ "uuid",
+ "walkdir",
+ "zbus",
+]
+
+[[package]]
+name = "sy-filemanager"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "chrono",
+ "clap",
+ "futures-util",
+ "globset",
+ "iced",
+ "iced_layershell",
+ "image",
+ "libc",
+ "minisign-verify",
+ "nix",
+ "notify",
+ "nucleo",
+ "quick-xml 0.36.2",
+ "sd-notify",
+ "serde",
+ "serde_json",
+ "sy-core",
+ "sy-ipc",
+ "sy-theme",
+ "syntect",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tokio-uring",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "trash",
+ "tree_magic_mini",
+ "ulid",
+ "which",
+ "xdg-mime",
+ "zbus",
+]
+
+[[package]]
 name = "sy-ipc"
 version = "0.1.0"
 dependencies = [
@@ -5828,6 +5976,71 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "ulid",
+]
+
+[[package]]
+name = "sy-knowledge"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "chrono",
+ "clap",
+ "globset",
+ "html2text",
+ "ignore",
+ "libc",
+ "notify",
+ "notify-debouncer-mini",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yml",
+ "sy-aiplane",
+ "sy-core",
+ "tempfile",
+ "tokio",
+ "toml",
+ "toml_edit 0.22.27",
+ "tracing",
+ "tracing-test",
+ "two_timer",
+ "which",
+]
+
+[[package]]
+name = "sy-launcher"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
+name = "sy-monitor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "clap",
+ "futures-util",
+ "iced",
+ "iced_layershell",
+ "libc",
+ "plotters",
+ "prometheus-parse",
+ "regex",
+ "rustix 1.1.4",
+ "sd-notify",
+ "serde",
+ "serde_json",
+ "sy-core",
+ "sy-ipc",
+ "sy-theme",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
  "ulid",
 ]
 
@@ -5865,6 +6078,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sy-power"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+]
+
+[[package]]
 name = "sy-testutils"
 version = "0.1.0"
 dependencies = [
@@ -5872,6 +6094,16 @@ dependencies = [
  "sy-core",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "sy-theme"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "iced",
+ "serde",
+ "toml",
 ]
 
 [[package]]

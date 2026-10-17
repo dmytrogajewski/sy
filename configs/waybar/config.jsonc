@@ -13,7 +13,17 @@
     "modules-center": ["niri/window"],
     // `custom/sy-mon` remains available for operators who want the
     // aggregate dashboard; per-plane read-only tiles stay on the rail.
-    "modules-right":  ["cpu", "memory", "custom/sy-gpu", "custom/sy-npu", "custom/sy-disk", "custom/sy-silent", "custom/sy-vol", "custom/sy-bl", "custom/sy-knowledge", "custom/agents", "custom/bt", "network", "custom/sy-portal", "custom/notif", "clock", "custom/sy-syauth", "custom/sy-profile", "custom/sy-bat"],
+    "modules-right":  ["cpu", "memory", "custom/sy-gpu", "custom/sy-npu", "custom/sy-disk", "custom/sy-silent", "custom/sy-vol", "custom/sy-bl"{% if features.knowledge %}, "custom/sy-knowledge"{% endif %},
+{% if features.agent %}        "custom/agents",
+{% endif %}        "custom/bt", "network", "custom/sy-portal", "custom/notif", "clock",
+{% if features.auth %}        "custom/sy-syauth",
+{% endif %}        "custom/sy-profile", "custom/sy-bat"{% if features.power %}, "custom/sy-power"{% endif %}],
+
+    "custom/sy-power": {
+        "format": "⏻",
+        "tooltip": "Power menu (Mod+Shift+Escape)",
+        "on-click": "{{ sy_bin }} power"
+    },
 
     "niri/workspaces": {
         "format": "{value}",
@@ -43,8 +53,8 @@
         "tooltip-format-wifi": "{essid}  {signalStrength}%  {ipaddr}\nleft-click: network menu · right-click: nmtui",
         "tooltip-format-ethernet": "{ifname}  {ipaddr}\nleft-click: network menu · right-click: nmtui",
         "tooltip-format-disconnected": "disconnected\nleft-click: network menu · right-click: nmtui",
-        "on-click": "{{ home }}/.local/bin/sy net",
-        "on-click-right": "{{ home }}/.local/bin/sy popup nmtui"
+        "on-click": "{{ sy_bin }} net",
+        "on-click-right": "{{ sy_bin }} popup nmtui"
     },
 
     // Captive-portal / no-internet indicator. Hidden (zero width) whenever any
@@ -54,69 +64,70 @@
     // opens the network menu. interval=10 reads NM's cached per-device
     // connectivity (no extra probe traffic).
     "custom/sy-portal": {
-        "exec":           "{{ home }}/.local/bin/sy net --waybar",
+        "exec":           "{{ sy_bin }} net --waybar",
         "return-type":    "json",
         "interval":       10,
         "signal":         17,
         "tooltip":        true,
         "on-click":       "xdg-open http://neverssl.com",
-        "on-click-right": "{{ home }}/.local/bin/sy net"
+        "on-click-right": "{{ sy_bin }} net"
     },
 
     "custom/agents": {
-        "exec":           "{{ home }}/.local/bin/sy agt waybar",
+        "exec":           "{{ sy_bin }} agt waybar",
         "return-type":    "json",
         "interval":       5,
         "signal":         9,
-        "on-click":       "{{ home }}/.local/bin/sy agt menu",
-        "on-click-right": "{{ home }}/.local/bin/sy popup agents"
+        "on-click":       "{{ sy_bin }} agt menu",
+        "on-click-right": "{{ sy_bin }} popup agents"
     },
 
-    "custom/sy-knowledge": {
-        "exec":            "{{ home }}/.local/bin/sy knowledge waybar",
+{% if features.knowledge %}    "custom/sy-knowledge": {
+        "exec":            "{{ sy_bin }} knowledge waybar",
         "return-type":     "json",
         "interval":        30,
         "signal":          11,
         "tooltip":         true,
-        "on-click":        "{{ home }}/.local/bin/sy knowledge pick",
-        "on-click-middle": "{{ home }}/.local/bin/sy knowledge toggle-pause"
+        "on-click":        "{{ sy_bin }} knowledge pick",
+        "on-click-middle": "{{ sy_bin }} knowledge toggle-pause"
     },
+{% endif %}
 
     "custom/notif": {
-        "exec": "{{ home }}/.local/bin/sy notif waybar",
+        "exec": "{{ sy_bin }} notif waybar",
         "return-type": "json",
         "interval": 60,
         "signal": 8,
-        "on-click": "{{ home }}/.local/bin/sy notif",
-        "on-click-right": "{{ home }}/.local/bin/sy notif clear"
+        "on-click": "{{ sy_bin }} notif",
+        "on-click-right": "{{ sy_bin }} notif clear"
     },
 
     "custom/bt": {
-        "exec": "{{ home }}/.local/bin/sy bt --waybar",
+        "exec": "{{ sy_bin }} bt --waybar",
         "return-type": "json",
         "interval": 5,
-        "on-click": "{{ home }}/.local/bin/sy bt"
+        "on-click": "{{ sy_bin }} bt"
     },
 
     // interval=1 is intentional for pair-flow latency: the LESC
     // confirmation popup must surface within ~1s of `syauth pair`
     // writing pair-request.json. The `signal` field (waybar SIGRTMIN+N
     // wakes) already covers on-demand refreshes for the five-state
-    // pill in src/syauth.rs::render_pill; do NOT raise this without
+    // pill in crates/sy-auth/src/syauth.rs::render_pill; do NOT raise this without
     // also wiring a signal sender on pair start.
     "custom/sy-syauth": {
-        "exec":            "{{ home }}/.local/bin/sy syauth --waybar",
+        "exec":            "{{ sy_bin }} syauth --waybar",
         "return-type":     "json",
         "interval":        1,
-        "on-click":        "{{ home }}/.local/bin/sy syauth accept",
-        "on-click-right":  "{{ home }}/.local/bin/sy syauth reject",
+        "on-click":        "{{ sy_bin }} syauth accept",
+        "on-click-right":  "{{ sy_bin }} syauth reject",
         "tooltip":         true
     },
 
     "clock": {
         "interval": 30,
         "format": "[{:%a %d %b  %H:%M}]",
-        "on-click": "{{ home }}/.local/bin/sy popup cal",
+        "on-click": "{{ sy_bin }} popup cal",
         "tooltip-format": "<tt><small>{calendar}</small></tt>",
         "calendar": {
             "mode": "month",
@@ -148,59 +159,59 @@
     },
 
     "custom/sy-gpu": {
-        "exec": "{{ home }}/.local/bin/sy gpu --waybar",
+        "exec": "{{ sy_bin }} gpu --waybar",
         "return-type": "json",
         "interval": 5,
         "signal": 15,
-        "on-click": "{{ home }}/.local/bin/foot -e {{ home }}/.local/bin/sy gpu"
+        "on-click": "{{ foot_bin }} -e {{ sy_bin }} gpu"
     },
 
     "custom/sy-npu": {
-        "exec": "{{ home }}/.local/bin/sy npu --waybar",
+        "exec": "{{ sy_bin }} npu --waybar",
         "return-type": "json",
         "interval": 2,
         "signal": 16,
-        "on-click": "{{ home }}/.local/bin/foot -e {{ home }}/.local/bin/sy npu"
+        "on-click": "{{ foot_bin }} -e {{ sy_bin }} npu"
     },
 
     "custom/sy-disk": {
-        "exec": "{{ home }}/.local/bin/sy disk --waybar",
+        "exec": "{{ sy_bin }} disk --waybar",
         "return-type": "json",
         "interval": 60,
         "signal": 13,
-        "on-click": "{{ home }}/.local/bin/sy disk"
+        "on-click": "{{ sy_bin }} disk"
     },
 
     "custom/sy-silent": {
-        "exec": "{{ home }}/.local/bin/sy silent --waybar",
+        "exec": "{{ sy_bin }} silent --waybar",
         "return-type": "json",
         "interval": 60,
         "signal": 14,
-        "on-click": "{{ home }}/.local/bin/sy silent"
+        "on-click": "{{ sy_bin }} silent"
     },
 
     "custom/sy-vol": {
-        "exec": "{{ home }}/.local/bin/sy vol --waybar",
+        "exec": "{{ sy_bin }} vol --waybar",
         "return-type": "json",
         "interval": 30,
         "signal": 11,
-        "on-click": "{{ home }}/.local/bin/sy vol pick",
-        "on-click-right": "{{ home }}/.local/bin/sy vol mute",
-        "on-scroll-up": "{{ home }}/.local/bin/sy vol up",
-        "on-scroll-down": "{{ home }}/.local/bin/sy vol down"
+        "on-click": "{{ sy_bin }} vol pick",
+        "on-click-right": "{{ sy_bin }} vol mute",
+        "on-scroll-up": "{{ sy_bin }} vol up",
+        "on-scroll-down": "{{ sy_bin }} vol down"
     },
 
     "custom/sy-bl": {
-        "exec": "{{ home }}/.local/bin/sy bright --waybar",
+        "exec": "{{ sy_bin }} bright --waybar",
         "return-type": "json",
         "interval": 60,
         "signal": 12,
-        "on-scroll-up": "{{ home }}/.local/bin/sy bright up",
-        "on-scroll-down": "{{ home }}/.local/bin/sy bright down"
+        "on-scroll-up": "{{ sy_bin }} bright up",
+        "on-scroll-down": "{{ sy_bin }} bright down"
     },
 
     "custom/sy-bat": {
-        "exec": "{{ home }}/.local/bin/sy bat --waybar",
+        "exec": "{{ sy_bin }} bat --waybar",
         "return-type": "json",
         "interval": 30
     },
@@ -208,14 +219,14 @@
     // Thin UI over Fedora tuned-ppd. `sy` owns no power policy and writes no
     // sysfs knobs: clicks only set the standard ActiveProfile D-Bus property.
     "custom/sy-profile": {
-        "exec":            "{{ home }}/.local/bin/sy profile --waybar",
+        "exec":            "{{ sy_bin }} profile --waybar",
         "return-type":     "json",
         "interval":        10,
         "signal":          18,
         "tooltip":         true,
-        "on-click":        "{{ home }}/.local/bin/sy profile next",
-        "on-click-middle": "{{ home }}/.local/bin/sy profile balanced",
-        "on-click-right":  "{{ home }}/.local/bin/sy profile"
+        "on-click":        "{{ sy_bin }} profile next",
+        "on-click-middle": "{{ sy_bin }} profile balanced",
+        "on-click-right":  "{{ sy_bin }} profile"
     },
 
     // sy-mon ROADMAP Step 22: one-shot tile sourced from the 1 Hz
@@ -226,10 +237,10 @@
     // also lives in configs/waybar/modules/sy-mon.json for operators
     // who pull individual modules into a custom config.
     "custom/sy-mon": {
-        "exec":        "{{ home }}/.local/bin/sy mon waybar",
+        "exec":        "{{ sy_bin }} mon waybar",
         "return-type": "json",
         "interval":    2,
         "tooltip":     true,
-        "on-click":    "{{ home }}/.local/bin/sy mon"
+        "on-click":    "{{ sy_bin }} mon"
     }
 }

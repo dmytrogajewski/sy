@@ -14,7 +14,7 @@ use std::process::Command;
 
 use anyhow::Result;
 
-use super::{find_panic_by_ts, EXIT_NOT_FOUND};
+use super::{EXIT_NOT_FOUND, find_panic_by_ts};
 
 /// Render one crash record by its `ts`. Drives the `sy crash show`
 /// dispatch arm; on "not found" it calls `std::process::exit(4)` so

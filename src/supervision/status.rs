@@ -24,7 +24,7 @@
 
 use serde::Serialize;
 
-use crate::supervision::service::{exit, ServiceError};
+use crate::supervision::service::{ServiceError, exit};
 
 /// SPEC §4.5 state table — the logical sy state derived from systemd's
 /// `ActiveState` + `SubState` + `Result` triple.

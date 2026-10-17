@@ -18,21 +18,21 @@
 
 #![cfg(feature = "gui-iced")]
 
-#[path = "../src/file/state/ops.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/ops.rs"]
 #[allow(dead_code)]
 mod ops;
-#[path = "../src/file/state/panes.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/panes.rs"]
 #[allow(dead_code)]
 mod panes;
-#[path = "../src/file/state/selection.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/selection.rs"]
 #[allow(dead_code)]
 mod selection;
 
-#[path = "../src/file/fs/copy.rs"]
+#[path = "../crates/sy-filemanager/src/file/fs/copy.rs"]
 #[allow(dead_code)]
 mod file_fs_copy;
 
-#[path = "../src/file/dnd.rs"]
+#[path = "../crates/sy-filemanager/src/file/dnd.rs"]
 #[allow(dead_code)]
 mod dnd;
 
@@ -51,8 +51,8 @@ mod file {
 use std::path::PathBuf;
 
 use dnd::{
-    parse_uri_list, paths_to_uri_list, DragAction, DragSource, DropAction, DropTarget,
-    URI_LIST_MIME,
+    DragAction, DragSource, DropAction, DropTarget, URI_LIST_MIME, parse_uri_list,
+    paths_to_uri_list,
 };
 
 /// Step 29 DoD bullet 1 — `paths_to_uri_list` emits the SPEC §3.3

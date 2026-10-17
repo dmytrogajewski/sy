@@ -314,7 +314,7 @@ fn verdict_report(
     let details = Some(json!({ "ready": ready, "total": total }));
     let fix = (!preps.is_empty()).then(|| {
         format!(
-            "source /opt/AMD/ryzenai/venv/bin/activate && {} (then `systemctl --user restart sy-knowledge.service`)",
+            "source /opt/AMD/ryzenai/venv/bin/activate && {} (then `systemctl --user restart sy-aiplane.service`)",
             preps.join(" && ")
         )
     });
@@ -425,7 +425,7 @@ impl QdrantVersionMin {
     /// Classify a (possibly absent) root body into a `CheckResult`. Pure
     /// over its input so the pass/fail/warn mapping is unit-testable.
     fn classify(&self, root_body: Option<String>) -> CheckResult {
-        use crate::knowledge::qdrant::{meets_min_version, parse_version, MIN_HYBRID_VERSION};
+        use crate::knowledge::qdrant::{MIN_HYBRID_VERSION, meets_min_version, parse_version};
         let (min_major, min_minor) = MIN_HYBRID_VERSION;
         match root_body.as_deref().and_then(parse_version) {
             Some(v) if meets_min_version(v, MIN_HYBRID_VERSION) => CheckResult {
@@ -515,12 +515,7 @@ impl IpcEndpoint {
 
     /// The user unit that owns this socket, or `None` when no unit does.
     ///
-    /// Not `format!("sy-{endpoint}.service")`: the aiplane facade is served
-    /// by the knowledge daemon on `sy-knowledge.sock`
-    /// (`aiplane::ipc::socket_path`), and the agent daemon's unit is
-    /// `sy-agentd.service`. The interpolation used to advise
-    /// `systemctl --user start sy-aiplane.service` — a unit that has never
-    /// existed — on a host whose knowledge plane was down.
+    /// The agent endpoint is named `agt` but its unit is `sy-agentd.service`.
     /// Swap the unit-state probe (tests).
     #[cfg(test)]
     fn with_unit_state(mut self, probe: fn(&str) -> Option<bool>) -> Self {
@@ -530,7 +525,8 @@ impl IpcEndpoint {
 
     pub fn unit(&self) -> Option<&'static str> {
         match self.endpoint {
-            "knowledge" | "aiplane" => Some("sy-knowledge.service"),
+            "knowledge" => Some("sy-knowledge.service"),
+            "aiplane" => Some("sy-aiplane.service"),
             "agt" => Some("sy-agentd.service"),
             "stack" => Some("sy-stack-bar.service"),
             _ => None,
@@ -1230,18 +1226,19 @@ fn throttle_verdict(
             ),
         );
     }
-    if let (Some(high), Some(peak)) = (high, peak) {
-        if high > 0 && peak as f64 >= high as f64 * CGROUP_PEAK_HEADROOM_WARN {
-            return (
-                Status::Warn,
-                format!(
-                    "peak {} MiB is within {:.0}% of MemoryHigh {} MiB",
-                    peak / 1024 / 1024,
-                    CGROUP_PEAK_HEADROOM_WARN * 100.0,
-                    high / 1024 / 1024
-                ),
-            );
-        }
+    if let (Some(high), Some(peak)) = (high, peak)
+        && high > 0
+        && peak as f64 >= high as f64 * CGROUP_PEAK_HEADROOM_WARN
+    {
+        return (
+            Status::Warn,
+            format!(
+                "peak {} MiB is within {:.0}% of MemoryHigh {} MiB",
+                peak / 1024 / 1024,
+                CGROUP_PEAK_HEADROOM_WARN * 100.0,
+                high / 1024 / 1024
+            ),
+        );
     }
     (
         Status::Pass,
@@ -1482,10 +1479,11 @@ mod tests {
         );
         assert_eq!(fail.status, Status::Fail);
         assert_eq!(fail.message.as_deref(), Some("embed: nothing loadable"));
-        assert!(fail
-            .fix
-            .as_deref()
-            .is_some_and(|f| f.contains("--workload embed")));
+        assert!(
+            fail.fix
+                .as_deref()
+                .is_some_and(|f| f.contains("--workload embed"))
+        );
 
         // Same host, only the optional reranker missing -> warn.
         let warn = verdict_report(
@@ -1512,8 +1510,7 @@ mod tests {
             let path = Path::new("configs/systemd/user").join(unit);
             assert!(path.is_file(), "{} -> {unit} missing", ep.name());
         }
-        // The aiplane facade rides on the knowledge daemon's socket.
-        assert_eq!(IpcEndpoint::aiplane().unit(), Some("sy-knowledge.service"));
+        assert_eq!(IpcEndpoint::aiplane().unit(), Some("sy-aiplane.service"));
         assert_eq!(IpcEndpoint::agt().unit(), Some("sy-agentd.service"));
     }
 
@@ -1523,10 +1520,11 @@ mod tests {
         let sock = std::path::Path::new("/run/user/1000/sy-knowledge.sock");
         let res = ep.classify_missing(sock, Some(true));
         assert_eq!(res.status, Status::Warn);
-        assert!(res
-            .message
-            .as_deref()
-            .is_some_and(|m| m.contains("failing to start")));
+        assert!(
+            res.message
+                .as_deref()
+                .is_some_and(|m| m.contains("failing to start"))
+        );
         assert!(
             res.fix
                 .as_deref()
@@ -1646,16 +1644,19 @@ mod tests {
     /// crate-wide canonical lock so we also serialise against
     /// `aiplane::ipc::tests`, which dial sockets resolved from the
     /// same env var.
-    use crate::aiplane::TEST_ENV_LOCK as IPC_ENV_LOCK;
+    use crate::TEST_ENV_LOCK as IPC_ENV_LOCK;
 
     fn with_runtime_dir<F: FnOnce()>(dir: &std::path::Path, f: F) {
         let _guard = IPC_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prev = env::var("XDG_RUNTIME_DIR").ok();
-        env::set_var("XDG_RUNTIME_DIR", dir);
+        // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+        unsafe { env::set_var("XDG_RUNTIME_DIR", dir) };
         f();
         match prev {
-            Some(v) => env::set_var("XDG_RUNTIME_DIR", v),
-            None => env::remove_var("XDG_RUNTIME_DIR"),
+            // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+            Some(v) => unsafe { env::set_var("XDG_RUNTIME_DIR", v) },
+            // SAFETY: this test serializes its environment override with the existing test lock and restores it before release.
+            None => unsafe { env::remove_var("XDG_RUNTIME_DIR") },
         }
     }
 

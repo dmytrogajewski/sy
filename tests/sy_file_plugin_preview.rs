@@ -26,26 +26,26 @@
 // sources in directly. The set covers every module
 // `src/file/plugin_bridge.rs` ultimately reaches for transitively.
 
-#[path = "../src/plugin/capability.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/capability.rs"]
 mod capability;
-#[path = "../src/plugin/host_fns.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/host_fns.rs"]
 mod host_fns;
-#[path = "../src/plugin/install.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/install.rs"]
 mod install;
-#[path = "../src/plugin/manifest.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/manifest.rs"]
 mod manifest;
-#[path = "../src/plugin/proc.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/proc.rs"]
 mod proc_mod;
-#[path = "../src/plugin/registry.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/registry.rs"]
 mod registry;
-#[path = "../src/plugin/rpc.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/rpc.rs"]
 mod rpc;
-#[path = "../src/plugin/sandbox.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/sandbox.rs"]
 mod sandbox;
-#[path = "../src/plugin/transport.rs"]
+#[path = "../crates/sy-filemanager/src/plugin/transport.rs"]
 mod transport;
 
-#[path = "../src/file/plugin_bridge.rs"]
+#[path = "../crates/sy-filemanager/src/file/plugin_bridge.rs"]
 #[allow(dead_code)]
 mod plugin_bridge;
 
@@ -252,7 +252,7 @@ network = []
 exec = []
 
 [limits]
-memory_mb = 256
+memory_mb = 512
 cpu_seconds = 30
 nofile = 256
 spawn_timeout_ms = 2000

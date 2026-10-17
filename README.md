@@ -2,10 +2,10 @@
 
 <img src="assets/sy.png" alt="sy mascot — a tiny kitten" align="right" width="220" />
 
-An **Agentic OS layer for Fedora** — a single Rust binary plus
-declarative configs that turn a stock Fedora 43 laptop into an
+An **Agentic OS layer for Fedora** — a small command launcher, feature
+executables, and declarative configs that turn a stock Fedora laptop into an
 agent-first workstation. One repo, one source of truth, zero
-snowflakes: `cargo build --release && ./target/release/sy apply` on a
+snowflakes: `make install && sy apply` from a checkout on a
 fresh machine reproduces the entire system.
 
 You get a desktop that matches this git tree, search over folders
@@ -16,7 +16,7 @@ them. The story is
 [What sy is](docs/explanation/what-sy-is.md); the rest of the docs
 starts at [Start here](docs/intro.md).
 
-![sy sits on Fedora; you and an agent drive the same binary](docs/img/sy-stack.svg)
+![sy sits on Fedora; you and an agent use the same command surface](docs/img/sy-stack.svg)
 
 ```
 sy apply              # render configs/* → ~/.config/, ~/.local/share/, /etc/* (via diff)
@@ -29,13 +29,14 @@ sy spark HOST …       # remote DGX Spark model appliance
 sy auto               # auto-configure MCP servers across agents (Claude, …)
 sy stack bar          # layer-shell waybar replacement
 sy profile performance # switch Fedora's tuned-ppd profile (alias: sy pwr)
-sy syauth doctor      # phone-as-key sudo (PAM + BlueZ + Android)
+sy syauth doctor      # optional phone-as-key sudo controls (PAM + BlueZ + Android)
 …
 ```
 
-`sy` is the orchestrator. Everything below is a
-[*plane*](docs/reference/glossary.md#plane) exposed by the same
-binary, supervised by the same user-level `sy.target`, and reachable
+`sy` is the common command entry point. Power, agents, authentication, AI workloads,
+knowledge, monitoring, the desktop shell, and the file manager have separate
+executables and crates. Each
+[*plane*](docs/reference/glossary.md#plane) is supervised by the user-level `sy.target` and reachable
 over the same CLIG + JSON-over-stdio surface (so an agent can drive
 any plane the same way a human can). See [`CLAUDE.md`](CLAUDE.md)
 for the "no snowflakes" rule that drives the single-binary choice
@@ -46,6 +47,71 @@ re-exec dance, snowflake, VitisAI EP, …) see the
 story, tutorials, how-tos, reference) lives under `docs/` and is
 built by Docusaurus in `website/` — `cd website && npm start` to
 preview.
+
+## Fedora RPMs
+
+`make rpm` builds Fedora 43, 44, and 45 RPMs in Fedora containers using Podman
+or Docker. Use `make rpm FEDORA=44` for one release. CI runs the same script
+and uploads RPM artifacts. The output is under `dist/rpm/f43/` and
+`dist/rpm/f44/` and `dist/rpm/f45/`. `make rpm-native` builds the running Fedora release with
+the host RPM and Rust toolchain when its build dependencies are installed.
+Container builds retain DNF and Cargo caches under `dist/rpm/` so an interrupted
+build can resume without fetching completed dependencies again.
+
+Install the `sy` base RPM and only the feature RPMs you need. `sy-system-power`
+provides the power menu, `sy-system-agent` provides `agt`, `policy`, and
+`approve`, `sy-system-auth` provides `syauth` and its SELinux policy sources,
+`sy-system-aiplane` provides AI workload commands and a standalone user daemon, and
+`sy-filemanager` provides the file manager, its plugin host, and the Markdown
+previewer. `sy-system-knowledge` provides semantic search and its user units;
+`sy-system-monitor` provides the metrics collector and dashboard;
+`sy-desktop-shell` provides the bar and applets. These work without the desktop
+configuration RPM. `sy-system-aiplane-ryzenai` adds NPU boot integration and
+the post-upgrade check; it requires an external AMD runtime. `sy-desktop`
+contains the declarative niri and Waybar configuration and pulls in the shell.
+Its RPM ships a generic `sy.toml`; the checkout's personal settings are not
+included in the source or binary RPM.
+Run `sy --root /usr/share/sy apply` to
+render packaged configs and sync user units. RPM configs call `/usr/bin/sy`,
+and `sy apply` does not copy the packaged binary into `~/.local/bin`.
+Waybar tiles and niri bindings for optional packages appear only when those
+packages are installed at apply time.
+After a feature RPM is removed, `sy apply` removes stale user-unit links
+and copied config files it last wrote. It keeps files edited since the
+previous apply.
+After a local build, `make reinstall-rpm` reinstalls features already installed
+on the host and installs the base package if needed. Use
+`make reinstall-rpm RPM_ARGS=--all` to install every built feature on a
+fresh host. The script applies desktop config when `sy-desktop` is selected;
+otherwise it reloads an available user systemd manager. On an
+NPU host with `sy-system-aiplane-ryzenai`, run `/usr/share/sy/scripts/check-npu-upgrade.sh` after each Fedora upgrade;
+it checks the device and AMD runtime paths, then sends an
+embed request through the running VitisAI daemon and prints Fedora, kernel,
+and installed AMD/XRT package versions for the upgrade record. Proprietary
+Ryzen AI/XRT packages and model files are not included in these RPMs. The
+VitisAI adapter is currently qualified against Ryzen AI 1.7; the preflight
+reports the changed 1.8 layout as incompatible until it is tested on a host
+with that runtime. See [the Fedora upgrade investigation](specs/research/ryzenai-fedora-upgrade-20261017.md).
+For a fresh NPU host, run `/usr/share/sy/scripts/install-system-npu.sh`
+after installing its AMD runtime package; the script installs sy's dracut
+and systemd integration from the packaged configuration.
+
+Packaged `sy knowledge` stores source selections in
+`$XDG_CONFIG_HOME/sy/sy.toml` (or `~/.config/sy/sy.toml`). Set
+`SY_KNOWLEDGE_CONFIG_PATH` to choose another file. Qdrant remains an external
+runtime for the optional knowledge service.
+
+`sy power` opens the desktop power menu when `sy-system-power` is installed. `Mod+Shift+Escape` and the Waybar
+power icon open the same menu. `sy power reboot --dry-run --json` previews
+the exact command; `--yes` skips the confirmation picker for automation.
+
+`systemctl --user start sy-aiplane.service` starts the optional inference
+daemon. It owns `$XDG_RUNTIME_DIR/sy-aiplane.sock` and serves `sy aiplane`
+commands independently of knowledge. When the AI RPM is installed, knowledge
+uses that socket for embedding, reranking, and transcription; it pauses
+indexing while the AI service is unavailable. Restart a previously running
+`sy-knowledge.service` after installing the AI RPM so it releases its old
+in-process supervisor before starting `sy-aiplane.service`.
 
 ## Planes
 
@@ -62,7 +128,7 @@ what to load at start-up.
 - Re-exec dance: `aiplane::reexec` sets `LD_LIBRARY_PATH`,
   `ORT_DYLIB_PATH` and the `RYZEN_AI_*` env before any thread spawns
   so the AMD venv loads correctly.
-- Workloads ship under `src/aiplane/workloads/` — currently `embed`
+- Workloads ship under `crates/sy-aiplane/src/aiplane/workloads/` — currently `embed`
   (multilingual-e5-base, 768-dim), with `rerank | vad | stt | ocr`
   scaffolds.
 - A `workloads::fake` impl returns deterministic vectors so daemon

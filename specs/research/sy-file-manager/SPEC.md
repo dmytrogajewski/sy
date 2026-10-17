@@ -666,7 +666,7 @@ thing.
 - **Workload**: not applicable.
 
 [yazi]: https://github.com/sxyazi/yazi
-[yazi-pi]: https://deepwiki.com/sxyazi/yazi/4.4-plugin-api-reference
+[yazi-pi]: https://yazi-rs.github.io/docs/plugins/overview/
 [niri]: https://github.com/niri-wm/niri
 [niri-design]: https://github.com/niri-wm/niri/wiki/Development:-Design-Principles
 [niri-rules]: https://github.com/niri-wm/niri/wiki/Configuration:-Window-Rules

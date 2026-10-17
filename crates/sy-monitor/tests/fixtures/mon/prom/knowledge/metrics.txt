@@ -1,0 +1,3 @@
+# HELP sy_queue_depth Scheduler queue depth.
+# TYPE sy_queue_depth gauge
+sy_queue_depth{kind="search"} 0

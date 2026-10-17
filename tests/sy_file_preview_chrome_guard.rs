@@ -38,17 +38,17 @@ use std::time::SystemTime;
 // Cross-compilation builds without the feature skip the e2e
 // entirely (the previewer doesn't exist in that build shape).
 #[cfg(feature = "gui-iced")]
-#[path = "../src/file/state/preview.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/preview.rs"]
 #[allow(dead_code)]
 mod state_preview;
 
 #[cfg(feature = "gui-iced")]
-#[path = "../src/file/state/selection.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/selection.rs"]
 #[allow(dead_code)]
 mod selection;
 
 #[cfg(feature = "gui-iced")]
-#[path = "../src/file/state/panes.rs"]
+#[path = "../crates/sy-filemanager/src/file/state/panes.rs"]
 #[allow(dead_code)]
 mod panes;
 
@@ -86,10 +86,10 @@ fn proc_walk_count(name: &str) -> usize {
             continue;
         }
         let comm_path = entry.path().join("comm");
-        if let Ok(comm) = std::fs::read_to_string(&comm_path) {
-            if comm.trim() == name {
-                n += 1;
-            }
+        if let Ok(comm) = std::fs::read_to_string(&comm_path)
+            && comm.trim() == name
+        {
+            n += 1;
         }
     }
     n
@@ -225,7 +225,7 @@ fn sy_preview_dispatch_pdf(_path: &std::path::Path) {
 // Production previewer's text module. `#[path]`-imported the same way
 // the rest of the integration tests pull in plane internals.
 #[cfg(feature = "gui-iced")]
-#[path = "../src/file/view/preview/text.rs"]
+#[path = "../crates/sy-filemanager/src/file/view/preview/text.rs"]
 #[allow(dead_code)]
 mod text_preview;
 

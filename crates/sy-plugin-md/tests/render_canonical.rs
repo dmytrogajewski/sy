@@ -10,8 +10,8 @@
 //! ```
 
 use std::path::PathBuf;
-use sy_plugin_md::ahash::{hamming, hash_png, HAMMING_BUDGET};
-use sy_plugin_md::render::{render_to_png, RenderOpts};
+use sy_plugin_md::ahash::{HAMMING_BUDGET, hamming, hash_png};
+use sy_plugin_md::render::{RenderOpts, render_to_png};
 
 /// Fixture root next to this test file. `CARGO_MANIFEST_DIR` resolves
 /// to `crates/sy-plugin-md`, and we walk into `tests/fixtures/`.

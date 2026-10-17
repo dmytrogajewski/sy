@@ -34,10 +34,10 @@
 //!
 //! It needs no NPU and no qdrant; it is deterministic and self-contained.
 
-#[path = "../src/knowledge/calibrate.rs"]
+#[path = "../crates/sy-knowledge/src/knowledge/calibrate.rs"]
 mod calibrate;
 
-#[path = "../src/knowledge/sparse.rs"]
+#[path = "../crates/sy-knowledge/src/knowledge/sparse.rs"]
 mod sparse;
 
 /// Stable blake3-derived point id for a chunk — an exact inline mirror of

@@ -18,7 +18,7 @@
 
 use std::path::PathBuf;
 use std::process::Command;
-use sy_plugin_md::render::{render_to_png, RenderOpts};
+use sy_plugin_md::render::{RenderOpts, render_to_png};
 
 fn fixture_md() -> String {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/preview-sample.md");

@@ -67,12 +67,10 @@ fn binds_parsed_by_niri_validate() {
                 path.display()
             )
         });
-        // Loose match — the productivised binding is
-        // `spawn "{{ home }}/.local/bin/sy" "file" ...` so the test
-        // accepts either the bare `"sy"` token or the `.local/bin/sy`
-        // tail (the latter matches the productivised form).
+        // `sy_bin` resolves to /usr/bin/sy in RPM installs and to the
+        // user's local binary when rendering a checkout.
         assert!(
-            action.contains("\"sy\"") || action.contains("\"sy ") || action.contains("/bin/sy\""),
+            action.contains("\"{{ sy_bin }}\"") || action.contains("\"sy\""),
             "step34 — `{bind}` action must dispatch to `sy`: {action}"
         );
         assert!(

@@ -1,4 +1,5 @@
 /target
+/dist/
 
 # fastembed downloaded model weights (~2-3 GB). Pre-NPU codepath; the
 # new VitisAI pipeline keeps its artifacts under ~/.cache/sy/npu-embed

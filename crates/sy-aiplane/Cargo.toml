@@ -1,0 +1,40 @@
+[package]
+name = "sy-aiplane"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "sy-system-aiplane"
+path = "src/main.rs"
+
+[features]
+default = ["mon-exporter"]
+mon-exporter = ["sy-core/mon-exporter"]
+test-npu = []
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+crossbeam-channel.workspace = true
+futures-util.workspace = true
+libc.workspace = true
+metrics.workspace = true
+ort.workspace = true
+ort-sys.workspace = true
+rustfft.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sy-core = { path = "../sy-core" }
+sy-ipc = { path = "../sy-ipc" }
+tokenizers.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+metrics-util.workspace = true
+tempfile.workspace = true
+tracing-test = { version = "0.2", features = ["no-env-filter"] }

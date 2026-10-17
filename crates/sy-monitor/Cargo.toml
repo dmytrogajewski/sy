@@ -1,0 +1,40 @@
+[package]
+name = "sy-monitor"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "sy-system-monitor"
+path = "src/main.rs"
+
+[features]
+default = ["gui-iced", "mon-exporter"]
+gui-iced = ["dep:iced", "dep:iced_layershell", "dep:regex", "dep:plotters", "dep:sy-theme"]
+mon-exporter = ["sy-core/mon-exporter"]
+
+[dependencies]
+anyhow.workspace = true
+arc-swap.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+iced = { workspace = true, optional = true }
+iced_layershell = { workspace = true, optional = true }
+libc.workspace = true
+plotters = { workspace = true, optional = true }
+prometheus-parse.workspace = true
+regex = { workspace = true, optional = true }
+rustix.workspace = true
+sd-notify.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sy-core = { path = "../sy-core" }
+sy-ipc = { path = "../sy-ipc" }
+sy-theme = { path = "../sy-theme", optional = true }
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

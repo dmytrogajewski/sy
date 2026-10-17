@@ -5,7 +5,7 @@ JSON-RPC. Each tool is a thin wrapper around a `file.*` IPC call to
 the running daemon (`$XDG_RUNTIME_DIR/sy-file.sock`, or
 `$SY_FILE_SOCK`).
 
-Source of truth: `src/file/mcp.rs`. For flags and exit codes, see
+Source of truth: `crates/sy-filemanager/src/file/mcp.rs`. For flags and exit codes, see
 [the CLI reference](cli.md#sy-file). To open the window as a human,
 see [browse files with sy file](../tutorials/browse-your-files.md).
 

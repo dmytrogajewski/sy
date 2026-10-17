@@ -1,5 +1,5 @@
 //! Process-only Sparkplane integration; no model, engine or appliance policy.
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -7,7 +7,7 @@ use std::{
     fs,
     io::Read,
     os::unix::{
-        fs::{symlink, PermissionsExt},
+        fs::{PermissionsExt, symlink},
         process::CommandExt,
     },
     path::{Path, PathBuf},

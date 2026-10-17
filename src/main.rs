@@ -8,51 +8,52 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use minijinja::Environment;
-use settings::{load_sy_file, SyFile};
+use settings::{SyFile, load_sy_file};
 use walkdir::WalkDir;
 
-mod agt;
-mod aiplane;
-mod auto;
-mod auto_mcp;
-mod bat;
-mod bright;
-mod bt;
-mod cal;
+use sy_agent::agt;
+use sy_aiplane::aiplane;
+use sy_knowledge::{auto, knowledge};
+
+#[cfg(test)]
+static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+use sy_desktop_shell::bat;
+use sy_desktop_shell::bright;
+use sy_desktop_shell::bt;
+use sy_desktop_shell::cal;
 mod crash;
-mod disk;
+mod desktop_paths;
+use sy_desktop_shell::disk;
 mod doctor;
+mod feature_exec;
 mod fido;
-mod file;
-mod gpu;
+use sy_desktop_shell::gpu;
+use sy_filemanager::file;
 mod ipc_cli;
-mod knowledge;
 mod mon;
-#[cfg(feature = "mon-exporter")]
-mod mon_exporter;
-mod net;
-mod notif;
-mod npu;
+use sy_desktop_shell::net;
+use sy_desktop_shell::notif;
+use sy_desktop_shell::npu;
 // `Cmd::Plugin` reaches the full runtime through `plugin::cli::dispatch`.
-mod plugin;
-mod popup;
-mod profile;
+use sy_desktop_shell::popup;
+use sy_desktop_shell::profile;
+use sy_filemanager::plugin;
 mod settings;
-mod silent;
-mod sound;
+use sy_desktop_shell::silent;
+use sy_desktop_shell::sound;
 mod sparkplane_bridge;
-mod stack;
+use sy_desktop_shell::stack;
 mod supervision;
-mod syauth;
+use sy_auth::syauth;
 mod themes;
-mod vol;
-mod wallpaper;
-mod waybar;
-mod wifi;
-mod wwan;
+use sy_desktop_shell::vol;
+use sy_desktop_shell::wallpaper;
+use sy_desktop_shell::waybar;
+use sy_desktop_shell::wifi;
+use sy_desktop_shell::wwan;
 
 /// sy — apply niri rice configs with themes and templating.
 #[derive(Parser)]
@@ -150,6 +151,22 @@ enum Cmd {
     Cal,
     /// Fuzzel-based wifi picker via nmcli
     Wifi,
+    /// Session power menu (lock, logout, suspend, reboot, poweroff).
+    ///
+    /// Examples: sy power; sy power reboot --dry-run --json; sy power lock --yes
+    Power {
+        /// Action to run; omit to open the menu.
+        action: Option<String>,
+        /// Print the command without running it.
+        #[arg(long, env = "SY_POWER_DRY_RUN")]
+        dry_run: bool,
+        /// Skip the confirmation menu.
+        #[arg(long, env = "SY_POWER_YES")]
+        yes: bool,
+        /// Emit a machine-readable result.
+        #[arg(long, env = "SY_POWER_JSON")]
+        json: bool,
+    },
     /// Fuzzel network dropdown (wifi, VPN, WWAN, toggles); `--waybar` emits
     /// the captive-portal indicator tile as JSON.
     Net {
@@ -404,7 +421,9 @@ fn main() -> Result<()> {
     }
     // Must run before any threads spawn: re-exec with the AMD venv's
     // LD_LIBRARY_PATH + ORT_DYLIB_PATH baked in (no-op when absent).
-    aiplane::reexec::maybe_reexec_with_amd_env();
+    if matches!(&cli.command, Cmd::Aiplane { .. } | Cmd::Knowledge { .. }) {
+        aiplane::reexec::maybe_reexec_with_amd_env();
+    }
     // SPEC §4.6 Step 1 + BUG-20260927-1500: install the CLI subscriber unless
     // the subcommand is a plane that installs its own. Guard lives to `main`'s end.
     let _obs_guard = sy_core::obs::init_cli_unless(cli.command.installs_own_subscriber())?;
@@ -444,12 +463,16 @@ fn run(cli: Cli) -> Result<()> {
     let resolve_repo = || -> Result<(PathBuf, SyFile, PathBuf)> {
         let root = match &cli.root {
             Some(p) => p.clone(),
-            None => find_root().context(
+            None => desktop_paths::find_root().context(
                 "could not find repo root — expected a parent directory containing both configs/ and themes/",
             )?,
         };
         let syf = load_sy_file(&root)?;
-        let target = cli.target.clone().map(Ok).unwrap_or_else(default_target)?;
+        let target = cli
+            .target
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(desktop_paths::default_target)?;
         Ok((root, syf, target))
     };
 
@@ -473,7 +496,7 @@ fn run(cli: Cli) -> Result<()> {
             let name = theme
                 .or(syf.theme.clone())
                 .unwrap_or_else(|| DEFAULT_THEME.to_string());
-            let ctx = load_theme(&root, &name)?;
+            let ctx = themes::load(&root, &name)?;
             // `--diff` is a documented alias for `--dry-run --json`.
             let dry = dry_run || diff;
             sparkplane_bridge::apply_cli(syf.integrations.sparkplane.as_ref(), dry, false)?;
@@ -489,7 +512,7 @@ fn run(cli: Cli) -> Result<()> {
             let name = theme
                 .or(syf.theme.clone())
                 .unwrap_or_else(|| DEFAULT_THEME.to_string());
-            let ctx = load_theme(&root, &name)?;
+            let ctx = themes::load(&root, &name)?;
             let full = root.join("configs").join(&path);
             let content =
                 fs::read_to_string(&full).with_context(|| format!("read {}", full.display()))?;
@@ -538,6 +561,12 @@ fn run(cli: Cli) -> Result<()> {
             notif::run(act, &rest)
         }
         Cmd::Bt { waybar } => bt::run(waybar),
+        Cmd::Power {
+            action,
+            dry_run,
+            yes,
+            json,
+        } => feature_exec::power(action.as_deref(), dry_run, yes, json),
         Cmd::Syauth {
             action,
             waybar,
@@ -574,48 +603,6 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Spark { args } => sparkplane_bridge::dispatch(&args),
     }
 }
-
-fn find_root() -> Result<PathBuf> {
-    let mut cur = env::current_dir().context("cwd")?;
-    loop {
-        if cur.join("configs").is_dir() && cur.join("themes").is_dir() {
-            return Ok(cur);
-        }
-        match cur.parent() {
-            Some(p) => cur = p.to_path_buf(),
-            None => {
-                return Err(anyhow!(
-                    "reached filesystem root without finding configs/ + themes/"
-                ))
-            }
-        }
-    }
-}
-
-fn default_target() -> Result<PathBuf> {
-    if let Ok(x) = env::var("XDG_CONFIG_HOME") {
-        if !x.is_empty() {
-            return Ok(PathBuf::from(x));
-        }
-    }
-    let home = env::var("HOME").context("HOME not set")?;
-    Ok(PathBuf::from(home).join(".config"))
-}
-
-fn load_theme(root: &Path, name: &str) -> Result<toml::Table> {
-    let p = root.join("themes").join(format!("{name}.toml"));
-    let s = fs::read_to_string(&p).with_context(|| format!("theme file {}", p.display()))?;
-    let mut ctx: toml::Table =
-        toml::from_str(&s).with_context(|| format!("parse {}", p.display()))?;
-    // Environment bindings available to every template.
-    if !ctx.contains_key("home") {
-        if let Ok(h) = env::var("HOME") {
-            ctx.insert("home".into(), toml::Value::String(h));
-        }
-    }
-    Ok(ctx)
-}
-
 fn apply(root: &Path, target: &Path, ctx: &toml::Table, theme: &str, dry: bool) -> Result<()> {
     let source = root.join("configs");
     if !source.is_dir() {
@@ -634,6 +621,7 @@ fn apply(root: &Path, target: &Path, ctx: &toml::Table, theme: &str, dry: bool) 
     let mut changed = 0usize;
     let mut unchanged = 0usize;
     let mut waybar_touched = false;
+    let mut applied = desktop_paths::AppliedConfigs::new(target);
     for entry in WalkDir::new(&source).min_depth(1) {
         let entry = entry.context("walk")?;
         if !entry.file_type().is_file() {
@@ -653,7 +641,7 @@ fn apply(root: &Path, target: &Path, ctx: &toml::Table, theme: &str, dry: bool) 
                 .into_bytes(),
             Err(_) => raw,
         };
-
+        applied.record(rel, &rendered)?;
         let current = fs::read(&dest).ok();
         let needs_write = current.as_deref() != Some(rendered.as_slice());
 
@@ -662,7 +650,6 @@ fn apply(root: &Path, target: &Path, ctx: &toml::Table, theme: &str, dry: bool) 
             unchanged += 1;
             continue;
         }
-
         if dry {
             println!("  ~ {}", rel.display());
         } else {
@@ -676,20 +663,29 @@ fn apply(root: &Path, target: &Path, ctx: &toml::Table, theme: &str, dry: bool) 
         waybar_touched |= rel.starts_with("waybar");
         changed += 1;
     }
+    waybar_touched |= applied.finish(dry)?;
     // A waybar/* change is invisible until the bar re-reads its
     // files; without this the operator had to chase SIGUSR2 by
     // hand after every `sy apply` (CLAUDE.md "no snowflakes").
     if waybar_touched && !dry {
         waybar::reload();
     }
-
     println!();
-    println!("binary:");
-    install(dry)?;
+    if desktop_paths::is_packaged_root(root) {
+        println!("binary: /usr/bin/sy (RPM owned)");
+    } else {
+        println!("binary:");
+        install(dry)?;
+    }
 
     println!();
     println!("bridges:");
-    ensure_bridges(dry)?;
+    let agent_bin = Path::new("/usr/libexec/sy/sy-system-agent");
+    if desktop_paths::should_prepare_agent_bridge(root, agent_bin) {
+        ensure_bridges(dry)?;
+    } else {
+        println!("  = sy-system-agent not installed");
+    }
 
     println!();
     println!("knowledge:");
@@ -706,7 +702,7 @@ fn apply(root: &Path, target: &Path, ctx: &toml::Table, theme: &str, dry: bool) 
 /// arch-supervision Step 2: sync `configs/systemd/user/` into the
 /// user-mode systemd directory. Runs after the template apply.
 fn apply_units(root: &Path, dry: bool, json: bool, yes: bool) -> Result<()> {
-    supervision::apply::run_cli(root, &default_target()?, dry, json, yes)
+    supervision::apply::run_cli(root, &desktop_paths::default_target()?, dry, json, yes)
 }
 
 const QDRANT_VERSION: &str = "1.18.1";
@@ -731,11 +727,11 @@ fn ensure_qdrant(dry: bool) -> Result<()> {
         None
     };
 
-    if let Some(v) = &installed_version {
-        if v.contains(QDRANT_VERSION) {
-            println!("  = qdrant {v}");
-            return Ok(());
-        }
+    if let Some(v) = &installed_version
+        && v.contains(QDRANT_VERSION)
+    {
+        println!("  = qdrant {v}");
+        return Ok(());
     }
 
     let url = format!(
@@ -825,10 +821,10 @@ fn ensure_cuda_runtime(_dry: bool) -> Result<()> {
         // Probe via `ldconfig -p` (covers system-wide). Fallback to
         // /usr/lib64 + /usr/local/cuda/lib64 file existence.
         let ldconfig = Command::new("ldconfig").arg("-p").output();
-        if let Ok(o) = ldconfig {
-            if String::from_utf8_lossy(&o.stdout).contains(name) {
-                return true;
-            }
+        if let Ok(o) = ldconfig
+            && String::from_utf8_lossy(&o.stdout).contains(name)
+        {
+            return true;
         }
         for d in ["/usr/lib64", "/usr/lib", "/usr/local/cuda/lib64"] {
             if Path::new(d).join(name).exists() {
@@ -996,11 +992,7 @@ fn npm_latest_version(pkg: &str) -> Option<String> {
         .output()
         .ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    if s.is_empty() { None } else { Some(s) }
 }
 
 fn tg_theme() -> Result<()> {
@@ -1079,11 +1071,11 @@ fn install(dry: bool) -> Result<()> {
     let dest = dest_dir.join("sy");
 
     // No-op when the running binary is already the installed one.
-    if let (Ok(s), Ok(d)) = (src.canonicalize(), dest.canonicalize()) {
-        if s == d {
-            println!("  = {} (already installed)", dest.display());
-            return Ok(());
-        }
+    if let (Ok(s), Ok(d)) = (src.canonicalize(), dest.canonicalize())
+        && s == d
+    {
+        println!("  = {} (already installed)", dest.display());
+        return Ok(());
     }
 
     let bytes = fs::read(&src).with_context(|| format!("read {}", src.display()))?;

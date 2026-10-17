@@ -1,0 +1,11 @@
+# HELP sy_workload_completed_total Successful workload runs.
+# TYPE sy_workload_completed_total counter
+sy_workload_completed_total{kind="embed"} 17
+sy_workload_completed_total{kind="rerank"} 5
+# HELP sy_queue_depth Scheduler queue depth.
+# TYPE sy_queue_depth gauge
+sy_queue_depth{kind="embed"} 2
+sy_queue_depth{kind="rerank"} 0
+# HELP sy_models_warm Warm-pool occupancy.
+# TYPE sy_models_warm gauge
+sy_models_warm{kind="embed"} 1

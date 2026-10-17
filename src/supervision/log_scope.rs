@@ -21,12 +21,12 @@
 //! unit and this file, so the lost sinks show up in the journal instead
 //! of rotting silently.
 
+use crate::Cmd;
 use crate::agt::AgtCmd;
 use crate::aiplane::cli::AiplaneCmd;
 use crate::knowledge::KnowledgeCmd;
 use crate::mon::cli::MonCmd;
 use crate::stack::StackCmd;
-use crate::Cmd;
 
 impl Cmd {
     /// `true` when dispatching this command ends in a daemon entry
@@ -36,7 +36,8 @@ impl Cmd {
     /// The set mirrors the `Mode::Daemon` call sites and their units:
     /// `KnowledgeCmd::Daemon` (sy-knowledge), `AgtCmd::Daemon`
     /// (sy-agentd), `StackCmd::Bar` (sy-stack-bar),
-    /// `AiplaneCmd::Worker` (sy-aiplane worker children),
+    /// `AiplaneCmd::Daemon` (sy-aiplane) and `AiplaneCmd::Worker`
+    /// (sy-aiplane worker children),
     /// `MonCmd::Collect` (sy-mon-collect), and — with the GUI feature
     /// on — `MonCmd::Open` / bare `sy mon` (sy-mon-popup, which is also
     /// what `mon::cli::default_subcommand` resolves `None` to).
@@ -50,7 +51,7 @@ impl Cmd {
             }
             | Self::Stack { sub: StackCmd::Bar }
             | Self::Aiplane {
-                sub: AiplaneCmd::Worker { .. },
+                sub: AiplaneCmd::Daemon | AiplaneCmd::Worker { .. },
             }
             | Self::Mon {
                 cmd: Some(MonCmd::Collect(..)),
@@ -95,6 +96,9 @@ mod tests {
                 sub: AgtCmd::Daemon,
             },
             Cmd::Stack { sub: StackCmd::Bar },
+            Cmd::Aiplane {
+                sub: AiplaneCmd::Daemon,
+            },
             Cmd::Aiplane {
                 sub: AiplaneCmd::Worker {
                     kind: "embed".into(),

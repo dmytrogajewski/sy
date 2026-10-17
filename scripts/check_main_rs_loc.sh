@@ -11,7 +11,7 @@
 # `sy policy` clap variant + dispatch arm in arch-agent-sandbox
 # Step 2 + 25 lines for the `sy approve` top-level clap variant
 # (docstring + four args + dispatch arm) in arch-agent-sandbox
-# Step 6 — logic lives in `src/agt/policy/cli.rs` + 35 lines for the
+# Step 6 — logic lives in `crates/sy-agent/src/agt/policy/cli.rs` + 35 lines for the
 # arch-supervision Step 2 `sy apply` expansion (three new clap flags
 # `--diff`/`--json`/`--yes`, `mod supervision`, and the thin
 # `apply_units` dispatch helper — heavy lifting lives in
@@ -51,17 +51,17 @@
 # declaration (gated `#[cfg(test)]` until the Step 2+ non-test
 # consumers in the bin land; the seven-line comment documents the
 # gate so Step 2 can drop it without surprise); heavy lifting lives
-# in `src/plugin/manifest.rs`. Running total: 1066. Plus 8 lines for
+# in `crates/sy-filemanager/src/plugin/manifest.rs`. Running total: 1066. Plus 8 lines for
 # the sy-file-manager roadmap Step 8 `Cmd::Plugin` clap variant
 # (six-line docstring + nested `#[command(subcommand)]` block) +
 # dispatch arm; the gate flips off from `#[cfg(test)] mod plugin;`
 # to plain `mod plugin;` (net +1 — the `#[cfg(test)]` attribute went
 # away but the rewritten comment grew by one line). Heavy lifting
-# lives in `src/plugin/cli.rs`. Running total: 1074. Plus 13 lines
+# lives in `crates/sy-filemanager/src/plugin/cli.rs`. Running total: 1074. Plus 13 lines
 # for the sy-file-manager roadmap Step 13 `mod file;` declaration +
 # `Cmd::File { path, cmd }` clap variant (six-line docstring + two
 # positional/`#[command(subcommand)]` fields) + dispatch arm; heavy
-# lifting lives in `src/file/cli.rs::dispatch`. Running total: 1087.
+# lifting lives in `crates/sy-filemanager/src/file/cli.rs::dispatch`. Running total: 1087.
 # Plus 13 lines for the sy-wwan roadmap (4G/LTE modem plane): `mod
 # wwan;` declaration + `Cmd::Wwan { action, json }` clap variant
 # (four-line docstring + two fields) + dispatch arm; heavy lifting

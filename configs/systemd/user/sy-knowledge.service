@@ -48,6 +48,7 @@
 Description=sy knowledge daemon (qdrant supervisor + NPU embedder)
 Documentation=https://github.com/dmytrogajewski/sy
 After=sy-qdrant.service
+After=sy-aiplane.service
 BindsTo=sy-qdrant.service
 PartOf=sy.target
 
