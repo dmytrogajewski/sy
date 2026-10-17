@@ -339,7 +339,7 @@ impl Supervisor {
     /// On success (the worker yielded — `inflight_request_id` no
     /// longer matches `request_id`), returns `Ok(())`. On timeout,
     /// terminates the child (SIGKILL via [`Child::terminate`]),
-    /// respawns it via [`Supervisor::ensure_spawned`], and returns
+    /// respawns it via `Supervisor::ensure_spawned`, and returns
     /// `Err(anyhow!("worker did not yield in 500 ms; child restarted"))`.
     ///
     /// `request_id == Ulid::nil()` is treated as "best-effort":

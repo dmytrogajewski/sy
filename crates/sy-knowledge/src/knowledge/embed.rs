@@ -105,7 +105,7 @@ const EMBED_GROUP_MIN: usize = 2;
 /// `Cancelled`, and the adaptive shrink never fires in the field. So **this
 /// constant, not the watchdog, is the real bound on how long a foreground
 /// search waits behind an index pass**, and it is sized to the budget the
-/// scheduler advertises: 8 passages × [`EMBED_CHUNK_COST_MS`] ≈ 250 ms =
+/// scheduler advertises: 8 passages × `EMBED_CHUNK_COST_MS` ≈ 250 ms =
 /// `HARD_ESCAPE_THRESHOLD` + one `HARD_ESCAPE_TICK`, enforced by
 /// `one_group_fits_the_hard_escape_budget`. The 64 this replaced cost
 /// ≈ 2 s per group — and ≈ 2 s is exactly what a search measured
@@ -185,7 +185,7 @@ impl GroupFailure {
 /// entirely: the CLI demanded an in-process supervisor nobody installs and died
 /// with "aiplane supervisor not running", plane up or not.
 ///
-/// Groups are retried at [`shrink_group`] size when the scheduler preempts
+/// Groups are retried at `shrink_group` size when the scheduler preempts
 /// them, which it now may: routing a pass through admission is what makes it
 /// preemptible in the first place.
 pub fn embed_batch(texts: &[String]) -> Result<Vec<Vec<f32>>> {

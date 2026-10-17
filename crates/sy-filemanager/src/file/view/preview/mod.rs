@@ -171,7 +171,7 @@ fn info_card<'a>(body: &str) -> Element<'a, Message> {
 /// Format the file-info card body (name / size / mtime / MIME /
 /// path). Performs synchronous `stat` + MIME-sniff I/O, so it MUST be
 /// called off the UI thread (the async preview resolver wraps it in a
-/// `Task`). Returns the pre-formatted string the view's [`info_card`]
+/// `Task`). Returns the pre-formatted string the view's `info_card`
 /// paints without any further I/O.
 pub fn format_file_info(path: &std::path::Path) -> String {
     let name = path

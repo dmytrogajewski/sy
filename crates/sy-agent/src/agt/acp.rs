@@ -11,7 +11,7 @@
 //! When `spec.sandbox_profile = Some(<name>)`, [`AcpChild::spawn`]
 //! wraps the agent process in `systemd-run --user --scope` plus a
 //! re-exec into `sy agt sandbox-exec`. The wrapped argv is built by
-//! [`build_acp_command`]; the cgroup scope supplies `MemoryMax` /
+//! `build_acp_command`; the cgroup scope supplies `MemoryMax` /
 //! `TasksMax` / `RuntimeMaxSec` and the re-exec target layers
 //! Landlock + seccomp on top — see `sandbox/scope.rs` for the full
 //! envelope. The wrapper inherits across `execve`, so every tool the

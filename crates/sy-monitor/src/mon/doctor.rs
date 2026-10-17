@@ -60,7 +60,7 @@ const HEADER_BODY_DELIM: &[u8] = b"\r\n\r\n";
 
 /// Check that the `sy mon collect` aggregator is bound to its UDS and
 /// responds to `system.health`. The probe reuses the synchronous
-/// length-delimited round-trip from [`crate::doctor::checks::probe_system_health`]
+/// length-delimited round-trip from `sy doctor`'s `probe_system_health`
 /// so we don't spin up a tokio runtime per check.
 pub struct MonCollectRunning {
     runtime_dir: Option<PathBuf>,
@@ -423,7 +423,7 @@ impl Check for MonHistoryWritable {
 /// Compose the full list of sy-mon doctor checks: collect-running +
 /// one metrics-socket check per [`KNOWN_PLANES`] entry + history
 /// writability. Used by both `sy mon doctor` (via [`dispatch`]) and
-/// `sy doctor`'s [`crate::doctor::checks::default_checks`].
+/// `sy doctor`'s `default_checks`.
 pub fn mon_doctor_checks() -> Vec<Box<dyn Check>> {
     let mut checks: Vec<Box<dyn Check>> = Vec::with_capacity(2 + KNOWN_PLANES.len());
     checks.push(Box::new(MonCollectRunning::new()));

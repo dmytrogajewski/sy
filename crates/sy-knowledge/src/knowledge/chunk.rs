@@ -36,7 +36,7 @@ pub struct Chunk {
 
 /// Sliding-window chunker with a caller-chosen target chunk size (in
 /// whitespace tokens). The generic pipeline passes its own
-/// `GENERIC_CHUNK_TOKENS` target. Overlap is fixed at [`OVERLAP_TOKENS`];
+/// `GENERIC_CHUNK_TOKENS` target. Overlap is fixed at `OVERLAP_TOKENS`;
 /// the id scheme (see [`point_id`]) is unchanged.
 pub fn chunk_sized(text: &str, chunk_tokens: usize) -> Vec<Chunk> {
     let chunk_tokens = chunk_tokens.max(1);

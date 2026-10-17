@@ -2,7 +2,7 @@
 
 Name:           sy
 Version:        0.1.0
-Release:        16%{?dist}
+Release:        17%{?dist}
 Summary:        Desktop environment and agent tools for Fedora
 License:        MIT
 URL:            https://github.com/dmytrogajewski/sy

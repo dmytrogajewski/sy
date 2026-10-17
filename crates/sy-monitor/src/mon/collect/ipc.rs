@@ -85,7 +85,7 @@ const METRIC_COLUMNS: &[(&str, usize)] = &[
 ];
 
 /// Public projection of the metric names this aggregator understands,
-/// in the wire order defined by [`METRIC_COLUMNS`]. Sy-mon Step 14's
+/// in the wire order defined by `METRIC_COLUMNS`. Sy-mon Step 14's
 /// MCP layer reads this to power the Levenshtein "did you mean?" hint
 /// — keeping the list here means both surfaces drift together.
 pub const KNOWN_METRICS: &[&str] = &[

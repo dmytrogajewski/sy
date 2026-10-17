@@ -1,7 +1,7 @@
 //! `sy file` xdg-toplevel iced application. Roadmap Steps 23–24.
 //!
 //! Unlike `sy mon` (which is a layer-shell popup, see
-//! [`crate::mon::app`]), `sy file` is a normal xdg-toplevel window —
+//! the `sy-monitor` app), `sy file` is a normal xdg-toplevel window —
 //! it tiles inside niri, takes focus, and can be Mod+E-spawned like
 //! any other GUI. We use plain `iced::application` here, NOT
 //! `iced_layershell::application`, exactly so niri can tile us

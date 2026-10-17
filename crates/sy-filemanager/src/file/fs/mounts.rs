@@ -118,7 +118,7 @@ fn parse_one(line: &str) -> Option<Mount> {
 
 /// Filter the mount list down to the user-visible disks the SPEC
 /// §3.3 item 14 sidebar paints. Drops `proc`, `sysfs`, `cgroup2`,
-/// `devpts`, `tmpfs` overlays etc — see [`USER_VISIBLE_FS_TYPES`] for
+/// `devpts`, `tmpfs` overlays etc — see `USER_VISIBLE_FS_TYPES` for
 /// the allow-list. The mounts panel always retains `/` even if its
 /// fs-type isn't listed (so a Fedora root on a future fs still shows).
 pub fn filter_user_visible(mounts: &[Mount]) -> Vec<&Mount> {

@@ -6,7 +6,7 @@
 //!
 //! 1. [`serve`] binds a `tokio::net::UnixListener` at the caller-
 //!    supplied path, chmods it to `0o600`, and spawns
-//!    [`sy_ipc::Server::serve`] with [`FileHandler`] — the dispatcher
+//!    [`sy_ipc::Server::serve`] with `FileHandler` — the dispatcher
 //!    for the eleven SPEC §4.3 ops (`file.open`, `file.cd`,
 //!    `file.select`, `file.copy`, `file.move`, `file.trash`,
 //!    `file.restore`, `file.search`, `file.preview`, `file.ops_list`,

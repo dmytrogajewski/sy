@@ -244,7 +244,7 @@ const CLASS_HIDDEN: &str = "hidden";
 /// One-line JSON for the waybar `custom/sy-knowledge` module. Reads the
 /// status file the daemon writes; a snapshot that is stale or reports
 /// `daemon_running: false` yields a **visible** down tile (see
-/// [`down_tile`]), and only a missing status file collapses the tile.
+/// `down_tile`), and only a missing status file collapses the tile.
 pub fn waybar() -> Result<()> {
     let now = state::now_secs();
     let payload = match status::load().ok() {

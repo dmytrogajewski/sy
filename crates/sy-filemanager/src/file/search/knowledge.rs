@@ -1,7 +1,7 @@
 //! Knowledge-plane integration. Roadmap Step 30 (SPEC §3.3 item 10).
 //!
 //! The `sy file` plane reaches for `sy-knowledge.service` via the
-//! [`crate::knowledge::cli::search_hits`] entry point and merges the
+//! `sy-knowledge`'s `search_hits` entry point and merges the
 //! returned qdrant scores into the current pane's order. The trait
 //! [`KnowledgeBackend`] sits between this module and `search_hits` so
 //! the integration test (Step 30 DoD `end_to_end_with_stubbed_qdrant`)
@@ -62,7 +62,7 @@ pub trait KnowledgeBackend: Send + Sync {
 }
 
 /// Production [`KnowledgeBackend`] — dials the live `sy-knowledge`
-/// daemon socket via [`crate::knowledge::cli::search_hits`]. The
+/// daemon socket via `sy-knowledge`'s `search_hits`. The
 /// liveness probe + ipc dial are bundled inside `search_hits`, so
 /// this impl is a single forwarding call.
 pub struct RealKnowledgeBackend;

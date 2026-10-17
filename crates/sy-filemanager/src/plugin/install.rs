@@ -11,7 +11,7 @@
 //! signature (unless `--unsigned`), and only at the very end
 //! `rename(2)`s the staging dir into place at `<dest_root>/<id>/`.
 //! `rename` is the commit point — a crash before that step leaves the
-//! staging dir behind (best-effort cleaned up by [`InstallScope`]
+//! staging dir behind (best-effort cleaned up by `InstallScope`
 //! drop) but never a partially-populated `<id>/`.
 //!
 //! Reinstall uses the **swap-then-cleanup** pattern: the existing

@@ -70,7 +70,7 @@ pub enum SourceMode {
 /// What kind of corpus a source holds. Drives per-kind indexing
 /// pipelines (later steps) and default-scope exclusion (e.g.
 /// `claude-transcripts` is excluded from default search). Auto-classified
-/// from the path on insert; see [`classify_kind`].
+/// from the path on insert; see `classify_kind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 #[clap(rename_all = "kebab-case")]

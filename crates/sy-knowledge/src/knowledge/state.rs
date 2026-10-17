@@ -58,7 +58,7 @@ impl Default for Index {
 ///
 /// `1` is the baseline: whitespace-token + [`crate::knowledge::chunk::MAX_CHUNK_CHARS`]
 /// chunking with the char-cap fix landed. Indexes written before this field
-/// existed are read as `1` (see [`Index::legacy_chunk_schema_version`]) so
+/// existed are read as `1` (see `Index::legacy_chunk_schema_version`) so
 /// introducing the mechanism does not itself force a multi-hour re-embed.
 pub const CHUNK_SCHEMA_VERSION: u32 = 1;
 

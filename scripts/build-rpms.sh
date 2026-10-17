@@ -86,7 +86,7 @@ for fedora in "${releases[@]}"; do
       fi
       dnf --setopt=ip_resolve=4 --setopt=zchunk=False --setopt=install_weak_deps=False \
         --setopt=keepcache=True \
-        --setopt=max_parallel_downloads=8 --setopt=max_downloads_per_mirror=8 \
+        --setopt=max_parallel_downloads=8 \
         --setopt=timeout=120 --setopt=minrate=1 --setopt=retries=20 \
         "${repo_args[@]}" install -y rpm-build cargo rust gcc gcc-c++ cmake pkgconf-pkg-config \
         alsa-lib-devel openssl-devel systemd-devel libxkbcommon-devel

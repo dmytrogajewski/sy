@@ -91,7 +91,7 @@ pub fn required_paths() -> (PathBuf, PathBuf) {
 
 /// The FP32 export the same prep run leaves next to the BF16 one. Opening
 /// it on the CPU EP is the degraded-but-serving option when the BF16
-/// artifact is gone; see [`pick_model`].
+/// artifact is gone; see `pick_model`.
 pub fn fallback_model_path() -> PathBuf {
     EmbedWorkload::cache_dir().join(format!("{MODEL_STEM}.onnx"))
 }

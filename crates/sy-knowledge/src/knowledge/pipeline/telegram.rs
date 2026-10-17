@@ -9,7 +9,7 @@
 //! its own point floods the index with contextless single-token vectors that
 //! match nothing usefully and crowd out the informative passages (a real
 //! corpus showed top hits like the bare word `"День"`). We therefore pack
-//! consecutive messages into ~[`WINDOW_TOKENS`]-sized windows, each line
+//! consecutive messages into ~`WINDOW_TOKENS`-sized windows, each line
 //! prefixed with its sender, so every embedded chunk carries real
 //! conversational context and is readable back as a coherent excerpt.
 //!

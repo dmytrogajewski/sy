@@ -55,7 +55,7 @@ fn margin_weight(margin: f32) -> f32 {
 /// retrieved, so nothing can be asserted. With a single hit, confidence is
 /// that hit's probability (no rival to be ambiguous against). Otherwise it is
 /// the top-1 probability discounted toward a half share when the rival is
-/// tied with it, per [`margin_weight`].
+/// tied with it, per `margin_weight`.
 pub fn confidence(top_scores: &[f32]) -> f32 {
     let Some(&top1) = top_scores.first() else {
         return 0.0;

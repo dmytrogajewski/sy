@@ -99,7 +99,7 @@ struct Resp {
 pub trait FileDaemonClient {
     /// Dial the daemon, send `(method, params)`, return the result
     /// `Value`. Daemon-unreachable / protocol errors bubble as an
-    /// `Err` so [`call_tool`] can wrap them into the MCP
+    /// `Err` so `call_tool` can wrap them into the MCP
     /// `isError: true` envelope.
     fn call(&self, method: &str, params: Value) -> Result<Value>;
 }
