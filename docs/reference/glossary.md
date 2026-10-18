@@ -24,14 +24,14 @@ in the repository.
 The sandboxed agent runner plane: `sy agt` executes coding or
 inference agents under an intent-whitelisted Landlock + seccomp
 sandbox driven by per-profile policy files. See
-[`How the planes fit together` — The agent runner is a sandbox](../explanation/architecture.md#the-agent-runner-is-a-sandbox).
+[Agent-first CLI](../explanation/agent-first-cli.md).
 
 ### aiplane
 
 The privileged NPU inference plane: the single-owner daemon that
 holds `/dev/accel/accel0`, hosts every on-device ML workload, and
 serves requests over the local IPC socket. See
-[`How the planes fit together` — The NPU plane is a single owner](../explanation/architecture.md#the-npu-plane-is-a-single-owner).
+[Architecture: communication between features](../explanation/architecture.md#communication-between-features).
 
 ### BF16
 
@@ -39,7 +39,7 @@ The bfloat16 floating-point format AMD's Quark uses to quantise
 ONNX weights for the NPU embed workload; trades FP32 dynamic range
 for half the bytes so the `multilingual-e5-base` graph fits under
 VitisAI EP's 2 GiB ModelProto cap. Referenced from
-[`README.md` — NPU one-time setup](../../README.md#npu-one-time-setup).
+[NPU setup guide](../how-to/set-up-npu.md).
 
 ### doctor
 
@@ -66,9 +66,9 @@ reserved `describe`/`health`/`cancel` methods); see
 
 The local semantic-search plane: an embedded qdrant vector index
 plus a scheduler that ingests registered file trees, embeds them by
-delegating to the aiplane, and answers searches over IPC v1 or via
-its MCP server. See
-[`How the planes fit together` — The knowledge plane is a consumer, not a peer](../explanation/architecture.md#the-knowledge-plane-is-a-consumer-not-a-peer).
+delegating to the AI service, and answers searches over its CLI and
+MCP interfaces. See
+[Architecture](../explanation/architecture.md#communication-between-features).
 
 ### MCP
 
@@ -87,12 +87,11 @@ by a 1 Hz aggregator. `Super+m` toggles the popup;
 
 ### plane
 
-A long-running service hosted by the single `sy` binary, identified
-by its top-level subcommand (`sy aiplane`, `sy knowledge`, `sy agt`,
-`sy stack`, `sy file`, `sy mon`, `sy spark`).
-All planes share one CLI + JSON surface so agents drive any plane
-the same way a human does. See
-[`How the planes fit together` — One binary, many planes](../explanation/architecture.md#one-binary-many-planes).
+A feature area in sy, such as power, AI inference, knowledge search,
+or file management. A feature may provide commands, a user service,
+or both. Feature executables are packaged separately and routed
+through the `sy` launcher. See
+[Architecture](../explanation/architecture.md#shared-entry-point-separate-features).
 
 ### plugin
 
@@ -123,7 +122,7 @@ The desktop look-and-feel produced by rendering
 swaylock, …) through minijinja templates with the active
 palette from `themes/<name>.toml`. Running `sy apply` is what
 writes that look into `~/.config/`. See
-[`README.md` — Rice](../../README.md#rice--niri--waybar--).
+[Architecture: configuration and supervision](../explanation/architecture.md#configuration-and-supervision).
 
 ### session pool
 
@@ -139,9 +138,9 @@ cold-start cost. See
 A one-off manual change to the host that lives outside the
 repository: a hand-edited dotfile, an ad-hoc `systemctl enable`, a
 bespoke env var. Snowflakes are prohibited; every environment
-change ships under [`configs/`](../../configs/) or inside the `sy`
-binary so `cargo build --release && sy apply` on a fresh machine
-reproduces the system. See [`CLAUDE.md` — Core rule: no snowflakes](../../CLAUDE.md#core-rule-no-snowflakes).
+change ships under [`configs/`](../../configs/) or in the relevant
+feature crate and RPM package, so package installation and `sy apply`
+can reproduce the system. See [`CLAUDE.md` — Core rule: no snowflakes](../../CLAUDE.md#core-rule-no-snowflakes).
 
 ### spark
 
@@ -156,19 +155,17 @@ health and identity probes. See
 
 ### stack-bar
 
-The layer-shell waybar replacement (`sy stack bar`) that renders
-the bar tiles (NPU, GPU, network, battery, syauth, …) as a single
-wayland layer-shell client driven by the same `sy` binary that
-hosts every other plane.
+The optional layer-shell bar (`sy stack bar`) that renders status
+tiles as a Wayland layer-shell client. The `sy-desktop-shell` package
+provides its executable and related applets.
 
 ### sy.target
 
-The user-level systemd target that groups every `sy` plane
-(`sy-aiplane.service`, `sy-knowledge.service`, `sy-stack-bar.service`,
-`sy-agentd.service`); enabling
-`sy.target` brings every plane up at login, stopping it tears them
-down. Units live under [`configs/systemd/user/`](../../configs/systemd/user/).
-See [`How the planes fit together` — `sy.target` is the supervisor](../explanation/architecture.md#sytarget-is-the-supervisor).
+The user-level systemd target that groups enabled sy services.
+Feature packages provide their own units; apply links and enables the
+units for installed features. Units live under
+[`configs/systemd/user/`](../../configs/systemd/user/). See
+[Architecture: configuration and supervision](../explanation/architecture.md#configuration-and-supervision).
 
 ### syauth
 
@@ -185,7 +182,7 @@ falls back only to CPU on workloads that declare
 `EP::Cpu`. Notable constraint: VitisAI EP 1.7.1 caps internal
 ModelProto serialisation at 2 GiB, which is why the embed workload
 uses `multilingual-e5-base` (768-dim) instead of `-large`. See
-[`README.md` — Why `multilingual-e5-base`, not `-large`?](../../README.md#why-multilingual-e5-base-not--large).
+[NPU setup guide](../how-to/set-up-npu.md).
 
 ### workload
 
@@ -204,7 +201,7 @@ and DKMS kernel module that exposes the Ryzen AI NPU as
 `/dev/accel/accel0`; the kernel module ships from the
 [`ryzenai-rpm`](https://github.com/dmytrogajewski/ryzenai-rpm)
 companion repository as documented in
-[`README.md` — NPU one-time setup](../../README.md#npu-one-time-setup).
+[NPU setup guide](../how-to/set-up-npu.md).
 
 ## See also
 

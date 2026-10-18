@@ -13,7 +13,7 @@ already know you want `sy` and need commands, go to
 the engineering “why this shape”, go to
 [how the planes fit together](architecture.md).
 
-![sy sits on Fedora; you and an agent drive the same binary](../img/sy-stack.svg)
+![sy feature packages run on Fedora and expose commands to users and agents](../img/sy-stack.svg)
 
 ## Why this exists
 
@@ -29,12 +29,17 @@ on CUDA, a Spark box you ssh into with a notebook. Each piece
 works. None of them share a CLI, a supervisor, or a git history.
 Six months later you cannot rebuild the laptop.
 
-`sy` is one answer to that: an **Agentic OS layer for Fedora 43**.
-One Rust binary plus the `configs/` tree in this repo. You clone,
-you build, you run `sy apply`, you enable `sy.target`. The desktop,
-the search index, the file manager, and the agent plumbing come from
-that apply. An agent talks to the same
-`sy` commands you do.
+`sy` is one answer to that: a modular desktop and agent environment
+for Fedora. Its base RPM installs the `sy` command launcher. Optional
+RPMs install separate feature executables for power controls, agents,
+authentication integration, AI inference, knowledge search,
+monitoring, the desktop shell, and file management. The `sy-desktop`
+RPM supplies the declarative desktop configuration.
+
+You install the feature packages you want, then use the common `sy`
+command surface. Features exchange data through documented IPC
+interfaces where needed. An agent can invoke the same commands as a
+person.
 
 The name is short on purpose. `sy` is the orchestrator, not a
 Linux distribution. Fedora stays Fedora. `sy` sits on top and
@@ -44,8 +49,8 @@ refuses to leave state that only exists on this one disk.
 
 Morning: you log into niri. The bar, terminal colours, and
 keybindings are whatever the repo last applied. Super+E opens the
-file manager on `$HOME`. Hover a README; the preview is a PNG from
-a tiny plugin, not a headless browser.
+file manager on `$HOME`. Hover a README to see its syntax-highlighted
+source in the preview pane.
 
 You registered `~/Documents/notes` yesterday. `sy knowledge search
 "re-exec dance"` returns the paragraph you wrote, with a chunk id
@@ -72,8 +77,9 @@ doctor` is the health pass.
 
 ## What you get
 
-Required hardware: a Fedora 43 x86_64 laptop and a network. That is
-the whole list for bring-up.
+The RPM build workflow targets Fedora 43, 44, and 45. A network is
+needed to build packages and install their dependencies. Individual
+features can have additional runtime requirements.
 
 | You can… | How it shows up |
 |----------|-----------------|
@@ -101,13 +107,13 @@ an NPU.
 
 ![sy apply renders this git repo onto the laptop](../img/sy-apply.svg)
 
-One binary. Systemd starts it as different *planes* (long-running
-roles): knowledge daemon, power daemon, file daemon, and so on.
-Planes do not call each other in-process. They send JSON over Unix
-sockets in `$XDG_RUNTIME_DIR`. That socket is also what you can
-debug with `socat` and what an MCP server proxies.
+The launcher dispatches commands to feature executables. Systemd
+starts the user services a feature needs. Services that exchange
+data use their documented IPC interfaces, commonly JSON over Unix
+sockets in `$XDG_RUNTIME_DIR`. AI clients use the AI service for NPU
+inference so another process does not open the device independently.
 
-![One binary becomes many planes; JSON sockets sit between them](../img/sy-planes.svg)
+![The launcher routes commands to optional feature executables](../img/sy-planes.svg)
 
 `sy apply` is how the repo becomes the laptop. Templates under
 `configs/` are rendered with a theme from `themes/`. Units under

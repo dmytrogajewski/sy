@@ -33,9 +33,9 @@ If you have never opened the window, start with
 
    The envelope is documented at
    [sy file doctor](../reference/sy-file-doctor.md). If any probe is
-   `fail`, run the `fix_hint` it prints (`systemctl --user start
-   sy-file.socket` is the most common; for SELinux-gated plugin
-   spawn, `make install-system-sy-plugin-selinux`).
+   `fail`, follow the `fix_hint` it prints. The common socket fix is
+   `systemctl --user start sy-file.socket`. For SELinux denials, see
+   [troubleshooting](troubleshoot-sy-file.md#investigate-selinux-denials).
 
 2. Confirm the same envelope reports six checks (`file.daemon.reachable`,
    `file.fonts.jetbrainsmono_nerd`, `file.niri.binds`,
@@ -63,23 +63,22 @@ If you have never opened the window, start with
    rejected the path (permission error on stderr) or another client
    retargeted the pane between steps 3 and 4.
 
-5. Preview a markdown file. The built-in `sy-plugin-md` previewer
-   renders to PNG in-process (no Chrome, no keyring):
+5. Inspect the preview IPC response for a markdown file:
 
    ```bash {.no-test}
    sy file ipc preview "$HOME/README.md"
    ```
 
-   Substitute any other markdown file you can read. A full preview
-   carries `mime = "image/png"`. Until the plugin resolves, you may
-   see the sniffed MIME without a PNG body — that is still a
-   successful call if the daemon did not crash.
+   The current IPC operation reports the detected MIME and returns
+   an empty `png_base64` field. It does not return the GUI's
+   syntax-highlighted text preview. A successful response confirms
+   MIME detection and daemon health, not rendered image output.
 
 ## Result
 
 `sy file doctor --json` returns `status=ok` and six probes by name.
-After step 3, `cwd` equals `$HOME`. Preview returns a PNG MIME or a
-safe MIME sniff.
+After step 3, `cwd` equals `$HOME`. The preview IPC call returns the
+detected MIME and an empty PNG payload.
 
 If a probe fails, see [How to troubleshoot sy file](troubleshoot-sy-file.md).
 

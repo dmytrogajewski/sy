@@ -101,11 +101,13 @@ Field shape:
 
 * **Status `ok`**: `crate::plugin::registry::discover()` returns at
   least one plugin AND the canary `sy-plugin-md` is in the list.
-* **Status `warn`**: registry discovers plugins but the canary is
-  absent (the markdown previewer is not installed).
+* **Status `warn`**: registry discovers plugins but the canary
+  `sy-plugin-md` is absent.
 * **Status `fail`**: registry discover returned an error OR no
   plugins were discovered at all.
-* **Typical fix-hint**: `sy plugin install ./crates/sy-plugin-md`.
+* **Typical fix-hint**: `sy plugin install ./crates/sy-plugin-md` in
+  a source checkout. For an RPM installation, install
+  `sy-filemanager` and apply its packaged configuration.
 
 ## `sy plugin doctor`
 
@@ -125,7 +127,7 @@ Field shape:
       "plugin": "sy-plugin-md",
       "name": "binary.reachable",
       "ok": true,
-      "detail": "/usr/local/bin/sy-plugin-md is executable"
+      "detail": "/usr/libexec/sy/sy-plugin-md is executable"
     },
     {
       "plugin": "sy-plugin-md",
@@ -136,6 +138,11 @@ Field shape:
   ]
 }
 ```
+
+`capability.routes` verifies the registry mapping. It does not mean
+the GUI dispatches plugins for MIME types that already have a built-in
+preview; current `text/*` and `application/json` previews use the
+built-in text renderer.
 
 Field shape:
 

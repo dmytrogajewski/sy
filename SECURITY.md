@@ -5,8 +5,10 @@
      https://docs.github.com/en/code-security/getting-started/adding-a-security-policy-to-your-repository).
      Voice anchored on README.md and AGENTS.md. -->
 
-`sy` is an Agentic OS layer for Fedora — a single Rust binary that owns
-real privilege on the host. The current surface includes:
+`sy` is a modular desktop and agent environment for Fedora. Its
+feature executables and services include components with access to
+privileged host interfaces. The current security-sensitive surface
+includes:
 
 - A user daemon that holds `CAP_*` ambient grants from its systemd unit
   (see [`AGENTS.md`](AGENTS.md), "Cap grants live in the systemd unit").
@@ -16,7 +18,7 @@ real privilege on the host. The current surface includes:
 - Sole owner of `/dev/accel/accel0` from the `aiplane` daemon
   ("one process per NPU" — see [`AGENTS.md`](AGENTS.md)).
 - The Spark HTTPS agent and root Docker executor on a DGX Spark
-  (`sy spark`, `sy-spark-agent.service`, `sy-spark-executor.service`).
+  (`sy spark` and Sparkplane-managed services).
 
 Treat vulnerabilities in any of the above as in scope.
 

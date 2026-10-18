@@ -12,6 +12,8 @@ the colours.
 
 - `sy` is installed. You completed
   [the bring-up tutorial](../tutorials/getting-started.md).
+- The `sy-desktop` RPM is installed; it supplies the themes and desktop
+  configuration consumed by `sy apply`.
 - You are logged into a niri session, or you are willing to log out
   and pick **Niri** from the display manager after apply.
 

@@ -10,10 +10,12 @@ XDNA NPU, and confirm `sy aiplane` serves embeddings from
 
 ## Prerequisites
 
-- Fedora 43 on an AMD Ryzen AI laptop (Phoenix / Strix, with
-  `/dev/accel/accel0` once the kernel module is loaded). If you do
-  not have that hardware, stop here: the knowledge plane already
-  falls back to CPU and you do not need this how-to.
+- A Fedora 44 AMD Ryzen AI laptop with a supported XDNA device and
+  `/dev/accel/accel0` available. This procedure is qualified with the
+  AMD Ryzen AI 1.7.1 runtime. Other Fedora/runtime combinations need
+  compatibility verification before following these steps. Without
+  this hardware, the AI plane can use CPU execution and you can skip
+  this guide.
 - You completed
   [the bring-up tutorial](../tutorials/getting-started.md). `sy` is
   on `$PATH`.

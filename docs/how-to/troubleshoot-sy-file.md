@@ -47,15 +47,19 @@ sy file ipc open "$HOME"
 sy file ipc state
 ```
 
-### Fix empty preview body for every file
+### Understand an empty IPC preview response
 
-The markdown plugin is not installed. Install the in-tree canary and
-retry preview:
+`sy file ipc preview` currently reports MIME metadata and an empty
+`png_base64` value. This IPC operation does not render an image. The
+GUI uses its own preview path for supported text and image files; a
+plugin installation does not change the IPC response.
 
 ```bash
-sy plugin install ./crates/sy-plugin-md
 sy file ipc preview "$HOME/README.md"
 ```
+
+For the GUI's syntax-highlighted text preview, follow the
+[file-manager tutorial](../tutorials/browse-your-files.md).
 
 ### Fix `Mod+E` landing on `swaylock` (or any non-`sy file` target)
 
@@ -67,20 +71,25 @@ sy apply
 sy file doctor --json
 ```
 
-### Fix SELinux-gated plugin spawn
+### Investigate SELinux denials
 
-Doctor's plugin probe fails with an SELinux denial. Install the
-in-tree file contexts:
+The repository does not currently ship a sy-file-specific SELinux
+policy installer. To inspect a denial, collect recent AVC records:
 
 ```bash
-make install-system-sy-plugin-selinux
+sudo ausearch -m AVC -ts recent
 ```
+
+Use the denial details to identify the executable, target path, and
+SELinux domains involved. Do not disable SELinux to work around the
+denial. Include the AVC record and the command that triggered it when
+reporting a sy issue.
 
 ## Result
 
 `sy file doctor --json` prints `status=ok` and six probes by name.
-`sy file ipc state` returns a `cwd` you can read. Markdown preview
-returns `mime = "image/png"` or a MIME sniff without crashing.
+`sy file ipc state` returns a `cwd` you can read. The IPC preview
+operation reports MIME metadata and returns an empty PNG payload.
 
 ## See also
 

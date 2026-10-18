@@ -113,9 +113,8 @@ docs-roadmap
 - Driver: `/documenter` audit
 
 ## Open questions
-- None for the current documentation scope. The existing Docusaurus site and
-  GitHub Actions are maintained beside this plan and pass their production
-  build/link checks in the current pass.
+- None for the original documentation scope. The Docusaurus production build
+  succeeds; local link checks currently report timeouts from external sites.
 
 ### Item 12 — Sparkplane bridge/network documentation refresh
 - Description: Align sy's Sparkplane documentation with the pinned `0.1.5`
@@ -156,3 +155,18 @@ docs-roadmap
   - [x] A community/documentation entry links to the inventory
 - Files likely affected: `THIRD_PARTY_NOTICES.md`, `CONTRIBUTING.md`
 - Driver: `/documenter` authoring
+
+## Current architecture and package documentation refresh
+
+This follow-up reconciles the published docs with the modular RPM architecture.
+See [`AUDIT-full.md`](AUDIT-full.md) for the current evidence and remaining
+source-level rustdoc review.
+
+- [x] Replace the README installation path and align architecture/product pages with the base launcher and optional feature RPMs.
+- [x] Add the RPM package reference and update getting-started to build, install, apply, and verify packages.
+- [x] Update specialist feature guides with package prerequisites and verified behavior.
+- [x] Regenerate the LLM bundle and add a freshness check to docs CI.
+- [x] Add ADR 0005 for the feature RPM boundary.
+- [ ] Complete a content review of Rust crate/module API docs and improve executable doctest examples where useful.
+- [x] Run the Docusaurus build, strict rustdoc generation, and workspace doctests.
+- [ ] Re-run `make docs-lint` in an environment with Markdown linters installed and external links reachable.

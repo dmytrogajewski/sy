@@ -10,9 +10,9 @@ Thanks for your interest in `sy`. This guide tells you how to ask a
 question, file a bug, propose a change, run the tests, and get a
 patch merged.
 
-`sy` is an **Agentic OS layer for Fedora** — a single Rust binary
-plus declarative configs that turn a stock Fedora 43 laptop into an
-agent-first workstation. The product story is
+`sy` is a modular desktop and agent environment for Fedora, built
+from separately packaged feature executables and declarative configs.
+The product story is
 [`docs/explanation/what-sy-is.md`](docs/explanation/what-sy-is.md);
 the docs map is [`docs/intro.md`](docs/intro.md).
 See [`README.md`](README.md) for the planes and [`AGENTS.md`](AGENTS.md)
@@ -24,8 +24,8 @@ snowflakes).
 This project follows the [Contributor Covenant 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/).
 Participation in the project means you agree to uphold it. See
 [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for the enforcement
-contact. (If that file is not yet present, the contact is the same
-private channel listed in [`SECURITY.md`](SECURITY.md).)
+contact. For enforcement concerns, use the contact listed in
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
 ## How to ask a question
 
@@ -42,9 +42,9 @@ private channel listed in [`SECURITY.md`](SECURITY.md).)
 1. Search existing issues first. If you find a match, add a comment
    with your reproduction and environment instead of opening a new
    one.
-2. Open a new issue using the **bug report** template (once the
-   templates under `.github/ISSUE_TEMPLATE/` land). Until then, a
-   plain issue with the sections below works.
+2. Open a new issue using the **bug report** template under
+   `.github/ISSUE_TEMPLATE/`. If it is unavailable, use a plain issue
+   with the sections below.
 3. Include:
    - **What you expected to happen.**
    - **What actually happened**, including the exact command, stderr,
@@ -82,8 +82,7 @@ issue.
    iteration.
 4. **Update docs** in the same change. If you change user-visible
    behaviour, update `README.md`, the relevant `docs/` page, and add
-   an entry under `## [Unreleased]` in `CHANGELOG.md` (once it
-   exists).
+   an entry under `## [Unreleased]` in `CHANGELOG.md`.
 5. **Sign your commits** with `git commit -s` to certify the DCO
    (see [Commit policy](#commit-policy)).
 6. **Open a pull request** using the PR template. Link the issue
@@ -94,12 +93,13 @@ For changes that touch a plane's public contract (the IPC envelope,
 a CLI flag's semantics, a config-file key in `configs/sy/*.toml`, or
 the systemd unit grants) the maintainer may ask for an
 [ADR](docs/adr/) before approving. See [`GOVERNANCE.md`](GOVERNANCE.md)
-once it exists for the threshold.
+for decision ownership.
 
 ## Development setup
 
-You need a Fedora 43 host (or any Linux with a recent Rust toolchain
-if you only plan to touch non-Fedora-specific code).
+For Fedora packaging, use a release in the RPM build matrix listed in
+the README. For code that does not depend on Fedora, any Linux host
+with a recent Rust toolchain is suitable.
 
 ```bash
 # Stable Rust 2024 edition. Use rustup for parity with CI.
@@ -112,10 +112,8 @@ cd sy
 cargo build --release
 ```
 
-For the full agentic-OS install (planes supervised under `sy.target`,
-the rice rendered into `~/.config/`, the NPU one-time setup), follow
-the [README §Install / apply](README.md#install--apply) and
-[§NPU one-time setup](README.md#npu-one-time-setup) walkthroughs.
+For package installation, follow the [README install guide](README.md#install-from-rpms).
+For AMD NPU setup, follow the [NPU guide](docs/how-to/set-up-npu.md).
 
 The "no snowflakes" rule (see [`CLAUDE.md`](CLAUDE.md)) is binding
 on every contribution: any environment change must be encoded in
@@ -134,10 +132,10 @@ before opening a PR.
 | `make build` | `cargo build --workspace` (debug). |
 | `make release` | `cargo build --workspace --release`. |
 | `make test` | `cargo test --workspace --all-targets`. Fast — uses `FakeWorkload` for the NPU plane, no `/dev/accel/accel0` required. |
-| `make test-npu` | `cargo test --workspace --all-targets --features test-npu`. Runs the gated `cfg(feature = "test-npu")` tests against the real NPU. **Stop the aiplane daemon first** (`systemctl --user stop sy-aiplane.service`) or the test will `EAGAIN` — `/dev/accel/accel0` is single-context. |
-| `make lint` | `scripts/check_main_rs_loc.sh 1060` + `cargo clippy --workspace --all-targets -- -D warnings`. **Zero warnings.** |
+| `make test-npu` | `cargo test --workspace --all-targets --features test-npu`. Runs gated tests against the real NPU. The device is single-context, so run this only when the AI service is not using the NPU and the test host is available for hardware testing. |
+| `make lint` | `scripts/check_main_rs_loc.sh` + `cargo clippy --workspace --all-targets -- -D warnings`. **Zero warnings.** |
 | `make fmt` | `cargo fmt --all`. |
-| `make fmt-check` | `cargo fmt --all -- --check`. The CI gate. |
+| `make fmt-check` | `cargo fmt --all -- --check`. Local formatting check. |
 | `make audit` | `cargo deny check` if `cargo-deny` is installed; skipped otherwise. |
 | `make bench` | `cargo bench --all-targets`. |
 
@@ -181,13 +179,13 @@ comments at the top of derived documentation pages when editing them.
   workflow cannot flip repository Settings: set **Pages → Source**
   to **GitHub Actions** once, then the next `main` push publishes
   `https://<owner>.github.io/sy/`.
-- A docs-lint pipeline (markdownlint, Vale, cspell, lychee) is on
-  the roadmap; once it lands, `make docs-lint` will be a gate
-  before pushing. Until then, please proofread.
+- `make docs-lint` runs markdownlint, Vale, cspell, and lychee when
+  those tools are installed. CI runs the documentation checks for
+  documentation changes.
 
-If your change adds or renames a CLI subcommand or flag, update both
-the [`README.md`](README.md) §CLI cheat-sheet and the per-command
-`--help` text. CLIG and agent-friendly conventions
+If your change adds or renames a CLI subcommand or flag, update the
+[CLI reference](docs/reference/cli.md), the relevant feature guide,
+and the per-command `--help` text. CLIG and agent-friendly conventions
 (see [`CLAUDE.md`](CLAUDE.md)) are non-negotiable: `--json` on every
 command that produces output, `--dry-run` on every command that
 changes state, stable exit codes, and every flag also settable via
@@ -214,9 +212,9 @@ touched (`aiplane`, `agt`, `knowledge`, `power`, `stack`, `syauth`,
 log:
 
 ```
-fix(supervision): enable sy.target at apply time so memory plane starts at login
-aiplane: daemon now dispatches through aiplane via thin knowledge facades
-stack-bar UX: under-waybar alignment, type-aware glyphs, hover previews
+fix(supervision): enable the user target during apply
+refactor(aiplane): route knowledge requests through the daemon
+fix(desktop-shell): align the top panel with the desktop edge
 ```
 
 Breaking changes carry a `!` after the type/scope (`feat(ipc)!: ...`)
@@ -248,9 +246,9 @@ Signed-off-by: Your Name <your.email@example.com>
 Configure `user.name` and `user.email` in `git` once
 (`git config --global user.name "..."`, `git config --global user.email "..."`)
 and `-s` will fill them in for every commit. If you forget the
-sign-off, amend the commit with `git commit --amend -s` (or rebase
-the branch with `git rebase --signoff main` for a multi-commit PR)
-and force-push the branch.
+sign-off before publishing your branch, amend the commit locally.
+For a branch that others already use, coordinate with them or add a
+new signed commit; do not rewrite shared history.
 
 There is **no CLA**.
 
@@ -278,8 +276,8 @@ exists.
 
 ## Getting your PR merged
 
-- CI must be green (`make lint`, `make test`, and once it lands,
-  the docs-lint pipeline).
+- CI must be green, including `make lint`, `make test`, and the docs
+  workflow when documentation changes.
 - All review comments addressed or explicitly deferred with a link
   to the follow-up issue.
 - For a feature, a journey doc under `specs/journeys/` is expected;

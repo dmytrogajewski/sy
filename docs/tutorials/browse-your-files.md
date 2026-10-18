@@ -4,14 +4,12 @@
 
 ## Introduction
 
-In this tutorial you open the built-in file manager, land in your
-home directory, and hover a markdown file so the preview pane
-renders it. No extra file-manager package is involved: `sy file` is
-part of the same binary you already installed.
+In this tutorial you install the optional `sy-filemanager` package,
+open the file manager in your home directory, and inspect a
+syntax-highlighted text preview.
 
-When you finish, `Mod+E` (or `sy file ~`) opens a three-pane window
-and hovering `README.md` shows a preview without spawning Chrome or
-prompting the GNOME keyring.
+When you finish, `Mod+E` or `sy file ~` opens a three-pane window.
+The `sy file` command is provided by `sy-filemanager`.
 
 ## Prerequisites
 
@@ -24,6 +22,10 @@ prompting the GNOME keyring.
   ```
 
   The command prints `active`.
+
+- The `sy-filemanager` RPM is installed. It provides the
+  file-manager executable and preview plugin host; see the
+  [package reference](../reference/packages.md).
 
 - You are in a niri session (the compositor `sy apply` configures).
   The keybinding `Mod+E` is part of that session. If you are on a
@@ -48,7 +50,7 @@ A three-pane window appears: parent directory, current directory,
 preview.
 
 `Mod+Shift+E` opens on the niri process working directory instead
-of `$HOME`. `Mod+/` is the same as `Mod+E`.
+of `$HOME`. `Mod+Slash` is an alternate binding for `Mod+E`.
 
 ## Step 2 — Confirm the plane is healthy
 
@@ -61,13 +63,11 @@ binds, systemd unit, bookmarks directory, and plugin registry all
 pass. If a probe is `fail`, the row's `fix_hint` names the repair
 (most often `systemctl --user start sy-file.socket`).
 
-## Step 3 — Hover a markdown file
+## Step 3 — Preview a text file
 
-In the current-directory pane, move to a `.md` file. The preview
-pane paints a PNG of the rendered markdown.
-
-There is no Chrome process and no keyring popup. Preview is a
-small plugin (`sy-plugin-md`) that `sy apply` already installed.
+In the current-directory pane, move to a readable `.md` or text
+file. The preview pane shows syntax-highlighted source text; it does
+not render Markdown as a formatted document.
 
 If the preview stays empty, see
 [how to troubleshoot sy file](../how-to/troubleshoot-sy-file.md).
@@ -76,7 +76,7 @@ If the preview stays empty, see
 
 1. The window opened on `$HOME` (or the directory you passed).
 2. `sy file doctor --json` prints `"status": "ok"`.
-3. Hovering markdown fills the preview pane.
+3. Hovering a readable text file fills the preview pane with its source.
 
 ## Next steps
 

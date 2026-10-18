@@ -25,6 +25,12 @@ framing. Python and Bash speak it directly. The full contract lives
 in the [plugin SPEC](../../specs/research/sy-file-manager-plugins/SPEC.md)
 if you need every field.
 
+The current GUI uses built-in previews for `image/*`, `text/*`, and
+`application/json`. Plugins are dispatched for file types without a
+built-in preview. Use `application/octet-stream` for this example;
+the `text/plain` sample MIME below is the plugin's response format,
+not its advertised input capability.
+
 ## Steps
 
 ### Rust — via the in-tree PDK
@@ -38,7 +44,7 @@ use sy_plugin_pdk::prelude::*;
 define_plugin! {
     id: "sy-plugin-pdk-echo",
     api: "1",
-    capabilities: [Previewer { mime: "text/plain" }],
+    capabilities: [Previewer { mime: "application/octet-stream" }],
     handlers: {
         "preview": |req: PreviewReq| -> Result<PreviewResp> {
             Ok(PreviewResp::text(format!("echo {} (mime={})", req.path, req.mime)))
@@ -48,7 +54,7 @@ define_plugin! {
 ```
 
 `define_plugin!` registers `initialize` / `ping` / `shutdown` /
-`exit`, advertises a `text/plain` previewer, and dispatches
+`exit`, advertises an `application/octet-stream` previewer, and dispatches
 `preview` to your closure. Pair the binary with this manifest:
 
 ```toml
@@ -66,7 +72,7 @@ exec = "./echo_previewer"
 
 [[capability]]
 kind = "previewer"
-mime = "text/plain"
+mime = "application/octet-stream"
 
 [needs]
 fs_read = []
@@ -106,7 +112,7 @@ import sys
 def handle(req: dict) -> dict:
     method = req.get("method", "")
     if method == "initialize":
-        return {"capabilities": [{"kind": "previewer", "mime": "text/plain"}]}
+        return {"capabilities": [{"kind": "previewer", "mime": "application/octet-stream"}]}
     if method == "ping":
         return {"ok": True}
     if method == "preview":
@@ -143,7 +149,7 @@ while IFS= read -r line; do
     method=$(printf '%s' "$line" | jq -r '.method // empty')
     id=$(printf '%s' "$line" | jq -r '.id // null')
     case "$method" in
-        initialize) result='{"capabilities":[{"kind":"previewer","mime":"text/plain"}]}' ;;
+        initialize) result='{"capabilities":[{"kind":"previewer","mime":"application/octet-stream"}]}' ;;
         ping)       result='{"ok":true}' ;;
         preview)    path=$(printf '%s' "$line" | jq -r '.params.path // ""')
                     result=$(jq -nc --arg p "$path" '{mime:"text/plain", body:("echo " + $p)}') ;;
@@ -171,7 +177,7 @@ sy plugin doctor --json
 Each installed plugin contributes three rows: `manifest.valid`,
 `binary.reachable`, and `capability.routes`. All three must be
 `"ok": true` for your id. If `capability.routes` is false, another
-plugin already owns `text/plain` — pick a different MIME or raise
+plugin already owns `application/octet-stream` — pick a different MIME or raise
 `priority` on your `[[capability]]` row.
 
 If a row stays false, see

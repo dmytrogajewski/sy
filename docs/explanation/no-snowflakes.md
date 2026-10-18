@@ -10,10 +10,10 @@ a colour tweaked in `~/.config/waybar/style.css` and never committed.
 Snowflakes are easy the hour you make them and expensive the month
 you reinstall.
 
-`sy` exists so a fresh Fedora 43 laptop plus
-`cargo build --release && sy apply` reproduces the machine. That
-promise is false the moment any load-bearing state lives only on
-disk.
+`sy` keeps configuration, feature code, package metadata, and service
+definitions in the repository. Build and install the RPMs for the
+host, then apply the packaged configuration. That promise is false
+the moment any load-bearing state lives only on disk.
 
 ![sy apply renders this git repo onto the laptop](../img/sy-apply.svg)
 
@@ -21,9 +21,10 @@ disk.
 
 You change the system by changing the repo. Templates under
 `configs/` are rendered with the active theme from `themes/` and
-written to the paths they already mirror. Units under
-`configs/systemd/user/` are symlinked into the user manager. The
-binary itself hosts the planes. There is no third place.
+written to their configured destinations. Units under
+`configs/systemd/user/` are installed or linked into the user
+manager by the packaging and apply flow. Feature executables are
+installed by their RPMs. There is no third place.
 
 `sy apply --dry-run` shows the diff first. `sy diff` is the same
 idea: pending changes are visible, then you apply them. Destructive
@@ -39,8 +40,8 @@ must change, it changes in `configs/niri/config.kdl` and you re-apply.
 
 - **Slower first tweak, faster tenth reinstall.** Changing one
   colour is an edit plus apply, not a one-line patch in `~/.config`.
-  Recreating the laptop is a clone plus build plus apply.
-- **The repo is the backup.** What is not in `configs/` or in `sy`
+  Recreating the laptop is package installation plus apply.
+- **The repo is the backup.** What is not in `configs/` or in a sy
   is not part of the system. That is strict on purpose.
 - **Fedora-shaped, not distro-neutral.** The no-snowflakes rule is
   cheaper when the target OS is one version of one distribution.

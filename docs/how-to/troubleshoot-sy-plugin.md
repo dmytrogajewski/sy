@@ -69,8 +69,9 @@ journalctl --user -t sy-file
 
 ## Result
 
-All three doctor rows for your plugin id are `"ok": true`. Preview
-requests for that MIME return a body instead of an empty envelope.
+All three doctor rows for your plugin id are `"ok": true`. For MIME
+types without a built-in preview, the GUI can dispatch to a matching
+plugin. Built-in text and image MIME types use the GUI renderer.
 
 ## See also
 

@@ -1,603 +1,91 @@
 # sy
 
-<img src="assets/sy.png" alt="sy mascot — a tiny kitten" align="right" width="220" />
+`sy` is a modular desktop and agent environment for Fedora. The base RPM installs the command launcher and shared configuration tools; optional RPMs add power controls, AI inference, file management, monitoring, and other features.
 
-An **Agentic OS layer for Fedora** — a small command launcher, feature
-executables, and declarative configs that turn a stock Fedora laptop into an
-agent-first workstation. One repo, one source of truth, zero
-snowflakes: `make install && sy apply` from a checkout on a
-fresh machine reproduces the entire system.
+You can install only the features you need. Each feature is packaged separately, while the repository keeps the commands, configs, systemd units, and package metadata together.
 
-You get a desktop that matches this git tree, search over folders
-you register, a file manager on Super+E, and the same CLI for a
-coding agent. An NPU, a DGX
-Spark, and phone-as-key sudo are extras — bring-up does not need
-them. The story is
-[What sy is](docs/explanation/what-sy-is.md); the rest of the docs
-starts at [Start here](docs/intro.md).
+## Install from RPMs
 
-![sy sits on Fedora; you and an agent use the same command surface](docs/img/sy-stack.svg)
-
-```
-sy apply              # render configs/* → ~/.config/, ~/.local/share/, /etc/* (via diff)
-sy aiplane daemon     # on-device NPU inference plane (ORT + VitisAI EP)
-sy agt …              # sandboxed agent runner
-sy knowledge daemon   # semantic search over local files (NPU-accelerated)
-sy file               # native iced file manager (Mod+E)
-sy mon                # layer-shell health dashboard (Super+m)
-sy spark HOST …       # remote DGX Spark model appliance
-sy auto               # auto-configure MCP servers across agents (Claude, …)
-sy stack bar          # layer-shell waybar replacement
-sy profile performance # switch Fedora's tuned-ppd profile (alias: sy pwr)
-sy syauth doctor      # optional phone-as-key sudo controls (PAM + BlueZ + Android)
-…
-```
-
-`sy` is the common command entry point. Power, agents, authentication, AI workloads,
-knowledge, monitoring, the desktop shell, and the file manager have separate
-executables and crates. Each
-[*plane*](docs/reference/glossary.md#plane) is supervised by the user-level `sy.target` and reachable
-over the same CLIG + JSON-over-stdio surface (so an agent can drive
-any plane the same way a human can). See [`CLAUDE.md`](CLAUDE.md)
-for the "no snowflakes" rule that drives the single-binary choice
-and [`AGENTS.md`](AGENTS.md) for the coding-agent persona. For
-one-line definitions of `sy`-specific terms (plane, aiplane,
-re-exec dance, snowflake, VitisAI EP, …) see the
-[glossary](docs/reference/glossary.md). The browsable site (the
-story, tutorials, how-tos, reference) lives under `docs/` and is
-built by Docusaurus in `website/` — `cd website && npm start` to
-preview.
-
-## Fedora RPMs
-
-`make rpm` builds Fedora 43, 44, and 45 RPMs in Fedora containers using Podman
-or Docker. Use `make rpm FEDORA=44` for one release. CI runs the same script
-and uploads RPM artifacts. The output is under `dist/rpm/f43/` and
-`dist/rpm/f44/` and `dist/rpm/f45/`. `make rpm-native` builds the running Fedora release with
-the host RPM and Rust toolchain when its build dependencies are installed.
-Container builds retain DNF and Cargo caches under `dist/rpm/` so an interrupted
-build can resume without fetching completed dependencies again.
-
-Install the `sy` base RPM and only the feature RPMs you need. `sy-system-power`
-provides the power menu, `sy-system-agent` provides `agt`, `policy`, and
-`approve`, `sy-system-auth` provides `syauth` and its SELinux policy sources,
-`sy-system-aiplane` provides AI workload commands and a standalone user daemon, and
-`sy-filemanager` provides the file manager, its plugin host, and the Markdown
-previewer. `sy-system-knowledge` provides semantic search and its user units;
-`sy-system-monitor` provides the metrics collector and dashboard;
-`sy-desktop-shell` provides the bar and applets. These work without the desktop
-configuration RPM. `sy-system-aiplane-ryzenai` adds NPU boot integration and
-the post-upgrade check; it requires an external AMD runtime. `sy-desktop`
-contains the declarative niri and Waybar configuration and pulls in the shell.
-Its RPM ships a generic `sy.toml`; the checkout's personal settings are not
-included in the source or binary RPM.
-Run `sy --root /usr/share/sy apply` to
-render packaged configs and sync user units. RPM configs call `/usr/bin/sy`,
-and `sy apply` does not copy the packaged binary into `~/.local/bin`.
-Waybar tiles and niri bindings for optional packages appear only when those
-packages are installed at apply time.
-The top panel runs as `sy-waybar.service` in the graphical user session.
-`sy apply` enables it and restarts the panel and right strip after unit sync;
-`systemctl --user status sy-waybar.service sy-stack-bar.service` checks both.
-After a feature RPM is removed, `sy apply` removes stale user-unit links
-and copied config files it last wrote. It keeps files edited since the
-previous apply.
-After a local build, `make reinstall-rpm` reinstalls features already installed
-on the host and installs the base package if needed. Use
-`make reinstall-rpm RPM_ARGS=--all` to install every built feature on a
-fresh host. The script applies desktop config when `sy-desktop` is selected;
-otherwise it reloads an available user systemd manager. On an
-NPU host with `sy-system-aiplane-ryzenai`, run `/usr/share/sy/scripts/check-npu-upgrade.sh` after each Fedora upgrade;
-it checks the device and AMD runtime paths, then sends an
-embed request through the running VitisAI daemon and prints Fedora, kernel,
-and installed AMD/XRT package versions for the upgrade record. Proprietary
-Ryzen AI/XRT packages and model files are not included in these RPMs. The
-VitisAI adapter is currently qualified against Ryzen AI 1.7; the preflight
-reports the changed 1.8 layout as incompatible until it is tested on a host
-with that runtime. See [the Fedora upgrade investigation](specs/research/ryzenai-fedora-upgrade-20261017.md).
-For a fresh NPU host, run `/usr/share/sy/scripts/install-system-npu.sh`
-after installing its AMD runtime package; the script installs sy's dracut
-and systemd integration from the packaged configuration.
-
-Packaged `sy knowledge` stores source selections in
-`$XDG_CONFIG_HOME/sy/sy.toml` (or `~/.config/sy/sy.toml`). Set
-`SY_KNOWLEDGE_CONFIG_PATH` to choose another file. Qdrant remains an external
-runtime for the optional knowledge service.
-
-`sy power` opens the desktop power menu when `sy-system-power` is installed. `Mod+Shift+Escape` and the Waybar
-power icon open the same menu. `sy power reboot --dry-run --json` previews
-the exact command; `--yes` skips the confirmation picker for automation.
-
-`systemctl --user start sy-aiplane.service` starts the optional inference
-daemon. It owns `$XDG_RUNTIME_DIR/sy-aiplane.sock` and serves `sy aiplane`
-commands independently of knowledge. When the AI RPM is installed, knowledge
-uses that socket for embedding, reranking, and transcription; it pauses
-indexing while the AI service is unavailable. Restart a previously running
-`sy-knowledge.service` after installing the AI RPM so it releases its old
-in-process supervisor before starting `sy-aiplane.service`.
-
-## Planes
-
-### `aiplane` — on-device NPU inference
-
-The privileged process that owns `/dev/accel/accel0` and hosts every
-on-device ML workload behind a JSON-over-Unix-socket IPC. Workloads
-declare their EP preference (`Vitisai | Cpu`); the session pool picks
-what to load at start-up.
-
-- One process per NPU: `/dev/accel/accel0` is single-context. CLI and
-  MCP consumers delegate over IPC; no second ORT session is ever
-  spun up "just to be safe."
-- Re-exec dance: `aiplane::reexec` sets `LD_LIBRARY_PATH`,
-  `ORT_DYLIB_PATH` and the `RYZEN_AI_*` env before any thread spawns
-  so the AMD venv loads correctly.
-- Workloads ship under `crates/sy-aiplane/src/aiplane/workloads/` — currently `embed`
-  (multilingual-e5-base, 768-dim), with `rerank | vad | stt | ocr`
-  scaffolds.
-- A `workloads::fake` impl returns deterministic vectors so daemon
-  tests run on CI without `/dev/accel/accel0`.
-
-### `spark` — bridge to Sparkplane
-
-[Sparkplane](https://github.com/Sumatoshi-tech/sparkplane) is an independent
-DGX Spark inference appliance and CLI. It owns engines, models, qualification,
-deployment and serving; sy owns only a pinned, signature-verified client
-installation and command forwarding.
-
-`sy spark HOST ...` preserves Sparkplane's arguments, JSON output, terminal,
-signals and exit codes. It runs before sy's AMD initialization and works outside
-a sy checkout. Normal commands never install or upgrade software.
-
-For coding sessions that need package downloads, documentation fetches, or
-remote APIs, opt in for that launch only:
+The build and CI matrix currently targets Fedora 43, 44, and 45. Build packages locally with Podman or Docker:
 
 ```sh
-sy spark dgx-spark launch codex --allow-network -- --sandbox workspace-write
+make rpm FEDORA=44
 ```
 
-The flag is forwarded to Sparkplane and does not remove filesystem sandboxing
-or change the agent's approval policy. The same setting is available through
-`SPARKPLANE_LAUNCH_ALLOW_NETWORK=true`.
+Packages are written to `dist/rpm/f44/`. To install the base package and every built feature package on a fresh matching Fedora host:
 
-Enable `integrations.sparkplane` with a verified release pin in `sy.toml`,
-then use `sy apply --dry-run` and `sy apply`. See the
-[Sparkplane integration guide](docs/how-to/install-spark.md).
-Appliance development and CI/CD are documented in
-[Sparkplane](https://github.com/Sumatoshi-tech/sparkplane/blob/main/docs/how-to/develop-spark.md).
-
-### `agt` — sandboxed agent runner
-
-`sy agt` runs coding/inference agents under policy-profile sandboxes.
-The profiles live under [`configs/policy/profiles/`](configs/policy/profiles/);
-the runner enforces them before dispatching tool calls. Used by `sy auto`
-to plumb MCP servers into Claude / Cursor / Codex / Gemini configs
-without each tool re-implementing tool-permission policy.
-
-### `knowledge` — semantic search
-
-In-process vector index over your local files, served by an embedded
-**qdrant** + the `aiplane` embed workload. Sources are registered
-once, then incrementally synced on a schedule. Exposes the search via
-CLI and via an MCP server (`sy knowledge mcp`) auto-registered with
-your agents by `sy auto`.
-
-Retrieval is **hybrid**: a dense (embedding) leg and a sparse (BM25-style
-lexical) leg are fused server-side by qdrant's Reciprocal Rank Fusion
-(`k=60`, needs qdrant ≥1.16) and reranked, so literal tokens (`X5`,
-file paths, SHAs) land even when the embedding alone would miss them.
-Each source carries a `kind` (`telegram`, `claude-transcripts`,
-`notes`, …); per-source pipelines chunk per logical unit (one Telegram
-message, one transcript turn) with structured payload. Agent
-transcripts (`~/.claude/projects/**`, `kind=claude-transcripts`) are
-**excluded from the default search scope** so a live prompt can't
-retrieve itself — opt back in with `--kind claude-transcripts`.
-
-```
-sy knowledge add ~/Documents/notes
-sy knowledge daemon
-sy knowledge search "rust async cancellation"
-
-# Structured pre-search filters (also `SY_KB_*` env; flags > env > default):
-sy knowledge search "новый год X5 Магнит" \
-    --date-from 2023-12-01 --date-to 2024-02-29 \
-    --kind telegram --from "Анна Лу"
-#   --include-source / --exclude-source <name>   scope by registered source
-#   (results carry a stable `chunk_id`; fetch full text with get-chunk)
-
-sy knowledge get-chunk <chunk_id>   # full, uncapped text for one result
-sy knowledge eval --json            # recall@1/5, MRR, abstain accuracy vs the golden set
-sy knowledge status --json
+```sh
+make reinstall-rpm RPM_ARGS=--all
 ```
 
-Search responses carry a `confidence` (calibrated from the reranker)
-and honour an `abstain_threshold` — below it the tool returns no
-results with `reason: "no high-confidence match"` rather than
-quoting background noise. Natural-language time phrases ("новогодние
-праздники 2024", "last summer") auto-fill the date range when no
-explicit `--date-from/--date-to` is given, and a user-editable
-`~/.config/sy-knowledge/synonyms.yaml` (shipped by `sy apply`) expands
-known aliases (`X5 → Пятёрочка/Перекрёсток/Чижик`) into the lexical leg.
+To rebuild and reinstall the package set already installed on the host, use `make reinstall-rpm`. For a desktop session, install `sy-desktop` as well; it supplies the declarative Niri and Waybar configuration and depends on the desktop shell. Applying the packaged configuration uses:
 
-Voice/video notes can be transcribed into the index (Whisper, CPU/iGPU)
-by building with `--features transcribe` (off by default — it vendors
-whisper.cpp and downloads a model).
-
-### Rice — niri + waybar + …
-
-Gruvbox Material Dark Medium. Configs live as
-[minijinja](https://github.com/mitsuhiko/minijinja) templates under
-`configs/`, driven by the active theme under `themes/`. `sy apply`
-renders them into `~/.config/`. Directory layout mirrors `~/.config/`,
-so each subfolder maps 1:1 to its destination.
-
-```
-configs/
-├── niri/config.kdl
-├── waybar/{config.jsonc,style.css,modules/}
-├── i3status-rust/config.toml
-├── mako/config
-├── fuzzel/fuzzel.ini
-├── foot/foot.ini
-└── swaylock/config
+```sh
+sudo dnf install ./dist/rpm/f44/sy-desktop-*.rpm
+sy --root /usr/share/sy apply
 ```
 
-Stack:
+The command above assumes the base and other desired packages are already installed. See the [package installation guide](docs/tutorials/getting-started.md) for selecting packages and verifying services. RPM filenames vary by release and build metadata; use the exact files generated in your output directory.
 
-| Role             | Tool            | Source                          |
-|------------------|-----------------|---------------------------------|
-| Compositor       | niri            | COPR `avengemedia/dms` (or `dnf`) |
-| Bar frontend     | waybar          | `dnf`                           |
-| Bar content      | i3status-rs     | COPR `atim/i3status-rust`       |
-| Launcher         | fuzzel          | `dnf`                           |
-| Terminal         | foot            | `dnf`                           |
-| Notifications    | mako            | `dnf`                           |
-| File manager     | `sy file` (iced) | configs under `configs/sy/file*.toml`; opens via `Mod+E` / `sy file` |
-| Lock             | swaylock        | `dnf`                           |
-| Idle             | swayidle        | `dnf` (DPMS via `niri msg`)     |
-| Night light      | wlsunset        | `dnf`                           |
-| Clipboard hist.  | cliphist        | `go install`                    |
-| Polkit agent     | lxpolkit        | `dnf`                           |
-| Screenshots      | niri built-in (`screenshot*` actions) | —          |
-| Media/brightness | playerctl, brightnessctl | `dnf`                  |
-| Wallpaper        | niri `layout.background-color` solid fill |          |
+## Choose features
 
-### `syauth` — phone-as-key sudo
+See the [RPM package reference](docs/reference/packages.md) for package
+roles, dependencies, and feature requirements. Package metadata is
+defined in [`packaging/sy.spec`](packaging/sy.spec).
 
-`sy syauth` wraps [syauth](https://github.com/dmytrogajewski/syauth)
-(PAM module + user daemon + Android app). The waybar pill renders the
-bond / adapter / unlock state; `sy syauth install-pam --service sudo`
-wires `pam_syauth.so` into `/etc/pam.d/sudo` with the reality-corrected
-defaults (`sufficient`, `timeout=8000`); `sy syauth doctor` one-shot-probes
-the whole chain (daemon liveness, bonds, key file modes, BlueZ,
-systemd unit, audit log, plus the two sy-only fs probes) and returns
-0 / 2 / 1 (all-ok / warn-only / any-fail).
+## Try it
 
-Full setup walkthrough — six steps from a fresh host to
-`grantors=pam_syauth` — in
-[`docs/tutorials/syauth-setup.md`](docs/tutorials/syauth-setup.md).
-Failure-mode fixes are in
-[`docs/how-to/troubleshoot-syauth.md`](docs/how-to/troubleshoot-syauth.md);
-the PAM module's control flags and arguments are in
-[`docs/reference/syauth-pam-module.md`](docs/reference/syauth-pam-module.md).
+After installing the power feature in a graphical session:
 
-## Repo layout
-
-```
-.
-├── Cargo.toml
-├── sy.toml                   # active theme + sy config
-├── src/                      # sy CLI + planes
-│   ├── aiplane/              # NPU plane: registry, session pool, IPC, daemon
-│   ├── agt/                  # sandboxed agent runner
-│   ├── knowledge/            # qdrant-backed semantic search
-│   ├── supervision/          # sy.target supervisor + unit linker
-│   ├── stack/                # layer-shell waybar replacement
-│   ├── doctor/               # cross-plane health probes
-│   └── …                     # bat, bright, bt, cal, gpu, npu, net, … (bar tiles)
-├── configs/                  # declarative config (rendered by `sy apply`)
-│   ├── systemd/{system,user}/*.service|*.target
-│   ├── niri/ waybar/ mako/ fuzzel/ foot/ swaylock/
-│   ├── dbus-1/ policy/ selinux/ udev/ modprobe.d/ grub/ dracut/
-│   └── …
-├── scripts/                  # one-shot helpers (prep_npu_workload.py …)
-├── themes/<name>.toml        # palettes
-└── specs/                    # journeys, bugs, roadmaps (long-form docs)
+```sh
+sy power
 ```
 
-## Install / apply
+Preview a power action without performing it:
 
-### Rice prerequisites
-
-```bash
-sudo dnf copr enable -y avengemedia/dms
-sudo dnf install -y niri
-
-sudo dnf install -y \
-  waybar mako fuzzel foot swaylock swayidle wlsunset \
-  wl-clipboard brightnessctl playerctl pavucontrol \
-  network-manager-applet lxpolkit gnome-themes-extra \
-  xdg-desktop-portal-gnome xdg-desktop-portal-gtk
-
-sudo dnf copr enable -y atim/i3status-rust
-sudo dnf install -y i3status-rust
-
-# JetBrainsMono Nerd Font (icons in waybar / mako)
-mkdir -p ~/.local/share/fonts/JetBrainsMono
-curl -fL -o /tmp/JBM.zip \
-  https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip
-unzip -q -o /tmp/JBM.zip -d ~/.local/share/fonts/JetBrainsMono '*.ttf'
-rm /tmp/JBM.zip
-fc-cache -f
-
-GOBIN=~/.local/bin go install go.senan.xyz/cliphist@latest
+```sh
+sy power reboot --dry-run --json
 ```
 
-Make sure `~/.local/bin` and `~/.cargo/bin` are in `$PATH`.
+For the AI plane, install `sy-system-aiplane`, then check its CLI and service:
 
-### Deploy
-
-```bash
-cargo build --release
-
-./target/release/sy apply --dry-run     # preview
-./target/release/sy apply               # render and write
-./target/release/sy apply --theme gruvbox-material
-./target/release/sy themes              # list themes
-./target/release/sy render waybar/style.css   # render single file to stdout
-
-# Reload running session
-niri msg action load-config-file
-systemctl --user restart sy-waybar.service sy-stack-bar.service
-makoctl reload
+```sh
+sy aiplane --help
+systemctl --user status sy-aiplane.service
 ```
 
-`sy file` (the in-tree iced file manager) is the primary file
-manager — see the [`Stack`](#planes) row above and
-[`docs/how-to/run-sy-file.md`](docs/how-to/run-sy-file.md) for the
-first-session recipe.
+NPU inference additionally needs compatible AMD Ryzen AI runtime packages and a prepared model. The AMD runtime and model files are not shipped in sy RPMs. See [NPU setup](docs/how-to/set-up-npu.md).
 
-Override target dir with `--target` or `$XDG_CONFIG_HOME`. Override
-repo root with `--root` or `$SY_ROOT`. The active theme lives in
-`sy.toml`. Log out and pick **Niri** from your display manager, or
-start a TTY session with `niri --session`.
+## Architecture
 
-`sy apply` symlinks user-level systemd units under
-`~/.config/systemd/user/` and runs `systemctl --user daemon-reload`.
-`systemctl --user enable --now sy.target` brings the AI and agent services up
-under the user manager. The graphical session starts Waybar and the right bar.
+The `sy` command is the user-facing launcher. Feature crates build dedicated executables that implement their own commands and services. The RPM split lets users install features independently; shared configuration and IPC contracts connect features where needed. See [architecture](docs/explanation/architecture.md) for process and service boundaries.
 
-### NPU one-time setup
+## Documentation
 
-1. Install AMD Ryzen AI 1.7.1 system packages via the companion repo
-   [`ryzenai-rpm`](https://github.com/dmytrogajewski/ryzenai-rpm)
-   (RPM-ified XRT runtime, XDNA DKMS module, memlock config, AMD's
-   Python wheel set).
+- [Start here](docs/intro.md)
+- [Tutorials](docs/tutorials/)
+- [How-to guides](docs/how-to/)
+- [CLI and configuration reference](docs/reference/)
+- [Architecture explanation](docs/explanation/architecture.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
 
-2. Build the model + the NPU compile cache from this repo:
+## Development
 
-   ```bash
-   source /opt/AMD/ryzenai/venv/bin/activate
-   python ~/sources/sy/scripts/prep_npu_workload.py
-   ```
+Build the workspace with Rust:
 
-   Downloads `intfloat/multilingual-e5-base` from HF, exports to
-   static-shape ONNX, BF16-quantises with AMD's Quark, and runs a
-   one-shot VitisAI compile to produce the `.rai` NPU artifact
-   (≈75 s, cached forever). All outputs land in
-   `~/.cache/sy/npu-embed/`.
-
-3. Start the daemon:
-
-   ```bash
-   sy aiplane daemon            # foreground
-   # or
-   systemctl --user start sy.target   # supervises every plane
-   ```
-
-`sy` auto-detects the AMD venv at startup, re-execs itself with the
-right `LD_LIBRARY_PATH` + `ORT_DYLIB_PATH` + `RYZEN_AI_*` env baked
-in, and routes embeddings through the NPU.
-
-#### Knowledge hardware tier
-
-| Backend    | Trigger                                | Throughput | VRAM | Notes |
-|------------|----------------------------------------|------------|------|-------|
-| `vitisai`  | `/opt/AMD/ryzenai/venv` is present     | ~7 chunks/s | 0 GB | Pre-compile cache under `~/.cache/sy/npu-embed/`. Best fit for laptops where you also want to run an LLM on the dGPU. |
-| `cuda`     | pip `onnxruntime-gpu==1.24.*` installed, NVIDIA GPU | depends | ≈1 GB | Legacy fastembed path. Sees CUDA libs via `~/.local/lib/python*/site-packages/nvidia/*/lib`. |
-| `cpu`      | Always-available fallback              | slow       | 0 GB | Last resort. |
-
-Surface the active backend with `sy knowledge status --json` (look at
-`embed_backend`).
-
-#### Why `multilingual-e5-base`, not `-large`?
-
-We originally used `-large` (1024-dim) via fastembed on CUDA. The
-NPU port required dropping to `-base` (768-dim) because **VitisAI EP
-1.7.1 caps internal ModelProto serialisation at 2 GiB**. `e5-large`
-is 2.2 GB FP32 and even after BF16 / INT8 quantization the runtime
-upcasts the weights past the cap before partitioning. The MTEB
-quality cost is roughly 6 % (64.2 → 60.5 avg) — acceptable for the
-"free GPU" trade.
-
-Migration: switching to `-base` is **schema-breaking** (vector dim
-1024 → 768). On first start after upgrading run:
-
-```bash
-sy knowledge cancel       # stop any in-flight scheduled sync
-sy knowledge drop         # drop the old 1024-dim qdrant collection
-sy knowledge resync       # rebuild with the new 768-dim embeddings
+```sh
+cargo build --workspace
+make lint
+make test
 ```
 
-## CLI cheat-sheet
+Build RPMs with `make rpm FEDORA=<release>`. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development setup and required checks.
 
-The snippets below are the everyday-driver subset. For the full
-per-subcommand reference — every flag, default, env var, exit code,
-and example — see [`docs/reference/cli.md`](docs/reference/cli.md).
+## Maintainer
 
-```bash
-# apply / preview the whole system
-sy apply [--dry-run] [--theme <name>]
-sy diff                            # pending changes
-sy doctor                          # cross-plane health probes
-sy themes                          # list themes
-sy render <relpath>                # render single template to stdout
-
-# aiplane (NPU)
-sy aiplane daemon                  # supervises /dev/accel/accel0
-sy aiplane run --workload <k>      # one-shot via IPC
-sy aiplane status [--json]
-
-# knowledge (semantic search consumer of aiplane)
-sy knowledge add <path>            # register a tree (respects .gitignore)
-sy knowledge rm <path>             # unregister
-sy knowledge schedule 30m          # rewrite [knowledge].schedule
-sy knowledge sources               # list registered roots
-sy knowledge manifests --json      # active per-folder manifests
-sy knowledge daemon                # supervises qdrant + scheduled embed
-sy knowledge status [--json]
-sy knowledge pause / resume / toggle-pause / cancel
-sy knowledge bench --n 1024
-sy knowledge search <query> [--date-from D --date-to D --from WHO --kind K \
-                            --include-source N --exclude-source N]
-sy knowledge get-chunk <chunk_id> # full uncapped text for one search result
-sy knowledge eval [--json]        # recall@1/5, MRR, abstain accuracy (golden set)
-sy knowledge mcp                   # MCP server (stdio): knowledge_search,
-                                   #   knowledge_get_chunk, knowledge_index,
-                                   #   knowledge_list_sources
-
-# mon — system health popup + 1 Hz aggregator
-sy mon                             # toggle the layer-shell popup (Super+m)
-sy mon snapshot [--json]           # one-shot snapshot from the aggregator
-sy mon doctor [--json]             # plumbing checks (folds into sy doctor)
-sy mon mcp                         # MCP stdio server (system.mon.{snapshot,history})
-sy mon waybar                      # waybar custom-module tile (ok/degraded/down)
-
-# agent runner
-sy agt run <prompt> [--profile <name>]
-
-# auto-configure MCP across agents
-sy auto                            # configures sy MCP servers for Claude, Cursor, Codex, Gemini
-
-# syauth
-sy syauth install-pam --service sudo
-sy syauth doctor
-
-# stack bar (layer-shell waybar replacement)
-sy stack bar
-```
-
-Every command supports `--help`, every command that produces output
-supports `--json`, every state-changing command supports `--dry-run`,
-and every flag is also settable via `SY_*` env var. See [`CLAUDE.md`](CLAUDE.md).
-
-## Keybindings
-
-Mod key is **Super** (Mod4). Full list below.
-
-| Keys                              | Action                                   |
-|-----------------------------------|------------------------------------------|
-| `Super+Return`                    | Terminal (foot)                          |
-| `Mod+E` / `Mod+Shift+E` / `Mod+Slash` | `sy file` (the new iced file manager) |
-| `Super+d` / `Super+Shift+d`       | Launcher / dmenu mode                    |
-| `Super+c`                         | Clipboard history (cliphist + fuzzel)    |
-| `Super+Escape`                    | Lock screen                              |
-| `Super+Shift+q`                   | Close window                             |
-| `Super+Shift+c` / `Super+Shift+e` | Reload config / quit niri                |
-| `Super+Shift+/`                   | Show hotkey overlay                      |
-| `Super+[1-0]`                     | Focus workspace N                        |
-| `Super+Shift+[1-0]`               | Move column to workspace N               |
-| `Super+Tab`                       | Focus previous workspace                 |
-| `Super+[` / `Super+]`             | Workspace up / down (niri is vertical)   |
-| `Super+h` / `Super+l`             | Focus column left / right                |
-| `Super+j` / `Super+k`             | Focus window within column / next ws     |
-| `Super+Shift+<dir>`               | Move column / window                     |
-| `Super+b` / `Super+v`             | Consume / expel window right / left      |
-| `Super+w`                         | Toggle tabbed display for column         |
-| `Super+e`                         | Center focused column                    |
-| `Super+f` / `Super+Shift+f`       | Maximize column / true fullscreen        |
-| `Super+Shift+space` / `Super+space` | Toggle floating / focus floating↔tiled |
-| `Super+r` / `Super+Shift+r`       | Column width +10% / −10%                 |
-| `Super+-` / `Super+=`             | Column width −10% / +10%                 |
-| `Print` / `Shift+Print`           | Interactive / whole-screen screenshot → clipboard |
-| `Super+Print` / `Super+Shift+Print` | Whole-screen / active-window → `~/Pictures/` |
-| Volume / brightness / media keys  | Work out of the box                      |
-| `Super+m`                         | Toggle `sy mon` system health popup      |
-
-### Niri vs sway
-
-- **Scrollable columns, not binary splits.** `Super+b`/`v` consume/expel
-  windows into the current column. Columns scroll horizontally across the output.
-- **No stacking layout.** `Super+w` maps to niri's `toggle-column-tabbed-display`.
-- **No scratchpad.** `Super+-` / `Super+Shift+-` are repurposed for column-width tweaks.
-- **No `focus parent`.** `Super+a` is unbound.
-- **Workspaces are vertical.** `Super+[` / `Super+]` scroll up / down.
-
-## Keyboard layout
-
-`niri/config.kdl` defaults to dual `us,ua` with **Alt+Shift** to switch
-and Caps Lock remapped to Escape. Change in the
-`input { keyboard { xkb { ... } } }` block.
-
-## Theme
-
-The palette lives in `themes/<name>.toml` and is injected into every
-`configs/**` file at render time. Edit the `[colors]` table and re-run
-`sy apply` to recolor the whole rice.
-
-### Palette (gruvbox-material)
-
-| Name     | Hex       |
-|----------|-----------|
-| bg       | `#282828` |
-| bg_soft  | `#32302f` |
-| bg1      | `#3c3836` |
-| bg2      | `#504945` |
-| fg       | `#ebdbb2` |
-| fg_dim   | `#a89984` |
-| red      | `#ea6962` |
-| orange   | `#e78a4e` |
-| yellow   | `#d8a657` |
-| green    | `#a9b665` |
-| aqua     | `#89b482` (primary accent) |
-| blue     | `#7daea3` |
-| purple   | `#d3869b` |
-| gray     | `#928374` |
-
-## Notes
-
-- **Night light**: `wlsunset` runs with `-l 50.45`. Edit
-  `niri/config.kdl` (spawn-at-startup block) to match your latitude.
-- **Wallpaper**: solid `#282828` via `layout.background-color`. For
-  image-based wallpapers, install `swaybg` and replace with
-  `spawn-at-startup "swaybg" "-i" "/path/to/img.png"`.
-- **Waybar niri modules**: `niri/workspaces`, `niri/window`,
-  `niri/language` (XKB layout indicator). Needs waybar 0.11+.
-- **Idle & DPMS**: swayidle uses `niri msg action power-off-monitors`
-  / `power-on-monitors` for DPMS.
-- **File manager**: `sy file` is the productivised path; first-session
-  recipe in [`docs/how-to/run-sy-file.md`](docs/how-to/run-sy-file.md)
-  and the plugin-author path in
-  [`docs/how-to/write-a-sy-plugin.md`](docs/how-to/write-a-sy-plugin.md).
-
-## Contributing
-
-PRs and issues are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md)
-for how to file a bug, propose a change, run the test gates
-(`make lint`, `make test`), sign your commits (DCO), and the
-versioning policy (SemVer + Conventional Commits). Participation in
-the project is bound by the [Contributor Covenant 2.1](CODE_OF_CONDUCT.md).
-For security-sensitive reports, follow [`SECURITY.md`](SECURITY.md)
-instead of opening a public issue.
-
-## Maintainers
-
-- [@dmytrogajewski](https://github.com/dmytrogajewski) — sole
-  maintainer. For project questions, prefer a
-  [GitHub issue](https://github.com/dmytrogajewski/sy/issues) (or a
-  discussion if enabled); see [`SUPPORT.md`](SUPPORT.md) for the
-  full channel breakdown. For vulnerability reports, use the
-  private channel in [`SECURITY.md`](SECURITY.md).
+`sy` is maintained by [Dmitriy Gajewski](GOVERNANCE.md#roles). See [governance](GOVERNANCE.md) for project decision ownership.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [`LICENSE`](LICENSE).
