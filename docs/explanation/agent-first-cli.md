@@ -53,8 +53,8 @@ fallback, not the native path.
 ## Alternatives we considered
 
 - **A separate `syctl` machine API.** That splits the user model
-  and guarantees the two surfaces drift. Rejected: one binary, one
-  `--help`.
+  and risks the surfaces drifting. Rejected: keep one launcher and
+  one discoverable `--help` surface across feature packages.
 - **Interactive wizards for apply and MCP.** Fine on a TTY, hostile
   to agents, and they hide the diff. Rejected: `--dry-run` then
   `--apply`.

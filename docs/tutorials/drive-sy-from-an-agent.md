@@ -19,6 +19,10 @@ and a search from the agent returns hits from a registered source.
 - You completed
   [Search your local files](search-your-files.md). At least one
   knowledge source is registered and indexed.
+- The `sy-system-agent` package is installed for agent session tools.
+  The knowledge MCP server is supplied by `sy-system-knowledge`.
+  Install only the feature packages you plan to use; see the
+  [package reference](../reference/packages.md).
 - At least one of Claude Code, Cursor, Codex, or Gemini CLI is
   installed so `sy auto` has a config file to write to. If none of
   those are installed, this tutorial still works as a dry-run: you

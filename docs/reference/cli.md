@@ -96,7 +96,7 @@ agent callers cannot accidentally rewrite an agent's MCP config.
 
 `sy` uses **stable, documented** exit codes per SPEC §4.7. The
 constants live in the source under each plane's `exit` module
-(`src/doctor/mod.rs`, `src/knowledge/mod.rs`, `src/supervision/service.rs`,
+(`src/doctor/mod.rs`, `crates/sy-knowledge/src/knowledge/mod.rs`, `src/supervision/service.rs`,
 `src/ipc_cli.rs`, `src/crash/mod.rs`,
 `crates/sy-agent/src/agt/protocol.rs`).
 
@@ -366,8 +366,9 @@ sy aiplane cancel 01HZ2R4F7C8X9PR3T7VFQ4M3Y2 --json
 
 ## `sy knowledge`
 
-System-wide semantic-search plane: Qdrant + the aiplane `embed`
-workload. Source: `src/knowledge/mod.rs`, `src/knowledge/cli.rs`.
+System-wide semantic-search feature: Qdrant plus the AI service's
+`embed` workload. Source: `crates/sy-knowledge/src/knowledge/mod.rs`
+and `crates/sy-knowledge/src/knowledge/cli.rs`.
 
 ### Subcommands
 
@@ -452,7 +453,7 @@ for chunk count.
 - `4` — `QDRANT_UNREACHABLE`.
 - `5` — `EMBEDDING_FAILED`.
 
-(Defined in `src/knowledge/mod.rs::exit`.)
+(Defined in `crates/sy-knowledge/src/knowledge/mod.rs::exit`.)
 
 ### Examples
 
@@ -929,7 +930,8 @@ sy auto list-detectors --json
 ## `sy stack`
 
 Temporary-artifact stack bar with three pools (clip / app / user).
-Source: `src/stack/mod.rs`, `src/stack/cli.rs`.
+Source: `crates/sy-desktop-shell/src/stack/mod.rs` and
+`crates/sy-desktop-shell/src/stack/cli.rs`.
 
 ### Subcommands
 
@@ -1023,9 +1025,9 @@ See [installation and release pins](../how-to/install-spark.md) and the
 
 ## `sy file`
 
-Native niri-tiled file manager (iced). Bare `sy file [PATH]` opens
-the window (prints `scaffold` then enters the GUI when stdout is a
-TTY and `gui-iced` is on). Source: `crates/sy-filemanager/src/file/cli.rs`.
+Native niri-tiled file manager (iced). Bare `sy file [PATH]` prints
+the `scaffold` marker, then enters the GUI when stdout is a TTY and
+`gui-iced` is enabled. Source: `crates/sy-filemanager/src/file/cli.rs`.
 
 ### Synopsis
 

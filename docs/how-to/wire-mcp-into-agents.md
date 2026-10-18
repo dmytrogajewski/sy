@@ -10,6 +10,10 @@ Gemini without hand-editing each client's config file.
 ## Prerequisites
 
 - `sy` is installed and `sy.target` is active.
+- Install the feature packages for the servers you want to expose. The
+  knowledge MCP server requires `sy-system-knowledge`; see the
+  [package reference](../reference/packages.md). Other detectors may
+  require their matching feature package.
 - The client you care about is installed. `sy auto` writes the
   config file that client already uses; it does not install the
   client.

@@ -14,6 +14,9 @@ and from the waybar tile.
   systemd manager (`systemctl --user is-active sy.target` prints
   `active`). If not, see
   [the getting-started tutorial](../tutorials/getting-started.md).
+- The `sy-system-knowledge` and `sy-system-aiplane` RPMs are
+  installed. The knowledge plane stores vectors locally; the aiplane
+  package provides the embedding workload used during indexing.
 - The `sy-knowledge` daemon and its embedded `qdrant` child are up
   (`systemctl --user is-active sy-knowledge.service` prints
   `active`).

@@ -73,7 +73,7 @@ ever flips.
 ## Decision Outcome
 
 Chosen option: **Option 1**, because the binary cannot be installed
-outside the documented Fedora 43 path (re-exec dance, systemd
+outside the documented Fedora deployment path (re-exec dance, systemd
 units, polkit grants, SELinux contexts), and the audit's
 recommendation for `R-ECO-04` explicitly favours `publish = false`
 for OS-coupled binaries. Declaring `readme = "README.md"` alongside

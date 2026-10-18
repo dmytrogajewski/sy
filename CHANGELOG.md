@@ -13,10 +13,6 @@ Commit subjects follow [Conventional Commits 1.0.0](https://www.conventionalcomm
 see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the SemVer policy and the
 commit-message convention that feeds this file.
 
-The `[Unreleased]` section below is a lossy seed of the most recent
-visible work, not a full history. Earlier changes are not reconstructed
-here.
-
 ## [Unreleased]
 
 ### Fixed
@@ -41,8 +37,6 @@ here.
   it existed — a re-index cannot heal them, because the unchanged export JSON
   makes the pass skip the file by content hash. See
   `specs/bugs/BUG-20260927-2355.md`.
-
-### Fixed
 
 - **Bulk embedding no longer jumps the queue it was supposed to stand in.**
   `aiplane.batch` was dispatched straight to the workload backend and the
@@ -241,6 +235,10 @@ here.
   `sy knowledge bench` returned 33.0 chunks/s, and removing the source left
   zero orphan points behind. See `specs/bugs/BUG-20260927-1830.md`.
 
+- The memory plane starts at login because `sy apply` enables
+  `sy.target`, so a fresh `sy apply` on a clean account no longer
+  leaves the user-level supervisor disabled.
+
 ### Changed
 
 - `make install` relabels `~/.local/bin/sy` unprivileged and only falls back
@@ -251,6 +249,17 @@ here.
   `SPARKPLANE_LAUNCH_ALLOW_NETWORK` equivalent across the README, integration
   how-tos, and bridge reference. The opt-in is per launch and leaves filesystem
   sandboxing and approval policy unchanged.
+- `sy mon` snapshots now use schema version 2; the removed power panel
+  is no longer present in the snapshot document or dashboard grid.
+- The `knowledge` plane now consumes the `aiplane` daemon through thin
+  facades: every embedding request crosses the JSON-over-Unix-socket
+  IPC, so the "one process per NPU" rule holds even when several
+  consumers are active.
+- The `stack` bar aligns under `waybar`, picks glyphs by item type, and
+  shows hover previews so the bar reads at a glance without expanding.
+- Internal layout follows SPEC §4.4: the agent sandbox, the `aiplane`
+  scheduler, and the observability core move into dedicated modules.
+  Public CLI surface is unchanged.
 
 ### Added
 
@@ -329,31 +338,11 @@ here.
   picker, direct selection, and one-click cycling through Fedora's standard
   `power-saver`, `balanced`, and `performance` profiles via `tuned-ppd`.
 
-### Changed
-
-- `sy mon` snapshots now use schema version 2; the removed power panel
-  is no longer present in the snapshot document or dashboard grid.
-- The `knowledge` plane now consumes the `aiplane` daemon through thin
-  facades: every embedding request crosses the JSON-over-Unix-socket
-  IPC, so the "one process per NPU" rule holds even when several
-  consumers are active.
-- The `stack` bar aligns under `waybar`, picks glyphs by item type, and
-  shows hover previews so the bar reads at a glance without expanding.
-- Internal layout follows SPEC §4.4: the agent sandbox, the `aiplane`
-  scheduler, and the observability core move into dedicated modules.
-  Public CLI surface is unchanged.
-
 ### Removed
 
 - The experimental `sy power` plane, adaptive governor, TuneD replacement
   shim, host policy files, telemetry model, and MCP tool. Fedora's TuneD and
   `tuned-ppd` services are now the sole power-profile managers; `sy profile`
   is only a frontend to their standard D-Bus API.
-
-### Fixed
-
-- The memory plane now starts at login because `sy apply` enables
-  `sy.target`, so a fresh `sy apply` on a clean account no longer
-  leaves the user-level supervisor disabled.
 
 [Unreleased]: https://github.com/dmytrogajewski/sy/compare/v0.1.0...HEAD

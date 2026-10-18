@@ -57,9 +57,11 @@ mtime}, …] }`.
 
 ### IPC mapping
 
-`file.list { path }` (primary) → falls back to `file.open` +
-`file.cd` + `file.state` if the daemon does not yet advertise
-`file.list`.
+The MCP tool attempts `file.list`; the current daemon does not expose
+that operation. It then calls `file.open`, `file.cd`, and `file.state`
+and returns the entries from the state snapshot. `include_hidden`,
+`limit`, and `offset` are accepted by the MCP schema but are not
+applied by the current daemon listing path.
 
 ### Errors
 
@@ -246,10 +248,9 @@ up; agents should treat its absence as "up".
 
 ### Description
 
-Render a preview for `path` as a PNG. Returns
-`{ mime, png_base64 }`; the body is empty until the Step 27 plugin
-dispatcher fills it. `max_width` / `max_height` are forward-
-compatible sizing hints.
+Return MIME metadata for `path`. The current implementation returns
+`{ mime, png_base64: "" }`; it does not render a PNG in this IPC path.
+The `max_width` and `max_height` parameters are accepted but ignored.
 
 ### Arguments
 
@@ -263,20 +264,22 @@ compatible sizing hints.
 
 ```json
 {
-  "mime": "image/png",
-  "png_base64": "iVBORw0KGgo…"
+  "mime": "text/markdown",
+  "png_base64": ""
 }
 ```
 
 ### IPC mapping
 
-`file.preview { path, max_width, max_height }`.
+`file.preview { path, max_width, max_height }`. The handler currently
+uses `path` for MIME detection and ignores the sizing hints.
 
 ### Errors
 
 `isError: true` on daemon-unreachable or MIME-sniff failure.
-`isError: true` with a `plugin …` message surfaces a Step 27 plugin
-crash once the dispatcher is wired.
+`isError: true` with a `plugin …` message reports a plugin preview
+failure. The current preview operation returns an empty body because
+the MCP plugin preview dispatcher is not connected yet.
 
 ## `file_select`
 

@@ -8,20 +8,20 @@ sidebar_label: Start here
 
 # Start here
 
-`sy` turns a stock **Fedora 43** laptop into a workstation you and
-an AI agent can drive the same way.
+`sy` is a modular desktop and agent environment for Fedora. The base
+package provides a command launcher and configuration tools. Optional
+packages add power controls, AI inference, knowledge search,
+monitoring, file management, and desktop integration.
 
-It is one Rust program and the `configs/` tree in this git repo.
-You build the binary, run `sy apply`, and enable `sy.target`. The
-compositor session, semantic search, file manager, and agent plumbing
-then match the repo. If the disk dies, a fresh
-Fedora install plus those steps is the same machine. That promise
-is the product.
+Each feature has its own executable and package boundary. Shared
+configuration, systemd units, and IPC connect features where needed.
+Install the features you want, then use `sy apply` to apply the
+packaged desktop configuration. See the [RPM package reference](./reference/packages.md).
 
 You do **not** need an AMD NPU, a DGX Spark, or an Android phone.
 Those are extras. Bring-up is a plain laptop and a network.
 
-![sy sits on Fedora; you and an agent drive the same binary](./img/sy-stack.svg)
+![sy feature packages run on Fedora and expose commands to users and agents](./img/sy-stack.svg)
 
 The longer story — a day using it, what is optional, why the rules
 are strict — is [What sy is](./explanation/what-sy-is.md).
@@ -58,9 +58,9 @@ If you have the hardware:
   phone is away, password or FIDO still works.
   [Unlock sudo with your phone](./tutorials/syauth-setup.md).
 
-A *plane* is one long-running role of that same binary (search,
-power, file manager, …). You do not install a separate package per
-plane.
+A *plane* is a feature area with commands and, where needed, a
+long-running service. Planes can have separate RPM packages; install
+only the ones you need. See [the package list](./reference/packages.md).
 
 ![You type a search; an agent calls the same plane over MCP](./img/sy-surfaces.svg)
 
@@ -71,7 +71,7 @@ is the mechanical picture.
 
 Follow these in order on a new laptop.
 
-1. [Bring up sy on a fresh Fedora 43 laptop](./tutorials/getting-started.md)
+1. [Install sy from RPMs](./tutorials/getting-started.md)
 2. [Search your local files](./tutorials/search-your-files.md)
 3. [Browse files with sy file](./tutorials/browse-your-files.md)
 4. [Drive sy from an agent](./tutorials/drive-sy-from-an-agent.md)

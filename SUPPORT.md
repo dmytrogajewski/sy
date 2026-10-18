@@ -78,9 +78,9 @@ open a duplicate.
 ## Things this project does not provide
 
 - **Commercial support contracts or SLAs.** There is no paid tier.
-- **Per-user installation help on non-Fedora distributions.** `sy` is
-  scoped to Fedora 43; reports against other distros are accepted but
-  fixes are not promised.
+- **Per-user installation help on non-Fedora distributions.** The
+  current RPM build matrix targets Fedora 43, 44, and 45. Reports
+  against other distros are accepted, but fixes are not promised.
 - **Hardware procurement advice.** The NPU plane targets AMD Ryzen AI
   (XDNA2) silicon; if you do not have it, the `Cpu` execution provider
   works for tests but is not the supported deployment.

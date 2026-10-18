@@ -24,6 +24,11 @@ and each hit carries a `chunk_id` you can fetch in full.
 
   The command prints `active`.
 
+- The `sy-system-knowledge` and `sy-system-aiplane` RPMs are installed.
+  Install them from the matching Fedora RPM build as described in the
+  [package reference](../reference/packages.md). The knowledge package
+  provides the daemon and search commands; aiplane provides embeddings.
+
 - `sy knowledge` is running:
 
   ```bash
