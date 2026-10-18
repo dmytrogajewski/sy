@@ -111,8 +111,10 @@ Compare `journalctl _COMM=swaylock` with the daemon journal at the failed
 attempt. A `transport-error` followed by `cached writer dead` and GATT rebuilding
 means the request repaired transport and then fell through. A later sudo can
 succeed after the phone resubscribes. Updating only PAM does not fix that cause.
-The desktop transport repair tracks notification-session closure independently
-and retains GATT registration during disconnects. See
+Use desktop syauth RPM 0.1.0-3 or later for the standard BlueZ notification
+repair. Clearing an acquired notification FD alone is insufficient: BlueZ can
+acknowledge CCCD without renewing that FD. The standard API retains a usable
+notifier and GATT registration across reconnects. See
 [the screen-unlock investigation](../../specs/bugs/BUG-20261018-1736.md) for
 verification and deployment status.
 
