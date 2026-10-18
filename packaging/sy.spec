@@ -2,7 +2,7 @@
 
 Name:           sy
 Version:        0.1.0
-Release:        17%{?dist}
+Release:        18%{?dist}
 Summary:        Desktop environment and agent tools for Fedora
 License:        MIT
 URL:            https://github.com/dmytrogajewski/sy
@@ -113,6 +113,10 @@ Native file manager, IPC daemon, plugin host, Markdown previewer, and user units
 %autosetup
 
 %build
+if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+    mkdir -p "$CARGO_TARGET_DIR"
+    ln -s "$CARGO_TARGET_DIR" target
+fi
 cargo build --release --locked --workspace --bins
 cp target/release/sy target/release/sy-all
 
@@ -129,6 +133,7 @@ target/release/sy-system-aiplane aiplane daemon --help | grep -q 'standalone'
 SY_FEATURE_BIN_DIR=target/release target/release/sy-launcher knowledge --help | grep -q 'daemon'
 SY_FEATURE_BIN_DIR=target/release target/release/sy-launcher mon --help | grep -q 'collect'
 SY_FEATURE_BIN_DIR=target/release target/release/sy-launcher stack --help | grep -q 'bar'
+SY_FEATURE_BIN_DIR=target/release target/release/sy-launcher polkit-agent --help | grep -q 'preview'
 SY_FEATURE_BIN_DIR=target/release target/release/sy-launcher syauth --help | grep -q 'install-pam'
 SY_FEATURE_BIN_DIR=target/release target/release/sy-launcher file --help | grep -q 'doctor'
 
@@ -166,6 +171,8 @@ install -D -m 0644 configs/systemd/user/sy-qdrant.service %{buildroot}%{_useruni
 sed -i 's|%h/.local/bin/sy |/usr/bin/sy |g' %{buildroot}%{_userunitdir}/sy-knowledge.service %{buildroot}%{_userunitdir}/sy-qdrant.service
 install -D -m 0644 configs/systemd/user/sy-mon-collect.service %{buildroot}%{_userunitdir}/sy-mon-collect.service
 install -D -m 0644 configs/systemd/user/sy-stack-bar.service %{buildroot}%{_userunitdir}/sy-stack-bar.service
+install -D -m 0644 configs/systemd/user/sy-polkit-agent.service %{buildroot}%{_userunitdir}/sy-polkit-agent.service
+sed -i 's|%h/.local/libexec/sy/sy-desktop-shell|%{_libexecdir}/sy/sy-desktop-shell|g' %{buildroot}%{_userunitdir}/sy-polkit-agent.service
 install -D -m 0644 configs/systemd/user/sy-waybar.service %{buildroot}%{_userunitdir}/sy-waybar.service
 sed -i 's|%h/.local/bin/sy |/usr/bin/sy |g' %{buildroot}%{_userunitdir}/sy-mon-collect.service %{buildroot}%{_userunitdir}/sy-stack-bar.service
 install -D -m 0644 configs/systemd/user/sy-file.service %{buildroot}%{_userunitdir}/sy-file.service
@@ -174,6 +181,8 @@ sed -i 's|%h/.local/bin/sy |/usr/bin/sy |g' %{buildroot}%{_userunitdir}/sy-file.
 install -D -m 0644 packaging/sy.1 %{buildroot}%{_mandir}/man1/sy.1
 mkdir -p %{buildroot}%{_datadir}/sy
 cp -a configs themes %{buildroot}%{_datadir}/sy/
+sed -i 's|%h/.local/libexec/sy/sy-desktop-shell|%{_libexecdir}/sy/sy-desktop-shell|g' \
+  %{buildroot}%{_datadir}/sy/configs/systemd/user/sy-polkit-agent.service
 install -m 0644 packaging/default-sy.toml %{buildroot}%{_datadir}/sy/sy.toml
 find %{buildroot}%{_datadir}/sy/configs/systemd/user -type f -name '*.service' \
   -exec sed -i 's|%h/.local/bin/sy |/usr/bin/sy |g' {} +
@@ -182,7 +191,7 @@ sed -i 's|~/.local/bin/sy-plugin-md|/usr/libexec/sy/sy-plugin-md|g' \
 find %{buildroot}%{_datadir}/sy -type f \( -name .gitkeep -o -name .keep \) -delete
 mkdir -p %{buildroot}%{_datadir}/sy/scripts
 install -m 0755 scripts/check-npu-upgrade.sh scripts/install-system-npu.sh \
-  scripts/install-system-syauth-selinux.sh %{buildroot}%{_datadir}/sy/scripts/
+  scripts/install-system-syauth-selinux.sh scripts/install-system-auth.sh scripts/install-polkit-agent.sh %{buildroot}%{_datadir}/sy/scripts/
 
 %files
 %license LICENSE
@@ -197,6 +206,7 @@ install -m 0755 scripts/check-npu-upgrade.sh scripts/install-system-npu.sh \
 %{_datadir}/sy
 %exclude %{_datadir}/sy/configs/policy
 %exclude %{_datadir}/sy/configs/selinux/syauth
+%exclude %{_datadir}/sy/configs/pam
 %exclude %{_datadir}/sy/configs/systemd/user/sy-agentd.service
 %exclude %{_datadir}/sy/configs/systemd/user/sy-aiplane.service
 %exclude %{_datadir}/sy/configs/sy/aiplane
@@ -206,6 +216,7 @@ install -m 0755 scripts/check-npu-upgrade.sh scripts/install-system-npu.sh \
 %exclude %{_datadir}/sy/configs/systemd/user/sy-qdrant.service
 %exclude %{_datadir}/sy/configs/systemd/user/sy-mon-collect.service
 %exclude %{_datadir}/sy/configs/systemd/user/sy-stack-bar.service
+%exclude %{_datadir}/sy/configs/systemd/user/sy-polkit-agent.service
 %exclude %{_datadir}/sy/configs/systemd/user/sy-waybar.service
 %exclude %{_datadir}/sy/configs/systemd/user/sy.target.wants/sy-mon-collect.service
 %exclude %{_datadir}/sy/configs/waybar/modules/sy-mon.json
@@ -216,6 +227,8 @@ install -m 0755 scripts/check-npu-upgrade.sh scripts/install-system-npu.sh \
 %exclude %{_datadir}/sy/scripts/check-npu-upgrade.sh
 %exclude %{_datadir}/sy/scripts/install-system-npu.sh
 %exclude %{_datadir}/sy/scripts/install-system-syauth-selinux.sh
+%exclude %{_datadir}/sy/scripts/install-system-auth.sh
+%exclude %{_datadir}/sy/scripts/install-polkit-agent.sh
 %exclude %{_datadir}/sy/configs/sy/plugins
 %exclude %{_datadir}/sy/configs/sy/file.toml
 %exclude %{_datadir}/sy/configs/sy/file-keymap.toml
@@ -235,6 +248,8 @@ install -m 0755 scripts/check-npu-upgrade.sh scripts/install-system-npu.sh \
 %files system-auth
 %{_libexecdir}/sy/sy-system-auth
 %{_datadir}/sy/configs/selinux/syauth
+%{_datadir}/sy/configs/pam
+%{_datadir}/sy/scripts/install-system-auth.sh
 %{_datadir}/sy/scripts/install-system-syauth-selinux.sh
 
 %files system-aiplane
@@ -263,8 +278,11 @@ install -m 0755 scripts/check-npu-upgrade.sh scripts/install-system-npu.sh \
 %files desktop-shell
 %{_libexecdir}/sy/sy-desktop-shell
 %{_userunitdir}/sy-stack-bar.service
+%{_datadir}/sy/scripts/install-polkit-agent.sh
+%{_userunitdir}/sy-polkit-agent.service
 %{_userunitdir}/sy-waybar.service
 %{_datadir}/sy/configs/systemd/user/sy-stack-bar.service
+%{_datadir}/sy/configs/systemd/user/sy-polkit-agent.service
 %{_datadir}/sy/configs/systemd/user/sy-waybar.service
 
 %files system-aiplane-ryzenai

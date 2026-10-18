@@ -67,7 +67,7 @@ layout {
 }
 
 // --- Autostart --------------------------------------------------------------
-spawn-at-startup "lxpolkit"
+spawn-at-startup "systemctl" "--user" "start" "sy-polkit-agent.service"
 spawn-at-startup "mako"
 spawn-at-startup "{{ sy_bin }}" "notif" "watch"
 spawn-at-startup "wlsunset" "-t" "3800" "-T" "6500" "-l" "50.45" "-S" "06:00" "-s" "20:30"

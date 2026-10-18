@@ -1,0 +1,16 @@
+[Unit]
+Description=sy PolicyKit authentication dialog
+After=graphical-session.target
+PartOf=sy.target graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/libexec/sy/sy-desktop-shell polkit-agent
+Restart=on-failure
+RestartSec=2s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sy-polkit-agent
+
+[Install]
+WantedBy=graphical-session.target

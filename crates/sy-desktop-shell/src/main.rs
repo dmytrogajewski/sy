@@ -19,6 +19,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Explain phone, FIDO, and password steps for desktop privilege prompts.
+    #[cfg(feature = "gui-iced")]
+    PolkitAgent {
+        /// Preview without registering or authenticating.
+        #[arg(long, env = "SY_POLKIT_PREVIEW")]
+        preview: bool,
+    },
     Popup {
         key: String,
     },
@@ -116,6 +123,8 @@ fn main() -> Result<()> {
         }
     ))?;
     let result = sy_core::obs::with_trace_id(sy_core::TraceId::new(), None, || match cli.command {
+        #[cfg(feature = "gui-iced")]
+        Cmd::PolkitAgent { preview } => sy_desktop_shell::polkit::run(preview),
         Cmd::Popup { key } => popup::toggle(&key),
         Cmd::Cal => cal::run(),
         Cmd::Wifi => wifi::pick(),

@@ -1,0 +1,7 @@
+#%PAM-1.0
+# Managed by sy. Reuse only sudo's authentication chain so FIDO and
+# phone authentication stay consistent with terminal privilege prompts.
+auth       include      sudo
+account    include      system-auth
+password   include      system-auth
+session    include      system-auth
