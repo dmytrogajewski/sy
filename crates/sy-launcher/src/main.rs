@@ -121,7 +121,7 @@ fn main() {
             "sy",
         );
     }
-    if matches!(command, Some(c) if ["stack", "popup", "cal", "wifi", "net", "wallpaper", "vol", "bright", "bat", "profile", "pwr", "gpu", "npu", "disk", "notif", "bt", "wwan", "silent", "snd"].iter().any(|name| c == OsStr::new(name)))
+    if matches!(command, Some(c) if ["polkit-agent", "stack", "popup", "cal", "wifi", "net", "wallpaper", "vol", "bright", "bat", "profile", "pwr", "gpu", "npu", "disk", "notif", "bt", "wwan", "silent", "snd"].iter().any(|name| c == OsStr::new(name)))
     {
         run(
             &dir.join("sy-desktop-shell"),

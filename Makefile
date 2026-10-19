@@ -92,6 +92,14 @@ install-system-npu:
 install-system-syauth-selinux:
 	./scripts/install-system-syauth-selinux.sh
 
+.PHONY: install-polkit-agent
+install-polkit-agent:
+	bash scripts/install-polkit-agent.sh $(DRY_RUN)
+
+.PHONY: install-system-auth
+install-system-auth:
+	bash scripts/install-system-auth.sh $(DRY_RUN)
+
 # Mirror of .github/workflows/docs.yml so contributors can run the
 # four-gate docs lint locally before pushing.
 #

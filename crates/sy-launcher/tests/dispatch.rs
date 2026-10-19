@@ -194,6 +194,7 @@ fn monitor_and_shell_route_to_independent_features() {
     for (command, expected) in [
         ("mon", "monitor\n"),
         ("stack", "shell\n"),
+        ("polkit-agent", "shell\n"),
         ("wifi", "shell\n"),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_sy-launcher"))

@@ -12,5 +12,17 @@ The shell does not link the AI or knowledge runtimes. The stack's agent action
 uses the separate `sy-agent` registry and invokes `sy agt run` through the
 public command surface.
 
+Drag an entry from the right-side stack panel into another Wayland application.
+Clipboard screenshots and saved files offer file URIs, so dropping a screenshot
+into a terminal inserts its path. Text entries offer their original text.
+Hold the left button and move at least 6 logical pixels to start a drag; a click
+still copies, and right-click opens the action menu. Escape cancels a drag.
+
+Screenshot exports preserve the original bytes under
+`$XDG_RUNTIME_DIR/sy/clip/` with private file permissions. They remain available
+for the runtime session, including after a drop or clipboard-history refresh.
+The receiving application handles insertion, quoting, or attaching the file.
+Dragging uses copy semantics and retains the source item.
+
 Verification: `cargo test -p sy-desktop-shell --all-targets` and
 `cargo clippy -p sy-desktop-shell --all-targets -- -D warnings`.

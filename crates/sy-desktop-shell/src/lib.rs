@@ -9,6 +9,8 @@ pub mod gpu;
 pub mod net;
 pub mod notif;
 pub mod npu;
+#[cfg(feature = "gui-iced")]
+pub mod polkit;
 pub mod popup;
 pub mod profile;
 pub mod silent;

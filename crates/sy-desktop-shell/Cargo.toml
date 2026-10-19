@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [features]
 default = ["gui-iced", "mon-exporter"]
-gui-iced = ["dep:iced", "dep:iced_layershell", "dep:sy-theme"]
+gui-iced = ["dep:iced", "dep:iced_layershell", "dep:sy-theme", "dep:url", "dep:wayland-client"]
 mon-exporter = ["sy-core/mon-exporter"]
 
 [dependencies]
@@ -33,8 +33,11 @@ tokio.workspace = true
 toml.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+url = { version = "2", optional = true }
 zbus.workspace = true
 walkdir.workspace = true
+wayland-client = { version = "0.31", optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+wayland-server = "0.31"

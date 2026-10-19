@@ -73,6 +73,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Explain phone, FIDO, and password steps for desktop privilege prompts.
+    #[cfg(feature = "gui-iced")]
+    PolkitAgent {
+        /// Preview without registering or authenticating.
+        #[arg(long, env = "SY_POLKIT_PREVIEW")]
+        preview: bool,
+    },
     /// Render all templates under configs/ and write them to the target,
     /// then symlink `configs/systemd/user/` units into `~/.config/systemd/user/`
     /// and run `systemctl --user daemon-reload`.
@@ -586,6 +593,8 @@ fn run(cli: Cli) -> Result<()> {
         ),
         Cmd::Fido { action } => fido::run(action.as_deref()),
         Cmd::Wwan { action, json, yes } => wwan::run(action.as_deref(), json, yes),
+        #[cfg(feature = "gui-iced")]
+        Cmd::PolkitAgent { preview } => sy_desktop_shell::polkit::run(preview),
         Cmd::Silent { action, waybar } => silent::run(action.as_deref(), waybar),
         Cmd::Snd { action } => match action.as_str() {
             "login" => sound::login(),
