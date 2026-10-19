@@ -319,7 +319,6 @@ pub(super) async fn helper(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     struct Bus(std::process::Child);
     impl Drop for Bus {
@@ -506,10 +505,22 @@ mod tests {
     }
 
     fn fixture(body: &str) -> tempfile::TempPath {
-        let file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(file.path(), format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        file.into_temp_path()
+        // Concurrent spawns must never inherit a writable helper descriptor.
+        let file = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+        assert!(
+            std::process::Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "printf '%s' \"$1\" > \"$2\" && chmod 700 \"$2\"",
+                    "polkit-fixture"
+                ])
+                .arg(format!("#!/bin/sh\n{body}\n"))
+                .arg(&file)
+                .status()
+                .unwrap()
+                .success()
+        );
+        file
     }
 
     #[tokio::test]

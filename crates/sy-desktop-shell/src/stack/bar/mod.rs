@@ -24,6 +24,8 @@ pub fn run() -> Result<()> {
 
 #[cfg(feature = "gui-iced")]
 mod app;
+#[cfg(feature = "gui-iced")]
+mod drag;
 // `pub(crate)` so `src/mon/theme.rs` (Step 15) can re-export the
 // `Palette` tokens through its four-slot projection. Visibility is
 // crate-local; no external consumer.

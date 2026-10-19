@@ -47,6 +47,11 @@ Preview a power action without performing it:
 sy power reboot --dry-run --json
 ```
 
+The desktop's right-side stack panel supports dragging clipboard screenshots,
+text, and saved files into Wayland applications. Drag a screenshot into a
+terminal to insert its file path; clicking still copies. See the
+[desktop shell guide](crates/sy-desktop-shell/README.md) for details.
+
 For the AI plane, install `sy-system-aiplane`, then check its CLI and service:
 
 ```sh

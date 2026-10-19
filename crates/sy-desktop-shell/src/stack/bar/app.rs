@@ -41,7 +41,10 @@ use iced_layershell::{
     to_layer_message,
 };
 
-use super::theme::Palette;
+use super::{
+    drag::{NativeDrag, Payload},
+    theme::Palette,
+};
 use crate::stack::{
     Kind,
     clip::{self, ClipEntry},
@@ -90,6 +93,7 @@ const HOVER_DEBOUNCE_MS: u64 = 250;
 /// up a fresh per-slot subscription on every enter/exit.
 const HOVER_TICK_MS: u64 = 50;
 const TICK_MS: u64 = 1000;
+const DRAG_TICK_MS: u64 = 16;
 
 /// Nerd Font (JetBrainsMono Nerd Font is installed system-wide for the rice;
 /// this name lets fontconfig resolve it). Used for the type-indicator glyphs.
@@ -129,6 +133,8 @@ struct PopupCtx {
 }
 
 struct Bar {
+    drag: Option<NativeDrag>,
+    pressed: Option<(String, SlotSource)>,
     palette: Palette,
     clips: Vec<ClipEntry>,
     items: Items,
@@ -161,6 +167,11 @@ struct Bar {
 #[derive(Debug, Clone)]
 enum Msg {
     Tick,
+    DragTick,
+    SlotPressed {
+        id: String,
+        source: SlotSource,
+    },
     SlotLeftClicked {
         id: String,
         source: SlotSource,
@@ -321,6 +332,8 @@ pub fn run() -> anyhow::Result<()> {
     let palette = super::theme::load().unwrap_or_default();
     let init_rx = rx.clone();
     let init_palette = palette.clone();
+    let connection = wayland_client::Connection::connect_to_env()?;
+    let init_connection = connection.clone();
 
     daemon(
         move || Bar {
@@ -334,6 +347,12 @@ pub fn run() -> anyhow::Result<()> {
             cursor: Point::ORIGIN,
             hover_armed: None,
             hover_popup: None,
+            drag: NativeDrag::new(init_connection.clone())
+                .map_err(|error| {
+                    tracing::warn!(%error, "panel drag support unavailable");
+                })
+                .ok(),
+            pressed: None,
         },
         namespace,
         update,
@@ -342,6 +361,7 @@ pub fn run() -> anyhow::Result<()> {
     .style(style)
     .subscription(subscription)
     .settings(Settings {
+        with_connection: Some(connection.into()),
         layer_settings: LayerShellSettings {
             size: Some((BAR_WIDTH, 0)),
             // Niri's right strut reserves tiled space. Reserving a
@@ -367,9 +387,55 @@ fn namespace() -> String {
     "sy-stack".into()
 }
 
-fn subscription(_: &Bar) -> Subscription<Msg> {
+fn pump_drag(bar: &mut Bar) {
+    if let Some(drag) = &mut bar.drag
+        && let Err(error) = drag.pump()
+    {
+        tracing::warn!(%error, "panel drag dispatch failed");
+    }
+    if bar
+        .drag
+        .as_ref()
+        .is_some_and(|d| d.dragged() && !d.active())
+    {
+        bar.pressed = None;
+    }
+}
+
+fn drag_payload(bar: &Bar, id: &str, source: &SlotSource) -> anyhow::Result<Payload> {
+    match source {
+        SlotSource::Clip => {
+            let clip = bar
+                .clips
+                .iter()
+                .find(|clip| clip.id == id)
+                .ok_or_else(|| anyhow::anyhow!("clipboard entry disappeared"))?;
+            if clip.content_kind == "text" {
+                Payload::text(clip::decode(id)?)
+            } else {
+                Payload::file(&clip::export(id)?)
+            }
+        }
+        SlotSource::Stack => {
+            let item = state::find(&bar.items, id)?;
+            if item.path.is_none() && item.content_kind == "text" {
+                Payload::text(state::read_payload(id)?)
+            } else {
+                Payload::file(&std::fs::canonicalize(state::link_path(item)?)?)
+            }
+        }
+    }
+}
+
+fn subscription(bar: &Bar) -> Subscription<Msg> {
+    let drag = if bar.pressed.is_some() || bar.drag.as_ref().is_some_and(NativeDrag::active) {
+        iced::time::every(Duration::from_millis(DRAG_TICK_MS)).map(|_| Msg::DragTick)
+    } else {
+        Subscription::none()
+    };
     Subscription::batch(vec![
         iced::time::every(Duration::from_millis(TICK_MS)).map(|_| Msg::Tick),
+        drag,
         iced::time::every(Duration::from_millis(HOVER_TICK_MS)).map(|_| Msg::HoverDebounceTick),
         iced::window::open_events().map(Msg::WindowOpened),
         iced::window::close_events().map(Msg::WindowClosed),
@@ -379,6 +445,31 @@ fn subscription(_: &Bar) -> Subscription<Msg> {
 
 fn update(bar: &mut Bar, msg: Msg) -> Task<Msg> {
     match msg {
+        Msg::DragTick => {
+            pump_drag(bar);
+            Task::none()
+        }
+        Msg::SlotPressed { id, source } => {
+            pump_drag(bar);
+            if bar.drag.is_some() {
+                match drag_payload(bar, &id, &source) {
+                    Ok(payload) => {
+                        if let Some(drag) = &mut bar.drag {
+                            drag.prepare(payload);
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "cannot prepare panel drag");
+                        let _ = Command::new("notify-send")
+                            .args(["-a", "sy-stack", "Cannot drag item", &error.to_string()])
+                            .spawn();
+                    }
+                }
+            }
+            bar.pressed = Some((id, source));
+            bar.hover_armed = None;
+            close_all_popups(bar)
+        }
         Msg::Tick => {
             // Drain IPC ops first.
             if let Ok(rx) = bar.ipc_rx.lock() {
@@ -423,6 +514,12 @@ fn update(bar: &mut Bar, msg: Msg) -> Task<Msg> {
             Task::none()
         }
         Msg::SlotLeftClicked { id, source } => {
+            pump_drag(bar);
+            if bar.pressed.take() != Some((id.clone(), source.clone()))
+                || bar.drag.as_ref().is_some_and(NativeDrag::dragged)
+            {
+                return Task::none();
+            }
             // Default = copy (the most common action). Preview is in the
             // right-click menu. notify-send pings so the user sees feedback.
             spawn_action(&id, "copy", &source);
@@ -432,6 +529,10 @@ fn update(bar: &mut Bar, msg: Msg) -> Task<Msg> {
             Task::none()
         }
         Msg::SlotRightClicked { id, source } => {
+            bar.pressed = None;
+            if let Some(drag) = &mut bar.drag {
+                drag.cancel_press();
+            }
             // Close any existing popup first (we keep at most one open).
             // The action popup takes priority over any pending hover,
             // so cancel the debounce too.
@@ -502,9 +603,18 @@ fn update(bar: &mut Bar, msg: Msg) -> Task<Msg> {
             if let Event::Mouse(mouse::Event::CursorMoved { position }) = ev {
                 bar.cursor = position;
             }
+            if let Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) = ev {
+                bar.pressed = None;
+                if let Some(drag) = &mut bar.drag {
+                    drag.cancel_press();
+                }
+            }
             Task::none()
         }
         Msg::SlotHoverEnter { id, source } => {
+            if bar.pressed.is_some() || bar.drag.as_ref().is_some_and(NativeDrag::active) {
+                return Task::none();
+            }
             let armed_new_slot = arm_hover(&mut bar.hover_armed, source.clone(), id.clone());
             trace_hover(&format!(
                 "ENTER id={id} src={source:?} new_slot={armed_new_slot} hover_popup={:?} popups_len={}",
@@ -544,6 +654,7 @@ fn update(bar: &mut Bar, msg: Msg) -> Task<Msg> {
             Task::none()
         }
         Msg::HoverDebounceTick => {
+            pump_drag(bar);
             // Self-heal: a popup that vanished from the popups map
             // (e.g. compositor dismissed the XDG popup grab without
             // firing WindowClosed, or our SlotHoverExit removed it
@@ -695,6 +806,10 @@ fn bar_view(bar: &Bar) -> Element<'_, Msg> {
             right,
             enter,
             exit,
+            Msg::SlotPressed {
+                id: c.id.clone(),
+                source: SlotSource::Clip,
+            },
         ));
     }
 
@@ -747,6 +862,10 @@ fn stack_slot<'a>(palette: &Palette, it: &'a Item) -> Element<'a, Msg> {
         right,
         enter,
         exit,
+        Msg::SlotPressed {
+            id: it.id.clone(),
+            source: SlotSource::Stack,
+        },
     )
 }
 
@@ -759,14 +878,18 @@ fn stack_slot<'a>(palette: &Palette, it: &'a Item) -> Element<'a, Msg> {
 /// Hover discovery is provided by the debounced hover popup spawned
 /// from `SlotHoverEnter`; the right-click action popup remains the
 /// canonical "open for real" affordance.
-fn slot<'a>(
+fn slot<'a, Renderer>(
     glyph: &'static str,
     color: Color,
     on_left: Msg,
     on_right: Msg,
     on_enter: Msg,
     on_exit: Msg,
-) -> Element<'a, Msg> {
+    on_press: Msg,
+) -> Element<'a, Msg, iced::Theme, Renderer>
+where
+    Renderer: iced_layershell::reexport::core::text::Renderer<Font = Font> + 'a,
+{
     let label = text(glyph)
         .font(ICON_FONT)
         .color(color)
@@ -775,7 +898,12 @@ fn slot<'a>(
         .height(Length::Fill)
         .align_x(Horizontal::Center)
         .align_y(Vertical::Center);
-    let btn: Element<Msg> = button(label)
+    // Handle the gesture inside the button so its release action cannot
+    // copy an item after a drag. The outer button retains hover styling.
+    let content = mouse_area(label)
+        .on_press(on_press)
+        .on_release(on_left.clone());
+    let btn: Element<'a, Msg, iced::Theme, Renderer> = button(content)
         .on_press(on_left)
         .padding(0)
         .width(Length::Fill)
@@ -1183,6 +1311,127 @@ fn style(bar: &Bar, _theme: &iced::Theme) -> iced::theme::Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slot_emits_one_press_and_one_click_on_release() {
+        use iced_layershell::reexport::core::{
+            Layout, Rectangle, Shell, Size, clipboard, layout, widget::Tree,
+        };
+        let mut slot = slot::<()>(
+            "x",
+            Color::WHITE,
+            Msg::SlotLeftClicked {
+                id: "55".into(),
+                source: SlotSource::Clip,
+            },
+            Msg::SlotRightClicked {
+                id: "55".into(),
+                source: SlotSource::Clip,
+            },
+            Msg::SlotHoverEnter {
+                id: "55".into(),
+                source: SlotSource::Clip,
+            },
+            Msg::SlotHoverExit {
+                id: "55".into(),
+                source: SlotSource::Clip,
+            },
+            Msg::SlotPressed {
+                id: "55".into(),
+                source: SlotSource::Clip,
+            },
+        );
+        let mut tree = Tree::new(slot.as_widget());
+        let size = Size::new(BAR_WIDTH as f32, SLOT_HEIGHT as f32);
+        let node =
+            slot.as_widget_mut()
+                .layout(&mut tree, &(), &layout::Limits::new(Size::ZERO, size));
+        let mut messages = Vec::new();
+        for event in [
+            mouse::Event::ButtonPressed(mouse::Button::Left),
+            mouse::Event::ButtonReleased(mouse::Button::Left),
+        ] {
+            slot.as_widget_mut().update(
+                &mut tree,
+                &Event::Mouse(event),
+                Layout::new(&node),
+                mouse::Cursor::Available(Point::new(10.0, 10.0)),
+                &(),
+                &mut clipboard::Null,
+                &mut Shell::new(&mut messages),
+                &Rectangle::with_size(size),
+            );
+        }
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| matches!(m, Msg::SlotPressed { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| matches!(m, Msg::SlotLeftClicked { .. }))
+                .count(),
+            1
+        );
+    }
+
+    fn test_bar() -> Bar {
+        let (_, rx) = mpsc::channel();
+        Bar {
+            palette: Palette::default(),
+            clips: vec![],
+            items: Items::default(),
+            visible: true,
+            ipc_rx: Arc::new(Mutex::new(rx)),
+            bar_id: None,
+            popups: HashMap::new(),
+            cursor: Point::ORIGIN,
+            hover_armed: None,
+            hover_popup: None,
+            drag: None,
+            pressed: None,
+        }
+    }
+
+    #[test]
+    fn fast_drag_polling_runs_only_during_a_gesture() {
+        let mut bar = test_bar();
+        let idle = subscription(&bar).units();
+        bar.pressed = Some(("55".into(), SlotSource::Clip));
+        assert_eq!(subscription(&bar).units(), idle + 1);
+    }
+
+    #[test]
+    fn pressing_a_slot_disarms_hover_and_retains_the_original_item() {
+        let mut bar = test_bar();
+        arm_hover(&mut bar.hover_armed, SlotSource::Clip, "55".into());
+        let _ = update(
+            &mut bar,
+            Msg::SlotPressed {
+                id: "55".into(),
+                source: SlotSource::Clip,
+            },
+        );
+        assert!(bar.hover_armed.is_none());
+        assert_eq!(bar.pressed, Some(("55".into(), SlotSource::Clip)));
+    }
+
+    #[test]
+    fn hover_does_not_open_during_a_press() {
+        let mut bar = test_bar();
+        bar.pressed = Some(("55".into(), SlotSource::Clip));
+        let _ = update(
+            &mut bar,
+            Msg::SlotHoverEnter {
+                id: "66".into(),
+                source: SlotSource::Clip,
+            },
+        );
+        assert!(bar.hover_armed.is_none());
+    }
     use std::path::PathBuf;
 
     #[test]

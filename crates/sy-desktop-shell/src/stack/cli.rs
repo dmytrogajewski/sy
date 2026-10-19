@@ -335,41 +335,9 @@ fn clip_action(id: &str, action: &str) -> Result<()> {
 /// We sniff the bytes for image magic so the file gets a sensible
 /// extension (xdg-open dispatches by mime/extension).
 fn clip_preview(id: &str) -> Result<()> {
-    let bytes = super::clip::decode(id)?;
-    let dir = clip_cache_dir()?;
-    fs::create_dir_all(&dir).with_context(|| format!("mkdir {}", dir.display()))?;
-    let ext = sniff_ext(&bytes);
-    let path = dir.join(format!("{id}{ext}"));
-    if !path.exists() {
-        fs::write(&path, &bytes).with_context(|| format!("write {}", path.display()))?;
-    }
+    let path = super::clip::export(id)?;
     let _ = Command::new("xdg-open").arg(&path).spawn();
     Ok(())
-}
-
-fn clip_cache_dir() -> Result<std::path::PathBuf> {
-    let base = std::env::var("XDG_RUNTIME_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
-    Ok(base.join("sy").join("clip"))
-}
-
-/// Best-effort extension sniffer for clipboard payloads. Most are text;
-/// detect the few common image magics so `xdg-open` routes to a viewer.
-fn sniff_ext(bytes: &[u8]) -> &'static str {
-    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        ".png"
-    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
-        ".jpg"
-    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        ".gif"
-    } else if bytes.len() > 12 && &bytes[8..12] == b"WEBP" {
-        ".webp"
-    } else if std::str::from_utf8(bytes).is_ok() {
-        ".txt"
-    } else {
-        ".bin"
-    }
 }
 
 fn clip_remove(id: &str) -> Result<()> {

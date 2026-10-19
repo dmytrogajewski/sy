@@ -11,6 +11,57 @@ use std::process::{Command, Stdio};
 
 use anyhow::Result;
 
+/// Export the original payload for preview or drag. Retained for the runtime session.
+pub fn export(id: &str) -> Result<std::path::PathBuf> {
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| {
+            anyhow::anyhow!("XDG_RUNTIME_DIR is required to export clipboard entries")
+        })?;
+    export_bytes_at(&base.join("sy/clip"), id, &decode(id)?)
+}
+
+fn export_bytes_at(dir: &std::path::Path, id: &str, bytes: &[u8]) -> Result<std::path::PathBuf> {
+    use std::{
+        io::Write,
+        os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
+    };
+    anyhow::ensure!(
+        !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()),
+        "invalid clipboard entry id"
+    );
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
+    anyhow::ensure!(
+        std::fs::symlink_metadata(dir)?.is_dir(),
+        "clipboard cache is not a directory"
+    );
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    let path = dir.join(format!("{id}{}", sniff_ext(bytes)));
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            anyhow::ensure!(
+                std::fs::symlink_metadata(&path)?.is_file(),
+                "clipboard export is not a regular file"
+            );
+            anyhow::ensure!(std::fs::read(&path)? == bytes, "clipboard export changed");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+            return Ok(path);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    file.write_all(bytes)?;
+    Ok(path)
+}
+
 #[derive(Debug, Clone)]
 #[cfg(feature = "gui-iced")]
 pub struct ClipEntry {
@@ -65,13 +116,18 @@ pub fn top(n: usize) -> Vec<ClipEntry> {
     entries
 }
 
-/// Decode a cliphist entry by id, returning raw bytes. Best-effort.
+/// Decode a cliphist entry by id, rejecting failed commands.
 pub fn decode(id: &str) -> Result<Vec<u8>> {
     let out = Command::new("cliphist")
         .arg("decode")
         .arg(id)
         .stderr(Stdio::null())
         .output()?;
+    anyhow::ensure!(
+        out.status.success(),
+        "cliphist decode {id} failed: {}",
+        out.status
+    );
     Ok(out.stdout)
 }
 
@@ -165,9 +221,88 @@ pub fn decode_to_thumb(id: &str, ext: &str, size: u32) -> Result<std::path::Path
     decode_to_thumb_at(&dir, id, ext, size)
 }
 
+/// Best-effort extension sniffer for clipboard payloads. Most are text;
+/// detect the few common image magics so `xdg-open` routes to a viewer.
+fn sniff_ext(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        ".png"
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        ".jpg"
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        ".gif"
+    } else if bytes.len() > 12 && &bytes[8..12] == b"WEBP" {
+        ".webp"
+    } else if std::str::from_utf8(bytes).is_ok() {
+        ".txt"
+    } else {
+        ".bin"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reusing_a_preview_export_restores_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("55.txt");
+        std::fs::write(&path, b"old preview").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        export_bytes_at(dir.path(), "55", b"old preview").unwrap();
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn exported_clipboard_directory_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("clip");
+        export_bytes_at(&cache, "55", b"secret").unwrap();
+        assert_eq!(
+            std::fs::metadata(cache).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+
+    #[test]
+    fn export_rejects_identifiers_that_escape_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(export_bytes_at(dir.path(), "../escape", b"private").is_err());
+    }
+
+    #[test]
+    fn exports_are_stable_across_repeated_drags() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = export_bytes_at(dir.path(), "55", b"same clip").unwrap();
+        assert_eq!(
+            export_bytes_at(dir.path(), "55", b"same clip").unwrap(),
+            first
+        );
+    }
+
+    #[test]
+    fn exported_clipboard_files_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = export_bytes_at(dir.path(), "55", b"secret").unwrap();
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn export_preserves_original_screenshot_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = b"\x89PNG\r\n\x1a\noriginal screenshot";
+        let path = export_bytes_at(dir.path(), "55", bytes).unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
 
     #[test]
     fn parse_image_ext_handles_png_jpeg_webp_gif_bmp() {
