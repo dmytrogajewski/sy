@@ -1876,6 +1876,29 @@ working state.
 
 ### Steps
 
+#### Bluetooth is on but the phone cannot discover the desktop
+
+Check the desktop advertisement as well as the daemon process:
+
+```bash
+bluetoothctl show
+journalctl --user -u syauth-presenced.service -n 25 --no-pager
+```
+
+Zero `ActiveInstances` together with repeated `rotation failed` and
+`target object was either not present or removed` indicates a missing desktop
+advertisement. The controller can be renumbered from `hci0` to `hci1` after
+reinitialization. Older daemons hardcode `hci0`, so restarting the same build
+can leave only its RPC socket running with `orchestrator not started` in the
+journal. A daemon status of `up` alone does not establish Bluetooth readiness.
+
+The adapter-selection repair uses BlueZ's available default controller at
+startup. After installing that repair, restart `syauth-presenced.service` and
+verify advertising and a fresh phone subscription. Keep the existing bond;
+pairing again does not repair an absent desktop adapter. See the
+[adapter investigation](../../specs/bugs/BUG-20261031-1221.md) for validation
+and deployment status.
+
 #### Desktop apps skip phone and FIDO authentication
 
 PolicyKit authenticates through `polkit-1`, while sudo uses `sudo`.
