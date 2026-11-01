@@ -24,17 +24,6 @@ pub fn reload() {
         .status();
     if matches!(restart, Ok(status) if status.success()) {
         println!("  ↻ waybar restarted");
-        let stack_active = Command::new("systemctl")
-            .args(["--user", "is-active", "--quiet", "sy-stack-bar.service"])
-            .status();
-        if matches!(stack_active, Ok(status) if status.success()) {
-            let stack_restart = Command::new("systemctl")
-                .args(["--user", "restart", "sy-stack-bar.service"])
-                .status();
-            if !matches!(stack_restart, Ok(status) if status.success()) {
-                eprintln!("  ! could not restart sy-stack-bar.service");
-            }
-        }
     } else {
         eprintln!("  ! could not restart sy-waybar.service");
     }

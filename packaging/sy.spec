@@ -30,7 +30,8 @@ Requires:       sy = %{version}-%{release}
 Requires:       sy-desktop-shell = %{version}-%{release}
 Requires:       fuzzel
 Requires:       foot
-Requires:       niri
+Requires:       niri >= 26.04
+Requires:       jq
 Requires:       swaylock
 Requires:       waybar
 Requires:       python3

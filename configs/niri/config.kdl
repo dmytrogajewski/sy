@@ -60,7 +60,8 @@ layout {
 
     struts {
         left   0
-        right  28
+        // The stack panel reserves its own layer-shell exclusive zone.
+        right  0
         top    0
         bottom 0
     }
@@ -328,3 +329,6 @@ binds {
     Mod+Print        { screenshot-screen write-to-disk=true; }
     Mod+Shift+Print  { screenshot-window write-to-disk=true; }
 }
+
+// Preserve window rules supplied by the ASUS DialPad driver when installed.
+include optional=true "../asus-dialpad-driver/niri-dialpad.kdl"

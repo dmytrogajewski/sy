@@ -17,6 +17,11 @@ commit-message convention that feeds this file.
 
 ### Fixed
 
+- Keep maximized windows clear of the right stack panel while preserving
+  full-width Waybar, including after panel toggles and Waybar restarts.
+- Give every bar module a black resting background and the same subtle hover
+  highlight, including power, clock and workspace buttons.
+
 - **Silence stopped being indexed as content.** 150 of the 4 132
   `telegram-voice` points were not speech: whisper answers a silent round
   video with `""`, one of its own labels (`[Music]`, `(footsteps)`), or a
