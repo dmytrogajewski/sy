@@ -183,9 +183,7 @@ pub fn parse_doctor_json(src: &str) -> Result<DoctorSummary, serde_json::Error> 
 
 /// Rendered waybar slot output. The waybar `custom/` module consumes
 /// `{text, tooltip, class}`; we keep the struct narrow so the
-/// emitter can decide whether to omit `class` (no class hook needed
-/// when no bond is in play and the CSS table only carries the five
-/// step-2 states).
+/// emitter can describe daemon readiness separately from request history.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WaybarPill {
     pub text: String,
@@ -199,13 +197,10 @@ pub struct WaybarPill {
 /// the state-driven color never showed through. Requires
 /// `JetBrainsMono Nerd Font` (the bar's default — see
 /// `configs/waybar/style.css` font-family).
-const PILL_GLYPH_KEY: char = '\u{F084}'; //
+const PILL_GLYPH_KEY: char = '\u{F084}';
 
-/// "Recent" cutoff for last-audit-outcome → pill state. The window
-/// must outlive a single sudo + biometric reaction (≈3 s) but be
-/// short enough that an old denied row doesn't permanently stick
-/// the pill red. 10 minutes mirrors the operator-facing
-/// troubleshooting threshold in `docs/syauth-setup.md`.
+/// Show confirmed authorization failures in red for ten minutes.
+/// Unanswered requests and transport failures remain in history only.
 const PILL_RECENT_OUTCOME_MS: u64 = 10 * 60 * 1000;
 
 /// Render the pill from a parsed status + doctor pair + last audit
@@ -214,9 +209,9 @@ const PILL_RECENT_OUTCOME_MS: u64 = 10 * 60 * 1000;
 /// `audit_log_tail` row (if any), and a wall-clock `now_ms` through.
 ///
 /// State precedence:
-///   `degraded` > `unpaired` > `active` > `ok`.
-/// Daemon-down / recent-denied is the operator's most actionable
-/// signal, so it wins. Pair-pending pre-empts everything earlier in
+///   `degraded` > `unpaired` > `ok`.
+/// Daemon-down and confirmed authorization errors need attention.
+/// Pair-pending pre-empts everything earlier in
 /// the call chain; this fn never sees a pending request — the caller
 /// branches on the request file first, mirroring the existing
 /// `waybar_out` path.
@@ -235,7 +230,7 @@ pub fn render_pill(
 ) -> WaybarPill {
     let icon = PILL_GLYPH_KEY.to_string();
     let recent_denied = last_outcome.and_then(|o| {
-        let denied = matches!(o.kind, OutcomeKind::Denied(_));
+        let denied = matches!(&o.kind, OutcomeKind::Denied(r) if !denied_is_transient(r));
         let age_ms = now_ms.saturating_sub(o.t_end_ms);
         if denied && age_ms <= PILL_RECENT_OUTCOME_MS {
             Some(o)
@@ -248,25 +243,19 @@ pub fn render_pill(
     } else if !status.has_peer() {
         ("unpaired", "no phone bonded".to_string())
     } else if let Some(o) = recent_denied {
-        let (class, label) = match &o.kind {
-            OutcomeKind::Denied(r) if denied_is_transient(r) => ("reconnecting", "reconnecting"),
-            OutcomeKind::Denied(_) => ("degraded", "phone away"),
-            OutcomeKind::Ok => ("ok", "phone reachable"),
-        };
         let reason = match &o.kind {
             OutcomeKind::Denied(r) => denied_reason_text(r),
             OutcomeKind::Ok => "ok",
         };
-        (class, format!("{label} · last {reason}"))
+        ("degraded", format!("last authentication failed · {reason}"))
     } else if in_flight > 0 {
-        // In-flight challenge is the "phone is being used right now"
-        // state — the operator's mental model is "cyan because sudo
-        // works". Surface the activity in the headline; keep the
-        // color cyan so a healthy sudo doesn't flash yellow every
-        // 2-3 s.
+        // A pending request does not establish whether the phone is nearby.
         ("ok", format!("authenticating · {in_flight} in flight"))
     } else {
-        ("ok", "phone reachable".to_string())
+        (
+            "ok",
+            "daemon ready · phone availability unknown".to_string(),
+        )
     };
     let tip = build_pill_tooltip(status, doctor, last_outcome, now_ms, host, &headline);
     WaybarPill {
@@ -282,15 +271,15 @@ fn denied_reason_text(r: &DeniedReason) -> &'static str {
         DeniedReason::NoBond => "no bond",
         DeniedReason::AuthError => "auth error",
         DeniedReason::TransportError => "transport error",
+        DeniedReason::Other(reason) if reason == "response-timeout" => {
+            "approval timed out (phone may be away)"
+        }
         DeniedReason::Other(_) => "denied",
     }
 }
 
-/// Whether a denied outcome looks transient (yellow / reconnecting)
-/// or permanent (red / degraded). Transport-error and any unknown
-/// reason are transient — the daemon will likely succeed on the
-/// next attempt once the phone reconnects. Peer-revoked / no-bond /
-/// auth-error are operator-actionable problems.
+/// Unanswered requests, transport failures, and unknown outcomes do not
+/// establish an ongoing fault. Known authorization errors need attention.
 fn denied_is_transient(r: &DeniedReason) -> bool {
     matches!(r, DeniedReason::TransportError | DeniedReason::Other(_))
 }
@@ -308,7 +297,7 @@ fn build_pill_tooltip(
         Some(pid) => {
             let head: String = pid.chars().take(8).collect();
             let suffix = match status.last_connect_ms_ago {
-                Some(ms) => format!(" · last connect {} ago", humanize_ms_ago(ms)),
+                Some(ms) => format!(" · last request {} ago", humanize_ms_ago(ms)),
                 None => String::new(),
             };
             lines.push(format!("peer {head}\u{2026}{suffix}"));
@@ -967,8 +956,8 @@ fn waybar_out() -> Result<()> {
         println!("{}", emit_pill_json(&text, "pending", &tip));
         return Ok(());
     }
-    // No pending pair request: render the live four-class pill
-    // (red / aqua / yellow + pending-green). Failures of either
+    // No pending pair request: render daemon readiness and request history.
+    // Failures of either
     // upstream probe fall through to `degraded` (red) so the bar
     // never goes blank.
     let outcomes = live_audit_outcomes();
@@ -1704,7 +1693,9 @@ mod tests {
             pill.tooltip.contains("fedora"),
             "tooltip carries host: {pill:?}"
         );
-        assert!(pill.tooltip.contains("phone reachable"), "got: {pill:?}");
+        assert!(pill.tooltip.contains("daemon ready"), "got: {pill:?}");
+        assert!(!pill.tooltip.contains("phone reachable"), "got: {pill:?}");
+        assert!(!pill.tooltip.contains("last connect"), "got: {pill:?}");
     }
 
     #[test]
@@ -1772,9 +1763,7 @@ mod tests {
     }
 
     #[test]
-    fn waybar_renders_reconnecting_on_recent_transient_denied() {
-        // response-timeout (parsed as DeniedReason::Other) and
-        // transport-error are both transient → yellow, not red.
+    fn waybar_stays_ok_after_an_unanswered_approval() {
         let s = parse_status_json(FIXTURE_BONDED).expect("fixture parses");
         let now: u64 = 1_779_200_000_000;
         let timeout = UnlockOutcome {
@@ -1785,8 +1774,11 @@ mod tests {
             kind: OutcomeKind::Denied(DeniedReason::Other("response-timeout".to_string())),
         };
         let pill = render_pill(&s, 0, &doctor_unknown(), Some(&timeout), now, "fedora");
-        assert_eq!(pill.class, "reconnecting", "got: {pill:?}");
-        assert!(pill.tooltip.contains("reconnecting"), "got: {pill:?}");
+        assert_eq!(pill.class, "ok", "got: {pill:?}");
+        assert!(!pill.tooltip.contains("reconnecting"), "got: {pill:?}");
+        assert!(pill.tooltip.contains("approval timed out"), "got: {pill:?}");
+        let next = render_pill(&s, 1, &doctor_unknown(), Some(&timeout), now, "fedora");
+        assert!(next.tooltip.contains("authenticating · 1 in flight"));
     }
 
     #[test]
@@ -1804,16 +1796,15 @@ mod tests {
         };
         let pill = render_pill(&s, 0, &doctor_unknown(), Some(&revoked), now, "fedora");
         assert_eq!(pill.class, "degraded", "got: {pill:?}");
-        assert!(pill.tooltip.contains("phone away"), "got: {pill:?}");
+        assert!(
+            pill.tooltip.contains("last authentication failed"),
+            "got: {pill:?}"
+        );
         assert!(pill.tooltip.contains("peer revoked"), "got: {pill:?}");
     }
 
     #[test]
-    fn waybar_renders_reconnecting_when_recent_unlock_was_transport_error() {
-        // The operator-facing "trying to reach phone" signal is a
-        // recent transport-error in the audit log. Inside the 10-min
-        // window the pill goes yellow (reconnecting); outside, it
-        // stays cyan.
+    fn waybar_keeps_transport_failure_in_history_without_claiming_reconnection() {
         let s = parse_status_json(FIXTURE_BONDED).expect("fixture parses");
         let now: u64 = 1_779_200_000_000;
         let recent = UnlockOutcome {
@@ -1824,7 +1815,8 @@ mod tests {
             kind: OutcomeKind::Denied(DeniedReason::TransportError),
         };
         let pill = render_pill(&s, 0, &doctor_unknown(), Some(&recent), now, "fedora");
-        assert_eq!(pill.class, "reconnecting", "got: {pill:?}");
+        assert_eq!(pill.class, "ok", "got: {pill:?}");
+        assert!(!pill.tooltip.contains("reconnecting"), "got: {pill:?}");
         assert!(pill.tooltip.contains("transport error"), "got: {pill:?}");
     }
 

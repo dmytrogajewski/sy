@@ -1,4 +1,6 @@
 %global debug_package %{nil}
+# Release packages strip symbols; omit unused DWARF during compilation too.
+%global rustflags_debuginfo 0
 
 Name:           sy
 Version:        0.1.0
@@ -8,6 +10,8 @@ License:        MIT
 URL:            https://github.com/dmytrogajewski/sy
 Source0:        %{name}-%{version}.tar.gz
 BuildRequires:  cargo
+BuildRequires:  binutils
+BuildRequires:  python3
 BuildRequires:  rust
 BuildRequires:  gcc
 BuildRequires:  gcc-c++
@@ -121,6 +125,7 @@ cargo build --release --locked --workspace --bins
 cp target/release/sy target/release/sy-all
 
 %check
+python3 tests/rpm_build_flags.py
 SY_FEATURE_BIN_DIR=/nonexistent target/release/sy-launcher --help | grep -q 'Optional packages'
 SY_FEATURE_BIN_DIR=target/release target/release/sy-launcher --help | grep -q 'apply'
 SY_FEATURE_BIN_DIR=target/release target/release/sy-launcher --help | grep -q '^Usage: sy '

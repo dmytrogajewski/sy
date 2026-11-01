@@ -59,7 +59,7 @@ for fedora in "${releases[@]}"; do
   cp "$repo_root/packaging/sy.spec" "$work/sy.spec"
   tar -C "$repo_root" --transform="s,^,sy-$version/," \
     -czf "$work/SOURCES/sy-$version.tar.gz" \
-    Cargo.toml Cargo.lock LICENSE README.md src crates configs themes scripts packaging/sy.1 packaging/default-sy.toml
+    Cargo.toml Cargo.lock LICENSE README.md src crates configs themes scripts tests/rpm_build_flags.py packaging/sy.1 packaging/default-sy.toml
   if [[ $native == true ]]; then
     rpmbuild -ba "$work/sy.spec" --define "_topdir $work" \
       --define "_rpmdir $work/RPMS" --define "_srcrpmdir $work/SRPMS"
@@ -88,7 +88,7 @@ for fedora in "${releases[@]}"; do
         --setopt=keepcache=True \
         --setopt=max_parallel_downloads=8 \
         --setopt=timeout=120 --setopt=minrate=1 --setopt=retries=20 \
-        "${repo_args[@]}" install -y rpm-build cargo rust gcc gcc-c++ cmake pkgconf-pkg-config \
+        "${repo_args[@]}" install -y rpm-build cargo rust gcc gcc-c++ cmake pkgconf-pkg-config python3 \
         alsa-lib-devel openssl-devel systemd-devel libxkbcommon-devel
       rpmbuild -ba /build/sy.spec --define "_topdir /build" \
         --define "_rpmdir /build/RPMS" --define "_srcrpmdir /build/SRPMS"
