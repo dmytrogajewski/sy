@@ -24,5 +24,18 @@ for the runtime session, including after a drop or clipboard-history refresh.
 The receiving application handles insertion, quoting, or attaching the file.
 Dragging uses copy semantics and retains the source item.
 
+The panel reserves 28 logical pixels through layer-shell, so maximized windows
+leave its controls visible. Hiding the panel releases that space. Waybar maps
+first to keep the full top edge; its service remaps the panel after each restart.
+
+With the black theme, every bar module and workspace button is black at rest
+and uses the same subtle hover highlight. Text and borders retain status colors.
+
+To check geometry without changing the live desktop, build the executable and
+run `python3 scripts/check-stack-panel-layout.py` from the repository root.
+This requires Niri, Waybar, Foot, Xvfb, jq and a systemd user manager. It starts
+disposable services and a nested compositor, checks maximize, hide/show,
+fullscreen and repeated Waybar restarts, then stops its test processes.
+
 Verification: `cargo test -p sy-desktop-shell --all-targets` and
 `cargo clippy -p sy-desktop-shell --all-targets -- -D warnings`.

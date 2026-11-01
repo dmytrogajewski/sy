@@ -26,7 +26,7 @@
 }
 
 window#waybar {
-    background: @bg_soft;
+    background: @bg;
     color: @fg;
     border: none;
 }
@@ -44,13 +44,11 @@ tooltip {
 #workspaces button {
     padding: 0 8px;
     color: @fg;
-    background: transparent;
     border-bottom: 2px solid transparent;
     transition: all 150ms ease;
 }
 
 #workspaces button:hover {
-    background: @bg1;
     color: @fg;
     box-shadow: none;
     text-shadow: none;
@@ -63,8 +61,7 @@ tooltip {
 }
 
 #workspaces button.urgent {
-    color: @bg;
-    background: @red;
+    color: @red;
     border-bottom: 2px solid @red;
 }
 
@@ -103,21 +100,16 @@ tooltip {
     color: @yellow;
     padding: 0 12px;
     margin-left: 8px;
-    background: @bg1;
 }
 
-#network:hover,
-#custom-agents:hover,
-#custom-notif:hover,
-#custom-bt:hover,
-#custom-sy-gpu:hover,
-#custom-sy-npu:hover,
-#custom-sy-disk:hover,
-#custom-sy-silent:hover,
-#custom-sy-vol:hover,
-#custom-sy-bl:hover,
-#custom-sy-profile:hover,
-#custom-sy-knowledge:hover {
+/* Workspace buttons are controls; their parent is only a container. */
+.module:not(#workspaces),
+#workspaces button {
+    background: @bg;
+}
+
+.module:not(#workspaces):hover,
+#workspaces button:hover {
     background: @bg1;
 }
 
@@ -224,7 +216,6 @@ tooltip {
     color: @fg;
     padding: 0 12px;
     margin-right: 4px;
-    background: @bg1;
 }
 
 #cpu,
@@ -245,7 +236,6 @@ tooltip {
 
 /* --- Bottom cheatsheet bar ---------------------------------------------- */
 window#waybar.cheatsheet {
-    background: alpha(@bg_soft, 0.85);
     color: @fg_dim;
     border: none;
     border-top: 1px solid @bg1;

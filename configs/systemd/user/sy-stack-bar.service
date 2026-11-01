@@ -33,17 +33,9 @@ Type=notify
 NotifyAccess=main
 WatchdogSec=300s
 TimeoutStartSec=300s
-# Wait for waybar
-# to register its top exclusive zone before our wlr-layer-shell
-# surface attaches. Otherwise niri hasn't deducted waybar's 24-px
-# strip yet, and the bar's `Right | Top | Bottom` anchor straddles
-# the top edge — producing the "right panel disappeared" symptom
-# (the bar is actually drawn beneath waybar). The pgrep loop
-# mirrors what the legacy niri spawn-at-startup did before the bar
-# was promoted to a unit; folding it into the unit lets us drop
-# the niri-side spawn so there is exactly one owner with
-# `Restart=on-failure` supervision.
-ExecStartPre=/usr/bin/bash -c 'until pgrep -x waybar >/dev/null; do sleep 0.05; done; sleep 0.3'
+# Wait for Waybar's layer surface, not merely its process. Mapping it
+# first gives Waybar the full top edge before our right reservation.
+ExecStartPre=/usr/bin/bash -c 'until niri msg --json layers | jq -e ".[] | select(.namespace == \\"top\\")" >/dev/null 2>&1; do sleep 0.05; done'
 ExecStart=%h/.local/bin/sy stack bar
 Restart=on-failure
 RestartSec=2s

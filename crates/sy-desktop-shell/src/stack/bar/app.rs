@@ -53,9 +53,21 @@ use crate::stack::{
 };
 
 /// Width of the bar's vertical strip on the right edge.
-/// Niri's right strut reserves this width for tiled windows. The surface
-/// itself does not reserve a layer-shell zone, so Waybar spans the top edge.
+/// A layer-shell exclusive zone protects this strip from tiled and
+/// maximized-to-edges windows. Waybar must register before this surface.
 const BAR_WIDTH: u32 = 28;
+
+fn bar_settings(visible: bool) -> LayerShellSettings {
+    LayerShellSettings {
+        size: Some(if visible { (BAR_WIDTH, 0) } else { (1, 1) }),
+        exclusive_zone: if visible { BAR_WIDTH as i32 } else { 0 },
+        anchor: Anchor::Right | Anchor::Top | Anchor::Bottom,
+        margin: (WAYBAR_TOP_MARGIN, 0, 0, 0),
+        layer: Layer::Top,
+        start_mode: StartMode::Active,
+        ..Default::default()
+    }
+}
 /// Waybar's `"height"` from `configs/waybar/config.jsonc`. Used by
 /// the hover-preview surface to translate the bar-local cursor y
 /// back to screen-space (the bar's surface starts at y=24).
@@ -80,6 +92,8 @@ const HOVER_POPUP_WIDTH: u32 = 320;
 /// Height of the hover preview popup. Sized to fit a 256×256 image
 /// thumbnail plus a 32-px header strip.
 const HOVER_POPUP_HEIGHT: u32 = 300;
+/// Hover margins are screen coordinates, including the panel and Waybar offsets.
+const HOVER_EXCLUSIVE_ZONE: i32 = -1;
 /// Edge length of the thumbnail rendered inside the hover popup
 /// (vs. the 20-px inline thumbnails on the bar itself).
 const HOVER_THUMB_PX: f32 = 256.0;
@@ -362,21 +376,7 @@ pub fn run() -> anyhow::Result<()> {
     .subscription(subscription)
     .settings(Settings {
         with_connection: Some(connection.into()),
-        layer_settings: LayerShellSettings {
-            size: Some((BAR_WIDTH, 0)),
-            // Niri's right strut reserves tiled space. Reserving a
-            // layer-shell zone here would shorten Waybar at the top.
-            exclusive_zone: 0,
-            anchor: Anchor::Right | Anchor::Top | Anchor::Bottom,
-            // (top, right, bottom, left) per layershellev's
-            // `LayerSurface::set_margin` signature.
-            // `WAYBAR_TOP_MARGIN = 0` defers vertical positioning
-            // to niri's deduction of waybar's top exclusive zone.
-            margin: (WAYBAR_TOP_MARGIN, 0, 0, 0),
-            layer: Layer::Top,
-            start_mode: StartMode::Active,
-            ..Default::default()
-        },
+        layer_settings: bar_settings(true),
         ..Default::default()
     })
     .run()
@@ -480,15 +480,12 @@ fn update(bar: &mut Bar, msg: Msg) -> Task<Msg> {
                             bar.visible = !bar.visible;
                             // Resize the bar surface; note: needs the bar's Id.
                             if let Some(bid) = bar.bar_id {
-                                let (anchor, size, zone) = if bar.visible {
-                                    (
-                                        Anchor::Right | Anchor::Top | Anchor::Bottom,
-                                        (BAR_WIDTH, 0),
-                                        0,
-                                    )
-                                } else {
-                                    (Anchor::Right | Anchor::Top | Anchor::Bottom, (1, 1), 0)
-                                };
+                                let settings = bar_settings(bar.visible);
+                                let (anchor, size, zone) = (
+                                    settings.anchor,
+                                    settings.size.unwrap(),
+                                    settings.exclusive_zone,
+                                );
                                 return Task::done(Msg::AnchorSizeChange {
                                     id: bid,
                                     anchor,
@@ -710,7 +707,7 @@ fn update(bar: &mut Bar, msg: Msg) -> Task<Msg> {
                     size: Some((HOVER_POPUP_WIDTH, HOVER_POPUP_HEIGHT)),
                     layer: Layer::Overlay,
                     anchor: Anchor::Top | Anchor::Right,
-                    exclusive_zone: Some(0),
+                    exclusive_zone: Some(HOVER_EXCLUSIVE_ZONE),
                     margin: Some((margin_top, BAR_WIDTH as i32 + 4, 0, 0)),
                     keyboard_interactivity: KeyboardInteractivity::None,
                     output_option: OutputOption::LastOutput,
@@ -1433,6 +1430,22 @@ mod tests {
         assert!(bar.hover_armed.is_none());
     }
     use std::path::PathBuf;
+
+    #[test]
+    fn visible_panel_reserves_its_width_for_maximized_windows() {
+        assert_eq!(bar_settings(true).exclusive_zone, BAR_WIDTH as i32);
+    }
+
+    #[test]
+    fn hidden_panel_releases_its_reserved_space() {
+        assert_eq!(bar_settings(false).exclusive_zone, 0);
+        assert_eq!(bar_settings(false).size, Some((1, 1)));
+    }
+
+    #[test]
+    fn hover_preview_does_not_count_panel_reservations_twice() {
+        assert_eq!(HOVER_EXCLUSIVE_ZONE, -1);
+    }
 
     #[test]
     fn waybar_top_margin_does_not_double_count_niri_deduction() {

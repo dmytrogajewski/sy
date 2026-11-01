@@ -6,6 +6,10 @@ After=graphical-session.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/waybar
+# Re-map the right panel after every Waybar start, including crash recovery.
+# Its exclusive zone must be registered after Waybar's full-width top zone.
+# Do not wait here: the panel is ordered After=this service.
+ExecStartPost=/usr/bin/systemctl --user --no-block try-restart sy-stack-bar.service
 Restart=on-failure
 RestartSec=2s
 
