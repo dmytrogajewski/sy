@@ -88,7 +88,7 @@ for fedora in "${releases[@]}"; do
         --setopt=keepcache=True \
         --setopt=max_parallel_downloads=8 \
         --setopt=timeout=120 --setopt=minrate=1 --setopt=retries=20 \
-        "${repo_args[@]}" install -y rpm-build cargo rust gcc gcc-c++ cmake pkgconf-pkg-config \
+        "${repo_args[@]}" install -y rpm-build cargo rust gcc gcc-c++ cmake pkgconf-pkg-config python3 \
         alsa-lib-devel openssl-devel systemd-devel libxkbcommon-devel
       rpmbuild -ba /build/sy.spec --define "_topdir /build" \
         --define "_rpmdir /build/RPMS" --define "_srcrpmdir /build/SRPMS"

@@ -11,6 +11,7 @@ URL:            https://github.com/dmytrogajewski/sy
 Source0:        %{name}-%{version}.tar.gz
 BuildRequires:  cargo
 BuildRequires:  binutils
+BuildRequires:  python3
 BuildRequires:  rust
 BuildRequires:  gcc
 BuildRequires:  gcc-c++
