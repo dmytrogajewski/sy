@@ -22,6 +22,19 @@ working state.
 
 ## Steps
 
+### A request times out while the phone is away
+
+An unanswered approval does not mean syauth is broken. The key stays in its
+normal cyan state when the daemon is ready and a phone is paired. Its tooltip
+records “approval timed out (phone may be away)” as the last request outcome.
+Transport errors also remain in request history without claiming reconnection.
+
+“Daemon ready” describes the local service; phone availability is unknown until
+an authentication request is answered. Red still identifies a stopped daemon,
+missing bond, or a confirmed authorization error. An old timeout does not hide
+a fresh request's “authenticating” status. No re-pairing or service restart is
+needed solely because an approval expired.
+
 ### Bluetooth is on but the phone cannot discover the desktop
 
 Check the desktop advertisement as well as the daemon process:

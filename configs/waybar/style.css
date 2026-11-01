@@ -204,16 +204,14 @@ tooltip {
 
 /* custom/sy-syauth — compact phone-as-key pill rendered by
  * `sy syauth --waybar` (see crates/sy-auth/src/syauth.rs::render_pill). Text is
- * always the 🔑 emoji (pair flow adds the 6-digit code beside it).
+ * always the key glyph (pair flow adds the 6-digit code beside it).
  * Color carries the state; full status goes to the tooltip.
- *   .ok            — phone reachable / in-flight challenge   → cyan
- *   .reconnecting  — recent transport-error or timeout       → yellow
+ *   .ok            — daemon ready / in-flight challenge      → cyan
  *   .degraded      — daemon down OR permanent denied         → red
  *   .unpaired      — no phone is bonded yet                  → red
  *   .pending       — LESC pair confirmation awaiting accept  → green
  */
 #custom-sy-syauth.ok           { color: @aqua; }
-#custom-sy-syauth.reconnecting { color: @yellow; }
 #custom-sy-syauth.degraded     { color: @red; }
 #custom-sy-syauth.unpaired     { color: @red; }
 #custom-sy-syauth.pending      { color: @green; font-weight: bold; }
