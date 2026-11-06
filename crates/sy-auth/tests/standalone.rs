@@ -38,7 +38,7 @@ fn unanswered_phone_approval_keeps_the_applet_ready() {
     let upstream = root.path().join("syauth");
     fs::write(
         &upstream,
-        "#!/bin/sh\nprintf '%s\\n' '{\"daemon\":{\"state\":\"up\",\"peers\":[{\"peer_id\":\"phone\",\"in_flight_challenges\":0}]},\"bluez_adapter\":\"unknown\"}'\n",
+        "#!/bin/sh\nprintf '%s\\n' '{\"daemon\":{\"state\":\"up\",\"transport_ready\":true,\"peers\":[{\"peer_id\":\"phone\",\"in_flight_challenges\":0}]},\"bluez_adapter\":\"unknown\"}'\n",
     )
     .unwrap();
     fs::set_permissions(&upstream, fs::Permissions::from_mode(0o700)).unwrap();
@@ -69,4 +69,33 @@ fn unanswered_phone_approval_keeps_the_applet_ready() {
     assert!(tooltip.contains("approval timed out (phone may be away)"));
     assert!(!tooltip.contains("reconnecting"));
     assert!(!tooltip.contains("phone reachable"));
+}
+
+#[test]
+fn broken_transport_overrides_daemon_up_and_pending_authentication() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+    let root = tempfile::tempdir().unwrap();
+    let upstream = root.path().join("syauth");
+    fs::write(&upstream, r#"#!/bin/sh
+printf '%s\n' '{"daemon":{"state":"up","transport_ready":false,"peers":[{"peer_id":"phone","in_flight_challenges":1}]},"bluez_adapter":"unknown"}'
+"#).unwrap();
+    fs::set_permissions(&upstream, fs::Permissions::from_mode(0o700)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_sy-system-auth"))
+        .args(["syauth", "--waybar"])
+        .env("SY_SYAUTH_BIN", &upstream)
+        .env("SY_SYAUTH_AUDIT_LOG", root.path().join("missing.log"))
+        .env("XDG_RUNTIME_DIR", root.path())
+        .env("XDG_STATE_HOME", root.path())
+        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let pill: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(pill["class"], "degraded");
+    assert!(
+        pill["tooltip"]
+            .as_str()
+            .unwrap()
+            .contains("Bluetooth transport unavailable")
+    );
 }

@@ -62,6 +62,8 @@ const SCHEMA_VERSION: u32 = 1;
 #[derive(Debug, Clone)]
 pub struct StatusSummary {
     pub state: String,
+    /// Controller and advertisement health reported by the daemon.
+    pub transport_ready: Option<bool>,
     pub peer_id: Option<String>,
     pub last_connect_ms_ago: Option<u64>,
     pub last_unlock_outcome: Option<String>,
@@ -105,8 +107,12 @@ pub fn parse_status_json(src: &str) -> Result<StatusSummary, serde_json::Error> 
     let in_flight_challenges = first
         .and_then(|p| p.get("in_flight_challenges"))
         .and_then(|n| n.as_u64());
+    let transport_ready = daemon
+        .get("transport_ready")
+        .and_then(serde_json::Value::as_bool);
     Ok(StatusSummary {
         state,
+        transport_ready,
         peer_id,
         last_connect_ms_ago,
         last_unlock_outcome: None,
@@ -138,6 +144,11 @@ pub fn render_status_line(s: &StatusSummary) -> String {
         return format!("daemon {}", s.state);
     }
     let mut parts: Vec<String> = vec!["daemon up".to_string()];
+    match s.transport_ready {
+        Some(false) => parts.push("Bluetooth transport unavailable".to_string()),
+        None => parts.push("transport health unavailable".to_string()),
+        Some(true) => {}
+    }
     if let Some(ms) = s.last_connect_ms_ago {
         let mut chunk = format!("last connect {} ago", humanize_ms_ago(ms));
         if let Some(outcome) = &s.last_unlock_outcome {
@@ -240,8 +251,18 @@ pub fn render_pill(
     });
     let (class, headline) = if !status.is_daemon_up() {
         ("degraded", "daemon down".to_string())
+    } else if status.transport_ready == Some(false) {
+        (
+            "degraded",
+            "Bluetooth transport unavailable · recovering".to_string(),
+        )
     } else if !status.has_peer() {
         ("unpaired", "no phone bonded".to_string())
+    } else if status.transport_ready.is_none() {
+        (
+            "degraded",
+            "transport health unavailable · update syauth".to_string(),
+        )
     } else if let Some(o) = recent_denied {
         let reason = match &o.kind {
             OutcomeKind::Denied(r) => denied_reason_text(r),
@@ -1604,6 +1625,7 @@ mod tests {
   "daemon_socket": "/run/user/1000/syauth/auth.sock",
   "daemon": {
     "state": "up",
+    "transport_ready": true,
     "started_at": 1779192091,
     "peers": [
       {
@@ -1677,6 +1699,36 @@ mod tests {
         DoctorSummary {
             bluez_adapter: "unknown".to_string(),
         }
+    }
+
+    #[test]
+    fn status_line_reports_transport_failure() {
+        let mut status = parse_status_json(FIXTURE_BONDED).expect("fixture");
+        status.transport_ready = Some(false);
+        assert!(render_status_line(&status).contains("Bluetooth transport unavailable"));
+    }
+
+    #[test]
+    fn waybar_requires_transport_health_before_reporting_ready() {
+        let mut fixture: serde_json::Value = serde_json::from_str(FIXTURE_BONDED).expect("fixture");
+        fixture["daemon"]
+            .as_object_mut()
+            .expect("daemon")
+            .remove("transport_ready");
+        let status = parse_status_json(&fixture.to_string()).expect("status");
+        let pill = render_pill(&status, 0, &doctor_unknown(), None, 0, "fedora");
+        assert_eq!(pill.class, "degraded");
+        assert!(pill.tooltip.contains("transport health unavailable"));
+    }
+
+    #[test]
+    fn waybar_reports_failed_transport_even_while_authenticating() {
+        let mut fixture: serde_json::Value = serde_json::from_str(FIXTURE_BONDED).expect("fixture");
+        fixture["daemon"]["transport_ready"] = false.into();
+        let status = parse_status_json(&fixture.to_string()).expect("status");
+        let pill = render_pill(&status, 1, &doctor_unknown(), None, 0, "fedora");
+        assert_eq!(pill.class, "degraded");
+        assert!(pill.tooltip.contains("Bluetooth transport unavailable"));
     }
 
     #[test]
