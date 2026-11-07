@@ -1879,14 +1879,18 @@ working state.
 #### A request times out while the phone is away
 
 An unanswered approval records a timeout for that request. The key stays cyan
-while the daemon runs and has a phone bond. Hover over the key to see
+while the daemon reports healthy Bluetooth transport and has a phone bond.
+Hover over the key to see
 `approval timed out (phone may be away)` in the request history. Transport errors
 also appear in that history.
 
-The `daemon ready` message describes the local service. That status doesn't confirm
+The `daemon ready` message describes the local service and its advertisement.
+That status doesn't confirm
 the phone's availability. A successful approval confirms the connection for
-that request. Red marks a stopped daemon, a missing bond, or an authorization
-error. A new request shows `authenticating` even after an earlier timeout.
+that request. Red marks a stopped daemon, failed Bluetooth transport, a missing
+bond, or an authorization error. Older daemons without transport health reporting show
+`transport health unavailable · update syauth`. A new request shows
+`authenticating` even after an earlier timeout.
 Keep the existing pairing and service running when an approval expires.
 
 #### Bluetooth is on but the phone can't discover the desktop
@@ -1905,12 +1909,16 @@ reinitialization. Older daemons hardcode `hci0`, so restarting the same build
 can leave only its RPC socket running with `orchestrator not started` in the
 journal. A daemon status of `up` alone does not establish Bluetooth readiness.
 
-The adapter-selection repair uses BlueZ's available default controller at
-startup. After installing that repair, restart `syauth-presenced.service` and
-verify advertising and a fresh phone subscription. Keep the existing bond;
-pairing again does not repair an absent desktop adapter. See the
-[adapter investigation](../../specs/bugs/BUG-20261031-1221.md) for validation
-and deployment status.
+The daemon checks controller and advertisement health every two seconds.
+Controller loss or a failed advertisement clears `daemon.transport_ready` in
+`syauth status --json`. The managed service restarts and rebuilds GATT and
+advertising on the available default controller, including a controller with a
+new name. It keeps retrying while Bluetooth is unavailable. The panel shows
+`Bluetooth transport unavailable · recovering` or `daemon down` during recovery.
+
+Keep the existing bond. Pairing again does not repair an absent desktop
+adapter. After recovery, verify a fresh phone subscription and approval.
+See the [adapter recovery investigation](../../specs/bugs/BUG-20261107-0012.md).
 
 #### Desktop apps skip phone and FIDO authentication
 
